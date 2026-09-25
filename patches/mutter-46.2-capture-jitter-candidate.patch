@@ -1,0 +1,36 @@
+Subject: [LOCAL CANDIDATE, NOT DEPLOYED] Allow bounded capture timestamp jitter
+
+On Ubuntu 46.2-1ubuntu0.24.04.9 with a 60 Hz NVIDIA output, read-only
+branch counters found 166 of 481 capture rate checks rejected because target
+presentation timestamps were just 1-62 us early. No free-buffer failures were
+observed. This candidate permits at most 100 us (and at most 1% of an interval)
+of timestamp jitter, without disabling the limiter or changing source PTS.
+
+This is not an upstream fix or a general fractional frame-rate scheduler.
+It slightly relaxes the minimum spacing; strict negotiated-rate semantics and
+real desktop/encoder behavior need review and testing before installation.
+Do not live-patch or restart the compositor just to apply this candidate.
+
+--- a/src/backends/meta-screen-cast-stream-src.c
++++ b/src/backends/meta-screen-cast-stream-src.c
+@@ -811,6 +811,7 @@
+     {
+       int64_t min_interval_us;
+       int64_t time_since_last_frame_us;
++      int64_t jitter_tolerance_us;
+ 
+       min_interval_us =
+         ((G_USEC_PER_SEC * ((int64_t) priv->video_format.max_framerate.denom)) /
+@@ -818,6 +819,11 @@
+ 
+       time_since_last_frame_us = frame_timestamp_us - priv->last_frame_timestamp_us;
+-      if (time_since_last_frame_us < min_interval_us)
++      /* Presentation-time jitter of a few microseconds must not cost a
++       * whole monitor refresh. Bound the relaxation to 100 us and 1% of
++       * the interval; genuine early frames still take the follow-up path.
++       */
++      jitter_tolerance_us = MIN (100, min_interval_us / 100);
++      if (time_since_last_frame_us < min_interval_us - jitter_tolerance_us)
+         {
+           int64_t timeout_us;
+ 

@@ -1,0 +1,33 @@
+diff --git a/src/dxgi/dxgi_output.cpp b/src/dxgi/dxgi_output.cpp
+index 8814f5c..56c029c 100644
+--- a/src/dxgi/dxgi_output.cpp
++++ b/src/dxgi/dxgi_output.cpp
+@@ -11,6 +11,7 @@
+ #include "dxgi_factory.h"
+ #include "dxgi_output.h"
+ #include "dxgi_swapchain.h"
++#include "dxgi_uurb_capture.h"
+ 
+ #include "../dxvk/dxvk_format.h"
+ 
+@@ -506,18 +507,8 @@ namespace dxvk {
+           UINT                      SupportedFormatsCount,
+     const DXGI_FORMAT*              pSupportedFormats,
+           IDXGIOutputDuplication**  ppOutputDuplication) {
+-    InitReturnPtr(ppOutputDuplication);
+-
+-    if (!pDevice)
+-      return E_INVALIDARG;
+-    
+-    static bool s_errorShown = false;
+-
+-    if (!std::exchange(s_errorShown, true))
+-      Logger::err("DxgiOutput::DuplicateOutput1: Not implemented");
+-    
+-    // At least return a valid error code
+-    return DXGI_ERROR_UNSUPPORTED;
++    return uurb_capture::duplicate(this, pDevice, Flags,
++      SupportedFormatsCount, pSupportedFormats, ppOutputDuplication);
+   }
+ 
+ 

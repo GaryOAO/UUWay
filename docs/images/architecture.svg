@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="560" rx="18" fill="#ffffff"/>
+  <text x="40" y="48" font-size="22" font-weight="700" fill="#0f172a">UUWay architecture</text>
+  <text x="40" y="72" font-size="13" fill="#64748b">UU Remote runs unmodified under Wine; every Windows interface it relies on is served by a native Linux implementation.</text>
+
+  <!-- Linux column -->
+  <rect x="40" y="100" width="250" height="420" rx="14" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="60" y="128" font-size="14" font-weight="700" fill="#0f172a">Linux host · GNOME Wayland</text>
+
+  <rect x="60" y="146" width="210" height="58" rx="10" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="76" y="170" font-size="13" font-weight="600" fill="#0f172a">Mutter + PipeWire</text>
+  <text x="76" y="190" font-size="11.5" fill="#475569">screen cast · DMA-BUF · cursor</text>
+
+  <rect x="60" y="216" width="210" height="58" rx="10" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="76" y="240" font-size="13" font-weight="600" fill="#0f172a">NVIDIA GPU</text>
+  <text x="76" y="260" font-size="11.5" fill="#475569">Vulkan import · CUDA · NVENC</text>
+
+  <rect x="60" y="286" width="210" height="58" rx="10" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="76" y="310" font-size="13" font-weight="600" fill="#0f172a">libei / uinput · Fcitx5</text>
+  <text x="76" y="330" font-size="11.5" fill="#475569">pointer, keys, IME text commit</text>
+
+  <rect x="60" y="356" width="210" height="58" rx="10" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="76" y="380" font-size="13" font-weight="600" fill="#0f172a">PTY broker</text>
+  <text x="76" y="400" font-size="11.5" fill="#475569">persistent shell sessions</text>
+
+  <rect x="60" y="426" width="210" height="58" rx="10" fill="#ffffff" stroke="#94a3b8"/>
+  <text x="76" y="450" font-size="13" font-weight="600" fill="#0f172a">Xwayland clipboard</text>
+  <text x="76" y="470" font-size="11.5" fill="#475569">text · files · images</text>
+
+  <!-- UUWay column -->
+  <rect x="345" y="100" width="270" height="420" rx="14" fill="#ecfeff" stroke="#67e8f9"/>
+  <text x="365" y="128" font-size="14" font-weight="700" fill="#0e7490">UUWay adaptation layer</text>
+
+  <rect x="365" y="146" width="230" height="58" rx="10" fill="#ffffff" stroke="#22d3ee"/>
+  <text x="381" y="170" font-size="13" font-weight="600" fill="#0f172a">DXGI Desktop Duplication</text>
+  <text x="381" y="190" font-size="11.5" fill="#475569">frames as D3D11 textures + pointer</text>
+
+  <rect x="365" y="216" width="230" height="58" rx="10" fill="#ffffff" stroke="#22d3ee"/>
+  <text x="381" y="240" font-size="13" font-weight="600" fill="#0f172a">NVENC API</text>
+  <text x="381" y="260" font-size="11.5" fill="#475569">Windows calls → Linux encoder</text>
+
+  <rect x="365" y="286" width="230" height="58" rx="10" fill="#ffffff" stroke="#22d3ee"/>
+  <text x="381" y="310" font-size="13" font-weight="600" fill="#0f172a">SendInput · display modes</text>
+  <text x="381" y="330" font-size="11.5" fill="#475569">input · resolution · DPI with rollback</text>
+
+  <rect x="365" y="356" width="230" height="58" rx="10" fill="#ffffff" stroke="#22d3ee"/>
+  <text x="381" y="380" font-size="13" font-weight="600" fill="#0f172a">conpty.dll · PowerShell</text>
+  <text x="381" y="400" font-size="11.5" fill="#475569">raw terminal bytes, no console host</text>
+
+  <rect x="365" y="426" width="230" height="58" rx="10" fill="#ffffff" stroke="#22d3ee"/>
+  <text x="381" y="450" font-size="13" font-weight="600" fill="#0f172a">Clipboard bridge</text>
+  <text x="381" y="470" font-size="11.5" fill="#475569">Wine display ⇄ desktop</text>
+
+  <!-- UU column -->
+  <rect x="670" y="100" width="250" height="300" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="690" y="128" font-size="14" font-weight="700" fill="#c2410c">Official UU Remote (Wine)</text>
+  <rect x="690" y="146" width="210" height="100" rx="10" fill="#ffffff" stroke="#fb923c"/>
+  <text x="706" y="172" font-size="13" font-weight="600" fill="#0f172a">GameViewerServer</text>
+  <text x="706" y="194" font-size="11.5" fill="#475569">unmodified binary</text>
+  <text x="706" y="214" font-size="11.5" fill="#475569">UU protocol · accounts · relay</text>
+  <text x="706" y="234" font-size="11.5" fill="#475569">rate control · session UI</text>
+  <rect x="690" y="262" width="210" height="58" rx="10" fill="#ffffff" stroke="#fb923c"/>
+  <text x="706" y="286" font-size="13" font-weight="600" fill="#0f172a">conpty_bridge · uuyc-mux</text>
+  <text x="706" y="306" font-size="11.5" fill="#475569">terminal sessions</text>
+  <rect x="690" y="332" width="210" height="52" rx="10" fill="#ffffff" stroke="#fb923c"/>
+  <text x="706" y="363" font-size="13" font-weight="600" fill="#0f172a">Windows clipboard</text>
+
+  <!-- controller -->
+  <rect x="670" y="424" width="250" height="96" rx="14" fill="#0f172a"/>
+  <text x="690" y="456" font-size="14" font-weight="700" fill="#ffffff">UU controller</text>
+  <text x="690" y="478" font-size="12" fill="#cbd5e1">phone · tablet · PC</text>
+  <text x="690" y="498" font-size="12" fill="#cbd5e1">H.264 / HEVC stream</text>
+
+  <!-- arrows -->
+  <line x1="270" y1="175" x2="361" y2="175" stroke="#16a34a" stroke-width="3.5" marker-end="url(#arrow-green)"/>
+  <line x1="274" y1="245" x2="361" y2="245" stroke="#16a34a" stroke-width="3.5" marker-start="url(#arrow-green)" marker-end="url(#arrow-green)"/>
+  <line x1="361" y1="315" x2="274" y2="315" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="274" y1="385" x2="361" y2="385" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="274" y1="455" x2="361" y2="455" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+
+  <line x1="595" y1="175" x2="686" y2="190" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="686" y1="215" x2="599" y2="245" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="686" y1="236" x2="599" y2="315" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="599" y1="385" x2="686" y2="291" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <line x1="599" y1="455" x2="686" y2="358" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+
+  <line x1="795" y1="400" x2="795" y2="420" stroke="#475569" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+
+  <text x="40" y="545" font-size="11.5" fill="#16a34a">Green: zero-copy GPU path — pixels never return to CPU memory between capture and encode.</text>
+</svg>

@@ -1,0 +1,3 @@
+# Active local-session user only, managed/revoked by logind. No world-write,
+# input-group membership, password storage, setuid binary or physical key read.
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"

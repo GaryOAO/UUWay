@@ -1,0 +1,328 @@
+#!/usr/bin/python3
+"""Launch only the configured native UU runtime, with private crash recovery."""
+import argparse
+import filecmp
+import importlib.util
+import os
+from pathlib import Path
+import secrets
+import signal
+import shutil
+import subprocess
+import time
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('native_service_trial', ROOT / 'scripts/uu-native-trial.py')
+trial = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(trial)
+
+DISPLAY_REMAP_FAILURE = 'Native display remap requires restart'
+DISPLAY_REMAP_LIMIT = 3
+DISPLAY_REMAP_WINDOW_SECONDS = 300
+
+
+class TerminalBridge:
+    """Own the PowerShell compatibility entry point and a native Linux PTY.
+
+    UU's controller starts the vendor ``powershell.exe`` entry point.  The
+    reviewed replacement executable reads this private handoff and forwards
+    the authenticated byte stream to ``uu-terminal-bridge``.  Keeping this
+    owner beside the native service is important: the legacy RDP launcher is
+    not running in the production path, so it cannot be the only owner of the
+    PTY listener.
+    """
+
+    def __init__(self, prefix, state_parent):
+        app = Path(prefix) / 'drive_c/Program Files/Netease/GameViewer'
+        self.helper = Path(prefix) / 'compat/uu-terminal-bridge'
+        self.proxy = app / 'bin/powershell.exe'
+        self.compat_proxy = Path(prefix) / 'compat/uu-terminal-proxy.exe'
+        self.config = app / 'bin/uu-terminal-bridge.runtime'
+        # UU 4.39's psmux panes launch the system PowerShell path instead.
+        # The proxy reads its handoff beside itself, so it needs a copy there.
+        system_powershell = Path(prefix) / 'drive_c/windows/system32/WindowsPowerShell/v1.0'
+        self.mux_proxy = system_powershell / 'powershell.exe'
+        self.mux_placeholder = system_powershell / 'powershell.exe.uurb-wine'
+        self.mux_config = system_powershell / 'uu-terminal-bridge.runtime'
+        # conpty_bridge loads conpty.dll beside itself; ours joins UU's terminal
+        # pipes directly to the Linux PTY instead of Wine's console host.
+        self.conpty = app / 'bin/conpty.dll'
+        self.conpty_vendor = app / 'bin/conpty.dll.uurb-vendor'
+        self.compat_conpty = Path(prefix) / 'compat/uu-conpty.dll'
+        self.ready = Path(state_parent) / 'terminal.port'
+        self.log_path = Path(state_parent) / 'terminal-bridge.log'
+        self.process = None
+        self._log = None
+
+    def start(self):
+        # A missing compatibility payload must not prevent screen sharing;
+        # terminal support is optional until the normal installer supplies it.
+        try:
+            compatible = (self.helper.is_file() and os.access(self.helper, os.X_OK) and
+                          self.proxy.is_file() and self.compat_proxy.is_file() and
+                          filecmp.cmp(self.proxy, self.compat_proxy, shallow=False))
+        except OSError:
+            compatible = False
+        if not compatible:
+            return False
+        configs = [self.config]
+        self._install_conpty_shim()
+        if self._install_mux_proxy():
+            configs.append(self.mux_config)
+        self.config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.ready.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for path in (self.ready, self.config, self.mux_config):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        token = secrets.token_hex(32)
+        self._log = self.log_path.open('ab')
+        environment = dict(os.environ, UURB_TERMINAL_BRIDGE_TOKEN=token)
+        self.process = subprocess.Popen(
+            [str(self.helper), '--ready-file', str(self.ready)],
+            env=environment, stdout=self._log, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        deadline = time.monotonic() + 5
+        port = None
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                break
+            try:
+                value = self.ready.read_text().strip()
+                if value.isdigit() and 1 <= int(value) <= 65535:
+                    port = int(value)
+                    break
+            except (FileNotFoundError, OSError, UnicodeError):
+                pass
+            time.sleep(0.05)
+        if port is None:
+            self.stop()
+            return False
+        for config in configs:
+            temporary = config.with_name(config.name + '.tmp')
+            try:
+                temporary.write_text(f'version=1\nport={port}\ntoken={token}\n')
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, config)
+            except OSError:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+                self.stop()
+                return False
+        return True
+
+    def _install_mux_proxy(self):
+        """Put the proxy on psmux's PowerShell path, keeping Wine's placeholder.
+
+        Only Wine's own placeholder or an identical proxy is replaced; any
+        other file there is left alone and psmux terminals stay unsupported.
+        """
+        try:
+            if filecmp.cmp(self.mux_proxy, self.compat_proxy, shallow=False):
+                return True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        try:
+            with self.mux_proxy.open('rb') as current:
+                if b'Wine builtin DLL' not in current.read(128):
+                    return False
+            if not self.mux_placeholder.exists():
+                shutil.copy2(self.mux_proxy, self.mux_placeholder)
+            temporary = self.mux_proxy.with_name(self.mux_proxy.name + '.tmp')
+            shutil.copyfile(self.compat_proxy, temporary)
+            os.chmod(temporary, 0o755)
+            os.replace(temporary, self.mux_proxy)
+        except OSError:
+            return False
+        return True
+
+    def _install_conpty_shim(self):
+        """Replace only Microsoft's conpty.dll, keeping it as the vendor copy."""
+        try:
+            if filecmp.cmp(self.conpty, self.compat_conpty, shallow=False):
+                return True
+            with self.conpty.open('rb') as current:
+                # Our shim does not export the AsUser entry point.
+                if b'ConptyCreatePseudoConsoleAsUser' not in current.read():
+                    return False
+            shutil.copy2(self.conpty, self.conpty_vendor)
+            temporary = self.conpty.with_name(self.conpty.name + '.tmp')
+            shutil.copyfile(self.compat_conpty, temporary)
+            os.chmod(temporary, 0o755)
+            os.replace(temporary, self.conpty)
+        except OSError:
+            return False
+        return True
+
+    def stop(self):
+        for path in (self.config, self.mux_config, self.ready):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        if self.process is not None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                self.process.wait(timeout=2)
+            self.process = None
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+
+
+class ClipboardBridge:
+    """Own the helper that joins UU's private X clipboard to the desktop's.
+
+    UU runs on its own Xvfb, so its phone clipboard sync reaches only that
+    display. The helper finds UU's and Xwayland's displays itself and
+    reconnects when either restarts; it is optional, like the terminal.
+    """
+
+    def __init__(self, prefix, state_parent):
+        self.helper = Path(prefix) / 'compat/uu-clipboard-bridge'
+        self.log_path = Path(state_parent) / 'clipboard-bridge.log'
+        self.process = None
+        self._log = None
+
+    def start(self):
+        if not (self.helper.is_file() and os.access(self.helper, os.X_OK)):
+            return False
+        self.log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._log = self.log_path.open('ab')
+        self.process = subprocess.Popen(
+            [str(self.helper)], stdout=self._log, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        return True
+
+    def stop(self):
+        if self.process is not None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                self.process.wait(timeout=2)
+            self.process = None
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+
+
+def text_configuration(config, config_directory):
+    """Explicit backend choice; never fall back after a native IME failure."""
+    try:
+        settings = trial.state_tools.read_private(config_directory / 'text-backend.json', max_bytes=1024)
+    except FileNotFoundError:
+        return 'portal', Path(config['text_socket'])
+    if (not isinstance(settings, dict) or set(settings) != {'version', 'backend'} or
+            type(settings['version']) is not int or settings['version'] != 1 or
+            settings['backend'] not in ('portal', 'fcitx')):
+        raise ValueError('Invalid explicit native text backend')
+    return settings['backend'], (Path(config['state_parent']) / 'ime.sock' if settings['backend'] == 'fcitx'
+                                 else Path(config['text_socket']))
+
+
+def text_endpoint(config, config_directory):
+    return text_configuration(config, config_directory)[1]
+
+
+def run(config_path, preserve_display_session=False):
+    trial.private_directory(config_path.parent)
+    config = trial.state_tools.read_private(config_path)
+    names = {'schema', 'prefix', 'bundle', 'restore_state', 'state_parent', 'text_socket', 'cursor_mode'}
+    if set(config) != names or config['schema'] != 1 or config['cursor_mode'] not in ('metadata', 'embedded', 'composited'):
+        raise ValueError('Unreviewed native service configuration')
+    for name in names - {'schema', 'cursor_mode'}:
+        if not isinstance(config[name], str) or not Path(config[name]).is_absolute():
+            raise ValueError('Native service requires absolute configured paths')
+    bundle = Path(config['bundle'])
+    verified = trial.bundle_tools.verify(bundle)
+    display_socket = Path(config['state_parent']) / 'display.sock' if verified.get('native_display_included') else None
+    backend, endpoint = text_configuration(config, config_path.parent)
+    stopping = False
+
+    def request_stop(signum, frame):
+        nonlocal stopping
+        stopping = True
+
+    # One signal owner for the full service lifetime, including trial cleanup
+    # and the reconnect delay.  A signal must never be lost between trials.
+    previous = {s: signal.signal(s, request_stop) for s in (signal.SIGTERM, signal.SIGINT)}
+    terminal_bridge = TerminalBridge(Path(config['prefix']), Path(config['state_parent']))
+    clipboard_bridge = ClipboardBridge(Path(config['prefix']), Path(config['state_parent']))
+    try:
+        if terminal_bridge.start():
+            trial.event('native_terminal_bridge_ready')
+        if clipboard_bridge.start():
+            trial.event('native_clipboard_bridge_started')
+        remap_window = time.monotonic()
+        remap_count = 0
+        while not stopping:
+            try:
+                trial.run(Path(config['prefix']), bundle, Path(config['restore_state']),
+                          Path(config['state_parent']), None, True, config['cursor_mode'], endpoint, 'user', display_socket,
+                          preserve_display_session,
+                          pending_native_ime=backend == 'fcitx' and verified.get('native_ime_deferred_start_included', False),
+                          stop_requested=lambda: stopping)
+                return
+            except RuntimeError as error:
+                # Cleanup failures remain fail-closed, even during shutdown.
+                if str(error) != DISPLAY_REMAP_FAILURE:
+                    raise
+                if stopping:
+                    return
+                now = time.monotonic()
+                if now - remap_window >= DISPLAY_REMAP_WINDOW_SECONDS:
+                    remap_window, remap_count = now, 0
+                remap_count += 1
+                if remap_count > DISPLAY_REMAP_LIMIT:
+                    raise
+                trial.event('native_service_display_reconnect', attempt=remap_count)
+                deadline = time.monotonic() + 1
+                while not stopping and time.monotonic() < deadline:
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+    finally:
+        try:
+            clipboard_bridge.stop()
+            terminal_bridge.stop()
+            # STOPPING puts systemd into a timed stopping state.  A worker
+            # remap is not a service shutdown; only this owner may send it.
+            trial.state_tools.notify('STOPPING=1\nSTATUS=UU native service stopped')
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--preserve-display-session', action='store_true',
+                        help='Opt-in same-output video recreation candidate; requires a geometry-aware bundle')
+    args = parser.parse_args()
+    try:
+        run(args.config, args.preserve_display_session)
+    except Exception as error:
+        # No tracebacks: subprocess exceptions could contain private argv.
+        trial.event('native_service_failed', error_type=type(error).__name__)
+        raise SystemExit(1)

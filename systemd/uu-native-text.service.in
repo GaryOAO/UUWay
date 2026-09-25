@@ -1,0 +1,29 @@
+# Managed by UURB native installer; independent of video reconnects.
+[Unit]
+Description=UU authorized native text and clipboard service
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-text-service.py" --config "%h/.config/uurb/native-runtime.json"
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+TimeoutStartSec=140
+TimeoutStopSec=40
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=yes
+LimitCORE=0
+MemoryHigh=256M
+MemoryMax=512M
+TasksMax=64
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

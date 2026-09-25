@@ -1,0 +1,26 @@
+# Managed by UURB native installer; independent of UU/video reconnects.
+[Unit]
+Description=UU native Wayland display rollback guardian
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-display-service.py" --config "%h/.config/uurb/native-runtime.json"
+Restart=on-failure
+RestartSec=2
+WatchdogSec=30
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=yes
+LimitCORE=0
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=graphical-session.target

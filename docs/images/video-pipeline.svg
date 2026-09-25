@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="960" height="300" rx="18" fill="#ffffff"/>
+  <text x="40" y="46" font-size="20" font-weight="700" fill="#0f172a">Video path: one GPU copy, one encode</text>
+  <text x="40" y="70" font-size="13" fill="#64748b">The desktop image stays in GPU memory from compositor to encoder; UU still negotiates codec, bitrate and frame rate itself.</text>
+
+  <rect x="40" y="96" width="880" height="34" rx="8" fill="#f0fdf4"/>
+  <text x="56" y="118" font-size="12" font-weight="600" fill="#15803d">GPU memory</text>
+
+  <g font-size="12.5">
+    <rect x="40" y="146" width="150" height="86" rx="12" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="56" y="172" font-weight="700" fill="#0f172a">Mutter</text>
+    <text x="56" y="192" fill="#475569">screen cast</text>
+    <text x="56" y="210" fill="#475569">60 Hz pacing patch</text>
+
+    <rect x="222" y="146" width="150" height="86" rx="12" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="238" y="172" font-weight="700" fill="#0f172a">PipeWire</text>
+    <text x="238" y="192" fill="#475569">DMA-BUF frames</text>
+    <text x="238" y="210" fill="#475569">+ cursor metadata</text>
+
+    <rect x="404" y="146" width="150" height="86" rx="12" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="420" y="172" font-weight="700" fill="#0f172a">Vulkan import</text>
+    <text x="420" y="192" fill="#475569">into a shared</text>
+    <text x="420" y="210" fill="#475569">D3D11 texture (DXVK)</text>
+
+    <rect x="586" y="146" width="150" height="86" rx="12" fill="#ffffff" stroke="#22d3ee"/>
+    <text x="602" y="172" font-weight="700" fill="#0f172a">UU · DXGI</text>
+    <text x="602" y="192" fill="#475569">AcquireNextFrame</text>
+    <text x="602" y="210" fill="#475569">pointer shape</text>
+
+    <rect x="768" y="146" width="152" height="86" rx="12" fill="#ffffff" stroke="#22d3ee"/>
+    <text x="784" y="172" font-weight="700" fill="#0f172a">UU · NVENC</text>
+    <text x="784" y="192" fill="#475569">CUDA + Linux NVENC</text>
+    <text x="784" y="210" fill="#475569">H.264 / HEVC</text>
+  </g>
+
+  <line x1="192" y1="189" x2="218" y2="189" stroke="#16a34a" stroke-width="3" marker-end="url(#a)"/>
+  <line x1="374" y1="189" x2="400" y2="189" stroke="#16a34a" stroke-width="3" marker-end="url(#a)"/>
+  <line x1="556" y1="189" x2="582" y2="189" stroke="#16a34a" stroke-width="3" marker-end="url(#a)"/>
+  <line x1="738" y1="189" x2="764" y2="189" stroke="#16a34a" stroke-width="3" marker-end="url(#a)"/>
+
+  <text x="40" y="266" font-size="12" fill="#64748b">Compared with the RDP relay it replaces: no RDP encode/decode, no Xvfb re-capture, no second encoder — measured 59.8–60 FPS at 1080p.</text>
+</svg>

@@ -1,0 +1,8 @@
+LIBRARY conpty.dll
+EXPORTS
+    CreatePseudoConsole=shim_create
+    ResizePseudoConsole=shim_resize
+    ClosePseudoConsole=shim_close
+    ConptyCreatePseudoConsole=shim_create
+    ConptyResizePseudoConsole=shim_resize
+    ConptyClosePseudoConsole=shim_close

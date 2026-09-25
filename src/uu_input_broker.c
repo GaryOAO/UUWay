@@ -1,0 +1,1323 @@
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+
+#include "x11_input_protocol.h"
+#ifdef UURB_NATIVE_INPUT_ONLY
+#include "uu_native_pointer_trace.h"
+#include "uu_native_text_trace_win.h"
+#include "uu_native_meta_trace_win.h"
+#include "native_key_normalize.h"
+#endif
+
+#define INPUT_BRIDGE_MAGIC 0x42525555UL
+#define INPUT_BRIDGE_MAX_INPUTS 2048UL
+#define INPUT_BRIDGE_MAX_TRANSLATED_INPUTS (INPUT_BRIDGE_MAX_INPUTS * 8UL)
+#define INPUT_BRIDGE_MAX_SEGMENTS (INPUT_BRIDGE_MAX_INPUTS + 1UL)
+#ifndef INPUT_BRIDGE_PIPE
+#ifdef UURB_NATIVE_INPUT_ONLY
+#define INPUT_BRIDGE_PIPE L"\\\\.\\pipe\\uurb-native-input-v1"
+#else
+#define INPUT_BRIDGE_PIPE L"\\\\.\\pipe\\uurb-input-v1"
+#endif
+#endif
+#define INPUT_BRIDGE_FOCUS_TIMEOUT_MS 300UL
+#define INPUT_BRIDGE_DEFAULT_TEXT_KEY_DELAY_MS 8UL
+#define INPUT_BRIDGE_MAX_TEXT_KEY_DELAY_MS 50UL
+#define INPUT_BRIDGE_DEFAULT_PHYSICAL_KEY_DELAY_MS 0UL
+#define INPUT_BRIDGE_MAX_PHYSICAL_KEY_DELAY_MS 50UL
+#define INPUT_BRIDGE_SEMANTIC_EDIT_WINDOW_MS 2000UL
+
+typedef struct input_bridge_request {
+    DWORD magic;
+    DWORD count;
+    DWORD input_size;
+} input_bridge_request;
+
+typedef struct input_bridge_response {
+    DWORD result;
+    DWORD error;
+} input_bridge_response;
+
+typedef struct input_segment {
+    DWORD offset;
+    DWORD count;
+    BOOL text;
+} input_segment;
+
+typedef struct semantic_edit_state {
+    DWORD removable_characters;
+    ULONGLONG updated_ms;
+    WCHAR pending_high_surrogate;
+    BOOL previous_ended_cr;
+} semantic_edit_state;
+
+typedef enum x11_route_result {
+    X11_ROUTE_NOT_USED,
+    X11_ROUTE_SUCCESS,
+    X11_ROUTE_FAILED
+} x11_route_result;
+
+typedef enum phone_text_mode {
+    PHONE_TEXT_MODE_AUTO,
+    PHONE_TEXT_MODE_KEYS,
+    PHONE_TEXT_MODE_CLIPBOARD
+} phone_text_mode;
+
+static HANDLE log_file = INVALID_HANDLE_VALUE;
+static volatile LONG input_call_count;
+static volatile LONG keyboard_call_count;
+static volatile LONG mouse_call_count;
+static volatile LONG other_call_count;
+static volatile LONG text_call_count;
+static DWORD text_key_delay_ms = INPUT_BRIDGE_DEFAULT_TEXT_KEY_DELAY_MS;
+static DWORD physical_key_delay_ms =
+    INPUT_BRIDGE_DEFAULT_PHYSICAL_KEY_DELAY_MS;
+static phone_text_mode configured_phone_text_mode = PHONE_TEXT_MODE_AUTO;
+static BOOL x11_input_configured;
+static BOOL x11_input_semantic_only;
+static BOOL winsock_initialized;
+static SOCKET x11_input_socket = INVALID_SOCKET;
+static unsigned short x11_input_port;
+static char x11_input_token[UURB_X11_INPUT_TOKEN_SIZE + 1];
+static volatile LONG x11_sequence;
+static BOOL native_only;
+
+static void write_log(const char *message)
+{
+    DWORD written;
+
+    if (log_file == INVALID_HANDLE_VALUE)
+        return;
+    WriteFile(log_file, message, (DWORD)strlen(message), &written, NULL);
+}
+
+static void flush_log(void)
+{
+    if (log_file != INVALID_HANDLE_VALUE)
+        FlushFileBuffers(log_file);
+}
+
+static BOOL write_all(HANDLE handle, const void *buffer, DWORD size)
+{
+    const BYTE *position = (const BYTE *)buffer;
+
+    while (size > 0) {
+        DWORD written = 0;
+
+        if (!WriteFile(handle, position, size, &written, NULL) || written == 0)
+            return FALSE;
+        position += written;
+        size -= written;
+    }
+
+    return TRUE;
+}
+
+static BOOL read_all(HANDLE handle, void *buffer, DWORD size)
+{
+    BYTE *position = (BYTE *)buffer;
+
+    while (size > 0) {
+        DWORD received = 0;
+
+        if (!ReadFile(handle, position, size, &received, NULL) || received == 0)
+            return FALSE;
+        position += received;
+        size -= received;
+    }
+
+    return TRUE;
+}
+
+static void close_x11_input_socket(void)
+{
+    if (x11_input_socket != INVALID_SOCKET) {
+        closesocket(x11_input_socket);
+        x11_input_socket = INVALID_SOCKET;
+    }
+}
+
+static BOOL socket_write_all(SOCKET socket_handle, const void *buffer,
+                             int size)
+{
+    const char *position = (const char *)buffer;
+
+    while (size > 0) {
+        int written = send(socket_handle, position, size, 0);
+
+        if (written == SOCKET_ERROR || written == 0)
+            return FALSE;
+        position += written;
+        size -= written;
+    }
+    return TRUE;
+}
+
+static BOOL socket_read_all(SOCKET socket_handle, void *buffer, int size)
+{
+    char *position = (char *)buffer;
+
+    while (size > 0) {
+        int received = recv(socket_handle, position, size, 0);
+
+        if (received == SOCKET_ERROR || received == 0)
+            return FALSE;
+        position += received;
+        size -= received;
+    }
+    return TRUE;
+}
+
+static BOOL configure_x11_input(void)
+{
+    wchar_t port_value[16];
+    wchar_t token_value[UURB_X11_INPUT_TOKEN_SIZE + 1];
+    wchar_t *end = NULL;
+    DWORD port_length;
+    DWORD token_length;
+    unsigned long parsed_port;
+    DWORD index;
+
+    port_length = GetEnvironmentVariableW(L"UURB_X11_INPUT_PORT", port_value,
+                                           ARRAYSIZE(port_value));
+    token_length = GetEnvironmentVariableW(L"UURB_X11_INPUT_TOKEN",
+                                            token_value,
+                                            ARRAYSIZE(token_value));
+    if (port_length == 0 || port_length >= ARRAYSIZE(port_value) ||
+        token_length != UURB_X11_INPUT_TOKEN_SIZE)
+        return FALSE;
+
+    parsed_port = wcstoul(port_value, &end, 10);
+    if (end == port_value || *end != L'\0' || parsed_port == 0 ||
+        parsed_port > 65535)
+        return FALSE;
+    for (index = 0; index < UURB_X11_INPUT_TOKEN_SIZE; index++) {
+        wchar_t character = token_value[index];
+
+        if (!((character >= L'0' && character <= L'9') ||
+              (character >= L'a' && character <= L'f') ||
+              (character >= L'A' && character <= L'F')))
+            return FALSE;
+        x11_input_token[index] = (char)character;
+    }
+    x11_input_token[UURB_X11_INPUT_TOKEN_SIZE] = '\0';
+    x11_input_port = (unsigned short)parsed_port;
+    return TRUE;
+}
+
+static BOOL configure_x11_semantic_only(void)
+{
+    wchar_t value[2];
+    DWORD length;
+
+    length = GetEnvironmentVariableW(L"UURB_X11_INPUT_SEMANTIC_ONLY", value,
+                                     ARRAYSIZE(value));
+    return length == 1 && value[0] == L'1';
+}
+
+static BOOL connect_x11_input(void)
+{
+    struct sockaddr_in address;
+    uurb_x11_handshake handshake;
+    uurb_x11_response response;
+    BOOL no_delay = TRUE;
+    DWORD socket_timeout_ms = 1000;
+    WSADATA data;
+
+    if (!x11_input_configured)
+        return FALSE;
+    if (x11_input_socket != INVALID_SOCKET)
+        return TRUE;
+    if (!winsock_initialized) {
+        if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
+            return FALSE;
+        winsock_initialized = TRUE;
+    }
+
+    x11_input_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (x11_input_socket == INVALID_SOCKET)
+        return FALSE;
+    setsockopt(x11_input_socket, SOL_SOCKET, SO_SNDTIMEO,
+               (const char *)&socket_timeout_ms,
+               sizeof(socket_timeout_ms));
+    setsockopt(x11_input_socket, SOL_SOCKET, SO_RCVTIMEO,
+               (const char *)&socket_timeout_ms,
+               sizeof(socket_timeout_ms));
+    setsockopt(x11_input_socket, IPPROTO_TCP, TCP_NODELAY,
+               (const char *)&no_delay, sizeof(no_delay));
+    ZeroMemory(&address, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(x11_input_port);
+    if (connect(x11_input_socket, (struct sockaddr *)&address,
+                sizeof(address)) == SOCKET_ERROR) {
+        close_x11_input_socket();
+        return FALSE;
+    }
+
+    ZeroMemory(&handshake, sizeof(handshake));
+    handshake.magic = UURB_X11_INPUT_MAGIC;
+    handshake.version = UURB_X11_INPUT_VERSION;
+    memcpy(handshake.token, x11_input_token, UURB_X11_INPUT_TOKEN_SIZE);
+    if (!socket_write_all(x11_input_socket, &handshake, sizeof(handshake)) ||
+        !socket_read_all(x11_input_socket, &response, sizeof(response)) ||
+        response.magic != UURB_X11_INPUT_MAGIC || response.sequence != 0 ||
+        response.result != 1 || response.error != 0) {
+        close_x11_input_socket();
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL input_to_x11_event(const INPUT *input,
+                               uurb_x11_input_event *event)
+{
+    UINT mapped;
+    DWORD flags;
+    WORD scan;
+
+    ZeroMemory(event, sizeof(*event));
+    if (input->type == INPUT_MOUSE) {
+        event->type = UURB_X11_INPUT_MOUSE;
+        event->flags = input->mi.dwFlags;
+        event->x = input->mi.dx;
+        event->y = input->mi.dy;
+        event->data = input->mi.mouseData;
+        return TRUE;
+    }
+    if (input->type != INPUT_KEYBOARD ||
+        (input->ki.dwFlags & KEYEVENTF_UNICODE) != 0)
+        return FALSE;
+
+    flags = input->ki.dwFlags;
+    if ((flags & KEYEVENTF_SCANCODE) != 0) {
+        scan = input->ki.wScan;
+    } else {
+        mapped = MapVirtualKeyW(input->ki.wVk, MAPVK_VK_TO_VSC_EX);
+        if (mapped == 0 && !(native_only && (input->ki.wVk == VK_LWIN || input->ki.wVk == VK_RWIN)))
+            return FALSE;
+        scan = (WORD)(mapped & 0xffU);
+        if ((mapped & 0xff00U) == 0xe000U)
+            flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+#ifdef UURB_NATIVE_INPUT_ONLY
+    if (native_only) {
+        uint32_t native_scan = scan, native_flags = flags;
+        if (!uurb_native_key_normalize(input->ki.wVk, &native_scan, &native_flags)) return FALSE;
+        scan = (WORD)native_scan; flags = native_flags;
+    }
+#endif
+    if (scan == 0)
+        return FALSE;
+
+    event->type = UURB_X11_INPUT_KEYBOARD;
+    event->flags = flags;
+    event->virtual_key = input->ki.wVk;
+    event->scan_code = scan;
+    return TRUE;
+}
+
+static x11_route_result send_x11_events(
+    DWORD count, const uurb_x11_input_event *events, DWORD *error)
+{
+    uurb_x11_request request;
+    uurb_x11_response response;
+    DWORD response_timeout_ms = 1000;
+    DWORD edit_budget_ms = 0;
+    DWORD index;
+
+    if (!x11_input_configured || count == 0 ||
+        count > UURB_X11_INPUT_MAX_EVENTS)
+        return X11_ROUTE_NOT_USED;
+    if (!connect_x11_input())
+        return X11_ROUTE_NOT_USED;
+
+    /* The native helper intentionally paces revision Backspaces and waits
+     * for a real paste request. A fixed one-second socket deadline aborted
+     * valid long revisions AFTER their deletions, before replacement text.
+     * Give only this bounded batch its processing budget; never replay it.
+     * Ordinary keys/mouse retain the original one-second failure bound. */
+    for (index = 0; index < count; index++) {
+        if (events[index].type == UURB_X11_INPUT_TEXT)
+            response_timeout_ms = native_only ? 5000 : 3000;
+        if (events[index].type == UURB_X11_INPUT_KEYBOARD &&
+            events[index].virtual_key == VK_BACK &&
+            (events[index].flags & UURB_KEYEVENTF_KEYUP) != 0)
+            edit_budget_ms += UURB_BACKSPACE_SETTLE_MS;
+    }
+    response_timeout_ms += edit_budget_ms;
+    if (setsockopt(x11_input_socket, SOL_SOCKET, SO_RCVTIMEO,
+                   (const char *)&response_timeout_ms,
+                   sizeof(response_timeout_ms)) == SOCKET_ERROR) {
+        *error = (DWORD)WSAGetLastError();
+        close_x11_input_socket();
+        return X11_ROUTE_FAILED;
+    }
+
+    request.magic = UURB_X11_INPUT_MAGIC;
+    request.sequence = (uint32_t)InterlockedIncrement(&x11_sequence);
+    request.count = count;
+    request.reserved = 0;
+    if (!socket_write_all(x11_input_socket, &request, sizeof(request)) ||
+        !socket_write_all(x11_input_socket, events,
+                          (int)(count * sizeof(events[0]))) ||
+        !socket_read_all(x11_input_socket, &response, sizeof(response))) {
+        close_x11_input_socket();
+        *error = ERROR_CONNECTION_ABORTED;
+        return X11_ROUTE_FAILED;
+    }
+    if (response.magic != UURB_X11_INPUT_MAGIC ||
+        response.sequence != request.sequence) {
+        close_x11_input_socket();
+        *error = ERROR_INVALID_DATA;
+        return X11_ROUTE_FAILED;
+    }
+    if (response.result == count && response.error == 0) {
+        *error = ERROR_SUCCESS;
+        return X11_ROUTE_SUCCESS;
+    }
+    if (response.result == 0 &&
+        response.error == UURB_X11_ERROR_UNSUPPORTED)
+        return X11_ROUTE_NOT_USED;
+    *error = ERROR_GEN_FAILURE;
+    return X11_ROUTE_FAILED;
+}
+
+static x11_route_result send_x11_inputs(DWORD count, const INPUT *inputs,
+                                        DWORD *error, BOOL *considered)
+{
+    uurb_x11_input_event events[INPUT_BRIDGE_MAX_INPUTS];
+    DWORD index;
+
+    *considered = FALSE;
+    if (!x11_input_configured || x11_input_semantic_only || count == 0 ||
+        count > INPUT_BRIDGE_MAX_INPUTS)
+        return X11_ROUTE_NOT_USED;
+    *considered = TRUE;
+    for (index = 0; index < count; index++) {
+        if (!input_to_x11_event(&inputs[index], &events[index]))
+            return X11_ROUTE_NOT_USED;
+    }
+    return send_x11_events(count, events, error);
+}
+
+static BOOL input_is_backspace(const INPUT *input);
+
+/* Only normalizes a batch already identified as Unicode. No input is emitted
+ * until the whole batch has passed validation. */
+static BOOL normalize_native_text_inputs(DWORD count, const INPUT *inputs,
+                                         uurb_x11_input_event *events, DWORD *used_out)
+{
+    if (!count || count > INPUT_BRIDGE_MAX_INPUTS || !inputs || !events || !used_out) return FALSE;
+    DWORD used = 0;
+    for (DWORD i = 0; i < count; ++i) {
+        const INPUT *input = &inputs[i];
+        /* UU can size its zero-initialized INPUT vector using UTF-8 bytes,
+         * then populate only the actual UTF-16 press/release records. The
+         * remaining all-zero MOUSEINPUT records do nothing in SendInput.
+         * Ignore exactly that no-op, not real movement/buttons/wheel mixed
+         * into a text transaction. Never infer text from empty records. */
+        if (input->type == INPUT_MOUSE && !input->mi.dx && !input->mi.dy &&
+            !input->mi.mouseData && !input->mi.dwFlags && !input->mi.time &&
+            !input->mi.dwExtraInfo) continue;
+        /* A physical Backspace inside a Unicode call is an edit request, not
+         * immediately injected input. Preserve it as a semantic record for
+         * native whole-batch planning and focused-field witness validation. */
+        if (input->type == INPUT_KEYBOARD && !(input->ki.dwFlags & KEYEVENTF_UNICODE) && input_is_backspace(input)) {
+            if (input->ki.dwFlags & ~(KEYEVENTF_KEYUP | KEYEVENTF_SCANCODE)) return FALSE;
+            if (!(input->ki.dwFlags & KEYEVENTF_KEYUP))
+                events[used++] = (uurb_x11_input_event){.type = UURB_X11_INPUT_TEXT, .data = 8};
+            continue;
+        }
+        if (input->type != INPUT_KEYBOARD || input->ki.wVk ||
+            !(input->ki.dwFlags & KEYEVENTF_UNICODE) ||
+            (input->ki.dwFlags & ~(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))) return FALSE;
+        if (!(input->ki.dwFlags & KEYEVENTF_KEYUP))
+            events[used++] = (uurb_x11_input_event){.type = UURB_X11_INPUT_TEXT, .data = input->ki.wScan};
+    }
+    *used_out = used;
+    return TRUE;
+}
+
+static x11_route_result send_native_inputs(DWORD count, const INPUT *inputs,
+                                           DWORD *error, BOOL *unicode)
+{
+    *unicode = FALSE;
+    if (!count || count > INPUT_BRIDGE_MAX_INPUTS) return X11_ROUTE_NOT_USED;
+    for (DWORD i = 0; i < count; ++i)
+        if (inputs[i].type == INPUT_KEYBOARD && (inputs[i].ki.dwFlags & KEYEVENTF_UNICODE)) *unicode = TRUE;
+    if (!*unicode) {
+        BOOL considered;
+        return send_x11_inputs(count, inputs, error, &considered);
+    }
+    uurb_x11_input_event events[INPUT_BRIDGE_MAX_INPUTS];
+    DWORD used = 0;
+    if (!normalize_native_text_inputs(count, inputs, events, &used)) return X11_ROUTE_NOT_USED;
+    if (!used) { *error = ERROR_SUCCESS; return X11_ROUTE_SUCCESS; }
+    return send_x11_events(used, events, error);
+}
+
+static BOOL phone_text_uses_clipboard(DWORD count, const INPUT *inputs)
+{
+    DWORD index;
+    BOOL has_press = FALSE;
+    BOOL requires_clipboard = FALSE;
+
+    if (!x11_input_configured || configured_phone_text_mode ==
+                                     PHONE_TEXT_MODE_KEYS)
+        return FALSE;
+    for (index = 0; index < count; index++) {
+        const INPUT *input = &inputs[index];
+        WCHAR character;
+
+        /* An IME revision is an edit regardless of its replacement language.
+         * ASCII replacements must not bypass the same deletion allowance as
+         * CJK. A purely physical Backspace still has no Unicode press and
+         * stays on the ordinary keyboard route. */
+        if (input_is_backspace(input))
+            requires_clipboard = TRUE;
+        if (input->type != INPUT_KEYBOARD ||
+            (input->ki.dwFlags & KEYEVENTF_UNICODE) == 0)
+            continue;
+        if ((input->ki.dwFlags & KEYEVENTF_KEYUP) != 0)
+            continue;
+        has_press = TRUE;
+        character = (WCHAR)input->ki.wScan;
+        /* Backspace is bounded separately inside a semantic batch. */
+        if (character == L'\b')
+            continue;
+        if (configured_phone_text_mode == PHONE_TEXT_MODE_CLIPBOARD)
+            continue;
+        if (character == L'\r' || character == L'\n' ||
+            character == L'\t' || character >= UINT16_C(0x0080) ||
+            VkKeyScanW(character) == (SHORT)-1)
+            requires_clipboard = TRUE;
+    }
+    if (!has_press)
+        return FALSE;
+    return configured_phone_text_mode == PHONE_TEXT_MODE_CLIPBOARD ||
+           requires_clipboard;
+}
+
+static void reset_semantic_edit_state(semantic_edit_state *state)
+{
+    ZeroMemory(state, sizeof(*state));
+}
+
+static void expire_semantic_edit_state(semantic_edit_state *state,
+                                       ULONGLONG now)
+{
+    if (state->updated_ms == 0 || now < state->updated_ms ||
+        now - state->updated_ms > INPUT_BRIDGE_SEMANTIC_EDIT_WINDOW_MS)
+        reset_semantic_edit_state(state);
+}
+
+static BOOL input_is_backspace(const INPUT *input)
+{
+    if (input->type != INPUT_KEYBOARD)
+        return FALSE;
+    if ((input->ki.dwFlags & KEYEVENTF_UNICODE) != 0)
+        return (WCHAR)input->ki.wScan == L'\b';
+    return input->ki.wVk == VK_BACK ||
+           (((input->ki.dwFlags & KEYEVENTF_SCANCODE) != 0) &&
+            input->ki.wScan == 0x0e);
+}
+
+static void credit_semantic_text(semantic_edit_state *state, DWORD count,
+                                 const INPUT *inputs)
+{
+    DWORD index;
+
+    for (index = 0; index < count; index++) {
+        const INPUT *input = &inputs[index];
+        WCHAR unit;
+
+        if (input->type != INPUT_KEYBOARD ||
+            (input->ki.dwFlags & KEYEVENTF_UNICODE) == 0 ||
+            (input->ki.dwFlags & KEYEVENTF_KEYUP) != 0)
+            continue;
+        unit = (WCHAR)input->ki.wScan;
+        if (unit == L'\b')
+            continue;
+        if (state->pending_high_surrogate != 0) {
+            if (unit >= 0xdc00 && unit <= 0xdfff &&
+                state->removable_characters < MAXDWORD)
+                state->removable_characters++;
+            state->pending_high_surrogate = 0;
+            state->previous_ended_cr = FALSE;
+            continue;
+        }
+        if (unit >= 0xd800 && unit <= 0xdbff) {
+            state->pending_high_surrogate = unit;
+            state->previous_ended_cr = FALSE;
+            continue;
+        }
+        if (unit >= 0xdc00 && unit <= 0xdfff) {
+            state->previous_ended_cr = FALSE;
+            continue;
+        }
+        if (unit == L'\n' && state->previous_ended_cr) {
+            state->previous_ended_cr = FALSE;
+            continue;
+        }
+        state->previous_ended_cr = unit == L'\r';
+        if (state->removable_characters < MAXDWORD)
+            state->removable_characters++;
+    }
+}
+
+static x11_route_result send_x11_clipboard_text(
+    DWORD count, const INPUT *inputs, DWORD *error, BOOL *considered,
+    semantic_edit_state *edit_state, DWORD *clamped_edits)
+{
+    uurb_x11_input_event events[INPUT_BRIDGE_MAX_INPUTS];
+    DWORD event_count = 0;
+    DWORD index;
+    BOOL segment_is_text = FALSE;
+    BOOL sent_any = FALSE;
+    BOOL backspace_press_forwarded = FALSE;
+    semantic_edit_state next_state = *edit_state;
+    ULONGLONG now = GetTickCount64();
+
+    *considered = FALSE;
+    *clamped_edits = 0;
+
+    if (!x11_input_configured || count == 0 ||
+        count > INPUT_BRIDGE_MAX_INPUTS)
+        return X11_ROUTE_NOT_USED;
+    expire_semantic_edit_state(&next_state, now);
+    for (index = 0; index < count; index++) {
+        const INPUT *input = &inputs[index];
+        uurb_x11_input_event event;
+        BOOL event_is_text;
+        x11_route_result result;
+
+        if (input_is_backspace(input)) {
+            BOOL is_release =
+                (input->ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+
+            if (is_release) {
+                if (!backspace_press_forwarded)
+                    continue;
+                backspace_press_forwarded = FALSE;
+            } else {
+                if (next_state.removable_characters == 0) {
+                    (*clamped_edits)++;
+                    continue;
+                }
+                next_state.removable_characters--;
+                backspace_press_forwarded = TRUE;
+            }
+        }
+        ZeroMemory(&event, sizeof(event));
+        if (input->type == INPUT_KEYBOARD &&
+            (input->ki.dwFlags & KEYEVENTF_UNICODE) != 0) {
+            if ((WCHAR)input->ki.wScan == L'\b') {
+                INPUT editing = *input;
+
+                editing.ki.wVk = VK_BACK;
+                editing.ki.wScan = 0;
+                editing.ki.dwFlags &= KEYEVENTF_KEYUP;
+                if (!input_to_x11_event(&editing, &event))
+                    return sent_any ? X11_ROUTE_FAILED : X11_ROUTE_NOT_USED;
+                event_is_text = FALSE;
+            } else {
+                if ((input->ki.dwFlags & KEYEVENTF_KEYUP) != 0)
+                    continue;
+                event.type = UURB_X11_INPUT_TEXT;
+                event.data = input->ki.wScan;
+                event_is_text = TRUE;
+                /* Credit follows input order. In text/backspace/text batches
+                 * the Backspace can remove this newly inserted character,
+                 * rather than being dropped and over-crediting the next edit.
+                 * This is only a prospective state until all segments pass. */
+                credit_semantic_text(&next_state, 1, input);
+            }
+        } else {
+            if (!input_to_x11_event(input, &event))
+                return sent_any ? X11_ROUTE_FAILED : X11_ROUTE_NOT_USED;
+            event_is_text = FALSE;
+        }
+
+        if (event_count > 0 && event_is_text != segment_is_text) {
+            result = send_x11_events(event_count, events, error);
+            if (result != X11_ROUTE_SUCCESS) {
+                reset_semantic_edit_state(edit_state);
+                if (sent_any || result == X11_ROUTE_FAILED) {
+                    if (*error == ERROR_SUCCESS)
+                        *error = ERROR_CONNECTION_ABORTED;
+                    return X11_ROUTE_FAILED;
+                }
+                return result;
+            }
+            sent_any = TRUE;
+            event_count = 0;
+        }
+        if (event_count == 0)
+            segment_is_text = event_is_text;
+        events[event_count++] = event;
+    }
+    *considered = TRUE;
+    if (event_count > 0) {
+        x11_route_result result =
+            send_x11_events(event_count, events, error);
+
+        if (result != X11_ROUTE_SUCCESS) {
+            reset_semantic_edit_state(edit_state);
+            if (sent_any || result == X11_ROUTE_FAILED) {
+                if (*error == ERROR_SUCCESS)
+                    *error = ERROR_CONNECTION_ABORTED;
+                return X11_ROUTE_FAILED;
+            }
+            return result;
+        }
+    }
+    next_state.updated_ms = GetTickCount64();
+    *edit_state = next_state;
+    *error = ERROR_SUCCESS;
+    return X11_ROUTE_SUCCESS;
+}
+
+static BOOL append_key_event(INPUT *inputs, DWORD *count, WORD virtual_key,
+                             DWORD flags)
+{
+    INPUT *input;
+
+    if (*count >= INPUT_BRIDGE_MAX_TRANSLATED_INPUTS)
+        return FALSE;
+
+    input = &inputs[*count];
+    ZeroMemory(input, sizeof(*input));
+    input->type = INPUT_KEYBOARD;
+    input->ki.wVk = virtual_key;
+    input->ki.dwFlags = flags;
+    (*count)++;
+    return TRUE;
+}
+
+static SHORT key_mapping_for_character(WCHAR character)
+{
+    switch (character) {
+    case L'\b':
+        return (SHORT)VK_BACK;
+    case L'\t':
+        return (SHORT)VK_TAB;
+    case L'\n':
+    case L'\r':
+        return (SHORT)VK_RETURN;
+    default:
+        return VkKeyScanW(character);
+    }
+}
+
+static BOOL append_character_chord(WCHAR character, INPUT *inputs,
+                                   DWORD *count)
+{
+    SHORT mapping = key_mapping_for_character(character);
+    WORD virtual_key;
+    BYTE shift_state;
+
+    if (mapping == (SHORT)-1)
+        return FALSE;
+
+    virtual_key = LOBYTE((WORD)mapping);
+    shift_state = HIBYTE((WORD)mapping);
+    if ((shift_state & ~7U) != 0)
+        return FALSE;
+
+    if ((shift_state & 2U) != 0 &&
+        !append_key_event(inputs, count, VK_CONTROL, 0))
+        return FALSE;
+    if ((shift_state & 4U) != 0 &&
+        !append_key_event(inputs, count, VK_MENU, 0))
+        return FALSE;
+    if ((shift_state & 1U) != 0 &&
+        !append_key_event(inputs, count, VK_SHIFT, 0))
+        return FALSE;
+
+    if (!append_key_event(inputs, count, virtual_key, 0) ||
+        !append_key_event(inputs, count, virtual_key, KEYEVENTF_KEYUP))
+        return FALSE;
+
+    if ((shift_state & 1U) != 0 &&
+        !append_key_event(inputs, count, VK_SHIFT, KEYEVENTF_KEYUP))
+        return FALSE;
+    if ((shift_state & 4U) != 0 &&
+        !append_key_event(inputs, count, VK_MENU, KEYEVENTF_KEYUP))
+        return FALSE;
+    if ((shift_state & 2U) != 0 &&
+        !append_key_event(inputs, count, VK_CONTROL, KEYEVENTF_KEYUP))
+        return FALSE;
+
+    return TRUE;
+}
+
+static BOOL append_segment(input_segment *segments, DWORD *segment_count,
+                           DWORD offset, DWORD count, BOOL text)
+{
+    input_segment *segment;
+
+    if (count == 0)
+        return TRUE;
+    if (*segment_count >= INPUT_BRIDGE_MAX_SEGMENTS)
+        return FALSE;
+
+    segment = &segments[*segment_count];
+    segment->offset = offset;
+    segment->count = count;
+    segment->text = text;
+    (*segment_count)++;
+    return TRUE;
+}
+
+static BOOL translate_inputs(DWORD source_count, const INPUT *source,
+                             INPUT *translated, DWORD *translated_count,
+                             input_segment *segments, DWORD *segment_count,
+                             BOOL *normalized_unicode)
+{
+    DWORD index;
+    DWORD ordinary_count = 0;
+    DWORD ordinary_offset = 0;
+
+    *translated_count = 0;
+    *segment_count = 0;
+    *normalized_unicode = FALSE;
+    for (index = 0; index < source_count; index++) {
+        const INPUT *input = &source[index];
+
+        if (input->type == INPUT_KEYBOARD &&
+            (input->ki.dwFlags & KEYEVENTF_UNICODE) != 0) {
+            DWORD chord_offset;
+
+            *normalized_unicode = TRUE;
+            if (!append_segment(segments, segment_count, ordinary_offset,
+                                ordinary_count, FALSE))
+                return FALSE;
+            ordinary_count = 0;
+            if ((input->ki.dwFlags & KEYEVENTF_KEYUP) != 0)
+                continue;
+            chord_offset = *translated_count;
+            if (!append_character_chord((WCHAR)input->ki.wScan, translated,
+                                        translated_count))
+                return FALSE;
+            if (!append_segment(segments, segment_count, chord_offset,
+                                *translated_count - chord_offset, TRUE))
+                return FALSE;
+            continue;
+        }
+
+        if (*translated_count >= INPUT_BRIDGE_MAX_TRANSLATED_INPUTS)
+            return FALSE;
+        if (ordinary_count == 0)
+            ordinary_offset = *translated_count;
+        translated[*translated_count] = *input;
+        (*translated_count)++;
+        ordinary_count++;
+    }
+
+    return append_segment(segments, segment_count, ordinary_offset,
+                          ordinary_count, FALSE);
+}
+
+static BOOL inputs_contain_type(DWORD count, const INPUT *inputs, DWORD type)
+{
+    DWORD index;
+
+    for (index = 0; index < count; index++) {
+        if (inputs[index].type == type)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL segment_contains_physical_keyboard(const input_segment *segment,
+                                               const INPUT *inputs)
+{
+    DWORD index;
+
+    if (segment->text)
+        return FALSE;
+    for (index = 0; index < segment->count; index++) {
+        const INPUT *input = &inputs[segment->offset + index];
+
+        if (input->type == INPUT_KEYBOARD &&
+            (input->ki.dwFlags & KEYEVENTF_UNICODE) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL request_relay_focus(DWORD *waited_ms);
+
+static DWORD send_relay_inputs(DWORD source_count, const INPUT *source,
+                               DWORD *error, BOOL *normalized_unicode,
+                               DWORD *paced_characters,
+                               DWORD *paced_physical_segments,
+                               BOOL *focus_ready, DWORD *focus_wait_ms,
+                               const char **route,
+                               semantic_edit_state *edit_state,
+                               DWORD *clamped_edits)
+{
+    INPUT translated[INPUT_BRIDGE_MAX_TRANSLATED_INPUTS];
+    input_segment segments[INPUT_BRIDGE_MAX_SEGMENTS];
+    x11_route_result x11_result;
+    BOOL x11_considered;
+    DWORD translated_count;
+    DWORD segment_count;
+    DWORD index;
+    BOOL x11_has_keyboard;
+    BOOL x11_has_mouse;
+
+    *normalized_unicode = FALSE;
+    *paced_characters = 0;
+    *paced_physical_segments = 0;
+    *focus_ready = TRUE;
+    *focus_wait_ms = 0;
+    *route = "rdp";
+    *clamped_edits = 0;
+
+    if (native_only) {
+        /* Physical events stay on uinput. Pure Unicode calls use the explicit
+         * authorized native text service, never Wine/RDP or silent fallback. */
+        *route = "native";
+        x11_result = send_native_inputs(source_count, source, error, normalized_unicode);
+        if (*normalized_unicode) *route = "native-text";
+        if (x11_result == X11_ROUTE_SUCCESS) return source_count;
+        if (x11_result == X11_ROUTE_NOT_USED) *error = ERROR_NOT_SUPPORTED;
+        return 0;
+    }
+
+    /* Preserve semantic text when a key chord cannot represent it.  Newline,
+     * tab, CJK, and other Unicode commits become one authenticated X11
+     * clipboard update followed by a paste chord.  Ordinary representable
+     * text keeps the faster established key-event path. */
+    if (phone_text_uses_clipboard(source_count, source)) {
+        *normalized_unicode = TRUE;
+        if (x11_input_semantic_only) {
+            *focus_ready = request_relay_focus(focus_wait_ms);
+            if (!*focus_ready) {
+                *route = "rdp-clipboard-focus-error";
+                *error = GetLastError();
+                return 0;
+            }
+        }
+        x11_result = send_x11_clipboard_text(source_count, source, error,
+                                             &x11_considered, edit_state,
+                                             clamped_edits);
+        if (x11_result == X11_ROUTE_SUCCESS) {
+            *route = x11_input_semantic_only ? "rdp-clipboard-text" :
+                                               "x11-clipboard-text";
+            return source_count;
+        }
+        if (x11_result == X11_ROUTE_FAILED) {
+            *route = x11_input_semantic_only ?
+                         "rdp-clipboard-text-error" :
+                         "x11-clipboard-text-error";
+            return 0;
+        }
+    }
+
+    if (!translate_inputs(source_count, source, translated, &translated_count,
+                          segments, &segment_count, normalized_unicode)) {
+        *error = ERROR_NO_UNICODE_TRANSLATION;
+        return 0;
+    }
+
+    if (translated_count == 0) {
+        *error = ERROR_SUCCESS;
+        return source_count;
+    }
+
+    /*
+     * Representable Unicode phone text is normalized into ordinary key chords
+     * before this boundary. Sending those complete chords through the same
+     * authenticated X11 helper as physical keys avoids the nested Wine/FreeRDP
+     * keyboard hop.
+     * If preflight cannot use X11, no event has been injected and the existing
+     * RDP route remains a safe fallback.  A partial/ambiguous X11 failure is
+     * never replayed.
+     */
+    x11_result = send_x11_inputs(translated_count, translated, error,
+                                 &x11_considered);
+    x11_has_keyboard = inputs_contain_type(translated_count, translated,
+                                           INPUT_KEYBOARD);
+    x11_has_mouse = inputs_contain_type(translated_count, translated,
+                                        INPUT_MOUSE);
+    if (x11_result == X11_ROUTE_SUCCESS) {
+        if (x11_has_keyboard && x11_has_mouse)
+            *route = "x11-mixed";
+        else if (*normalized_unicode)
+            *route = "x11-text";
+        else if (x11_has_mouse)
+            *route = "x11-mouse";
+        else
+            *route = "x11";
+        if (*normalized_unicode) {
+            expire_semantic_edit_state(edit_state, GetTickCount64());
+            credit_semantic_text(edit_state, source_count, source);
+            edit_state->updated_ms = GetTickCount64();
+        } else {
+            reset_semantic_edit_state(edit_state);
+        }
+        return source_count;
+    }
+    if (x11_result == X11_ROUTE_FAILED) {
+        reset_semantic_edit_state(edit_state);
+        if (x11_has_keyboard && x11_has_mouse)
+            *route = "x11-mixed-error";
+        else if (*normalized_unicode)
+            *route = "x11-text-error";
+        else if (x11_has_mouse)
+            *route = "x11-mouse-error";
+        else
+            *route = "x11-error";
+        return 0;
+    }
+    if (x11_considered)
+        *route = *normalized_unicode ? "rdp-text-fallback" :
+                                       "rdp-fallback";
+
+    *focus_ready = request_relay_focus(focus_wait_ms);
+    if (!*focus_ready) {
+        *error = GetLastError();
+        return 0;
+    }
+
+    for (index = 0; index < segment_count; index++) {
+        const input_segment *segment = &segments[index];
+        UINT sent;
+
+        SetLastError(ERROR_SUCCESS);
+        sent = SendInput(segment->count, translated + segment->offset,
+                         sizeof(INPUT));
+        *error = GetLastError();
+        if (sent != segment->count)
+            return 0;
+        if (segment->text) {
+            (*paced_characters)++;
+            if (text_key_delay_ms > 0)
+                Sleep(text_key_delay_ms);
+        } else if (segment_contains_physical_keyboard(segment, translated)) {
+            (*paced_physical_segments)++;
+            if (physical_key_delay_ms > 0)
+                Sleep(physical_key_delay_ms);
+        }
+    }
+
+    *error = ERROR_SUCCESS;
+    if (*normalized_unicode) {
+        expire_semantic_edit_state(edit_state, GetTickCount64());
+        credit_semantic_text(edit_state, source_count, source);
+        edit_state->updated_ms = GetTickCount64();
+    } else {
+        reset_semantic_edit_state(edit_state);
+    }
+    return source_count;
+}
+
+static BOOL request_relay_focus(DWORD *waited_ms)
+{
+    HWND relay = FindWindowW(NULL, L"Ubuntu-Desktop-Relay");
+    DWORD elapsed = 0;
+
+    *waited_ms = 0;
+    if (relay == NULL) {
+        SetLastError(ERROR_NOT_READY);
+        return FALSE;
+    }
+    if (GetForegroundWindow() == relay)
+        return TRUE;
+
+    if (IsIconic(relay))
+        ShowWindow(relay, SW_RESTORE);
+    while (elapsed <= INPUT_BRIDGE_FOCUS_TIMEOUT_MS) {
+        if (elapsed == 0 || elapsed % 50 == 0)
+            SetForegroundWindow(relay);
+        if (GetForegroundWindow() == relay) {
+            *waited_ms = elapsed;
+            return TRUE;
+        }
+        Sleep(5);
+        elapsed += 5;
+    }
+
+    *waited_ms = elapsed;
+    SetLastError(ERROR_NOT_READY);
+    return FALSE;
+}
+
+static DWORD configured_text_key_delay(void)
+{
+    wchar_t value[16];
+    wchar_t *end = NULL;
+    DWORD length;
+    unsigned long parsed;
+
+    length = GetEnvironmentVariableW(L"UURB_TEXT_KEY_DELAY_MS", value,
+                                     ARRAYSIZE(value));
+    if (length == 0 || length >= ARRAYSIZE(value))
+        return INPUT_BRIDGE_DEFAULT_TEXT_KEY_DELAY_MS;
+
+    parsed = wcstoul(value, &end, 10);
+    if (end == value || *end != L'\0' ||
+        parsed > INPUT_BRIDGE_MAX_TEXT_KEY_DELAY_MS)
+        return INPUT_BRIDGE_DEFAULT_TEXT_KEY_DELAY_MS;
+    return (DWORD)parsed;
+}
+
+static DWORD configured_physical_key_delay(void)
+{
+    wchar_t value[16];
+    wchar_t *end = NULL;
+    DWORD length;
+    unsigned long parsed;
+
+    length = GetEnvironmentVariableW(L"UURB_PHYSICAL_KEY_DELAY_MS", value,
+                                     ARRAYSIZE(value));
+    if (length == 0 || length >= ARRAYSIZE(value))
+        return INPUT_BRIDGE_DEFAULT_PHYSICAL_KEY_DELAY_MS;
+
+    parsed = wcstoul(value, &end, 10);
+    if (end == value || *end != L'\0' ||
+        parsed > INPUT_BRIDGE_MAX_PHYSICAL_KEY_DELAY_MS)
+        return INPUT_BRIDGE_DEFAULT_PHYSICAL_KEY_DELAY_MS;
+    return (DWORD)parsed;
+}
+
+static phone_text_mode read_phone_text_mode(void)
+{
+    wchar_t value[16];
+    DWORD length;
+
+    length = GetEnvironmentVariableW(L"UURB_PHONE_TEXT_MODE", value,
+                                     ARRAYSIZE(value));
+    if (length == 0 || length >= ARRAYSIZE(value) ||
+        _wcsicmp(value, L"auto") == 0)
+        return PHONE_TEXT_MODE_AUTO;
+    if (_wcsicmp(value, L"keys") == 0)
+        return PHONE_TEXT_MODE_KEYS;
+    if (_wcsicmp(value, L"clipboard") == 0)
+        return PHONE_TEXT_MODE_CLIPBOARD;
+    return PHONE_TEXT_MODE_AUTO;
+}
+
+static const char *phone_text_mode_name(phone_text_mode mode)
+{
+    if (mode == PHONE_TEXT_MODE_KEYS)
+        return "keys";
+    if (mode == PHONE_TEXT_MODE_CLIPBOARD)
+        return "clipboard";
+    return "auto";
+}
+
+static void serve_client(HANDLE pipe)
+{
+    semantic_edit_state edit_state = {0};
+#ifdef UURB_NATIVE_INPUT_ONLY
+    /* The native socket persists across pipe clients; keep diagnostic state
+     * for that same broker lifetime. Never infer user-visible success here. */
+    static struct uurb_pointer_trace pointer_trace;
+    static unsigned meta_reports;
+    static unsigned text_reports;
+#endif
+
+    for (;;) {
+        input_bridge_request request;
+        input_bridge_response response;
+        INPUT inputs[INPUT_BRIDGE_MAX_INPUTS];
+        char line[640];
+        DWORD first_type = (DWORD)-1;
+        DWORD first_flags = 0;
+        DWORD focus_wait_ms = 0;
+        DWORD paced_characters = 0;
+        DWORD paced_physical_segments = 0;
+        DWORD clamped_edits = 0;
+        LONG call_number;
+        LONG category_call_number;
+        const char *category;
+        const char *route = "rdp";
+        BOOL focus_ready;
+        BOOL normalized_unicode = FALSE;
+        BOOL physical_keyboard;
+        BOOL mouse_input;
+        ULONGLONG started_ms;
+        ULONGLONG inject_started_ms = 0;
+        DWORD inject_ms = 0;
+
+        if (!read_all(pipe, &request, sizeof(request)))
+            return;
+        if (request.magic != INPUT_BRIDGE_MAGIC || request.count == 0 ||
+            request.count > INPUT_BRIDGE_MAX_INPUTS ||
+            request.input_size != sizeof(INPUT))
+            return;
+        if (!read_all(pipe, inputs, request.count * sizeof(INPUT)))
+            return;
+
+        /* Measure broker processing, not idle time waiting for a request. */
+        started_ms = GetTickCount64();
+        inject_started_ms = GetTickCount64();
+        response.result = send_relay_inputs(request.count, inputs,
+                                            &response.error,
+                                            &normalized_unicode,
+                                            &paced_characters,
+                                            &paced_physical_segments,
+                                            &focus_ready,
+                                            &focus_wait_ms,
+                                            &route, &edit_state,
+                                            &clamped_edits);
+#ifdef UURB_NATIVE_INPUT_ONLY
+        if (uurb_pointer_trace_update(&pointer_trace, request.count, inputs,
+                                     response.result, line, sizeof(line))) {
+            write_log(line);
+            flush_log();
+        }
+        if (uurb_meta_trace(&meta_reports, request.count, inputs, response.result, line, sizeof(line))) {
+            write_log(line);
+            flush_log();
+        }
+        if (uurb_text_trace(&text_reports, request.count, inputs, response.result, response.error, line, sizeof(line))) {
+            write_log(line);
+            flush_log();
+        }
+#endif
+        inject_ms = (DWORD)(GetTickCount64() - inject_started_ms);
+        first_type = inputs[0].type;
+        if (first_type == INPUT_MOUSE)
+            first_flags = inputs[0].mi.dwFlags;
+        else if (first_type == INPUT_KEYBOARD)
+            first_flags = inputs[0].ki.dwFlags;
+        physical_keyboard = !normalized_unicode &&
+                            inputs_contain_type(request.count, inputs,
+                                                INPUT_KEYBOARD);
+        mouse_input = !normalized_unicode && !physical_keyboard &&
+                      inputs_contain_type(request.count, inputs, INPUT_MOUSE);
+        call_number = InterlockedIncrement(&input_call_count);
+        if (normalized_unicode) {
+            category = "text";
+            category_call_number = InterlockedIncrement(&text_call_count);
+        } else if (physical_keyboard) {
+            category = "keyboard";
+            category_call_number = InterlockedIncrement(&keyboard_call_count);
+        } else if (mouse_input) {
+            category = "mouse";
+            category_call_number = InterlockedIncrement(&mouse_call_count);
+        } else {
+            category = "other";
+            category_call_number = InterlockedIncrement(&other_call_count);
+        }
+        if ((normalized_unicode && category_call_number <= 256) ||
+            (physical_keyboard && category_call_number <= 256) ||
+            (mouse_input && category_call_number <= 32) ||
+            (!normalized_unicode && !physical_keyboard && !mouse_input &&
+             category_call_number <= 64) ||
+            response.result != request.count) {
+            _snprintf(
+                line, sizeof(line),
+                "call=%ld category=%s category-call=%ld count=%lu type=%lu flags=0x%08lx text=%s route=%s focus=%s focus-wait-ms=%lu paced-text=%lu text-delay-ms=%lu paced-physical=%lu physical-delay-ms=%lu clamped-edits=%lu inject-ms=%lu total-ms=%lu result=%lu error=%lu\r\n",
+                call_number, category, category_call_number,
+                (unsigned long)request.count,
+                (unsigned long)first_type, (unsigned long)first_flags,
+                normalized_unicode ? "normalized" : "unchanged",
+                route,
+                strncmp(route, "x11", 3) == 0 ? "bypassed" :
+                (focus_ready ? "ready" : "timeout"),
+                (unsigned long)focus_wait_ms,
+                (unsigned long)paced_characters,
+                (unsigned long)text_key_delay_ms,
+                (unsigned long)paced_physical_segments,
+                (unsigned long)physical_key_delay_ms,
+                (unsigned long)clamped_edits,
+                (unsigned long)inject_ms,
+                (unsigned long)(GetTickCount64() - started_ms),
+                (unsigned long)response.result,
+                (unsigned long)response.error);
+            line[sizeof(line) - 1] = '\0';
+            write_log(line);
+            if (response.result != request.count)
+                flush_log();
+        }
+        if (!write_all(pipe, &response, sizeof(response)))
+            return;
+    }
+}
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous,
+                    wchar_t *command_line, int show_command)
+{
+    wchar_t log_path[MAX_PATH];
+    DWORD length;
+
+    (void)instance;
+    (void)previous;
+    (void)command_line;
+    (void)show_command;
+#ifdef UURB_NATIVE_INPUT_ONLY
+    native_only = TRUE;
+#endif
+
+    length = GetEnvironmentVariableW(L"UU_INPUT_BROKER_LOG", log_path,
+                                     MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) {
+        length = GetTempPathW(MAX_PATH, log_path);
+        if (length == 0 || length >= MAX_PATH - 20)
+            lstrcpynW(log_path, L"uu-input-broker.log", MAX_PATH);
+        else
+            lstrcatW(log_path, L"uu-input-broker.log");
+    }
+
+    log_file = CreateFileW(log_path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    text_key_delay_ms = configured_text_key_delay();
+    physical_key_delay_ms = configured_physical_key_delay();
+    configured_phone_text_mode = read_phone_text_mode();
+    x11_input_configured = configure_x11_input();
+    x11_input_semantic_only = x11_input_configured &&
+                              configure_x11_semantic_only();
+    if (native_only && (!x11_input_configured || x11_input_semantic_only))
+        return 2;
+    {
+        char line[256];
+
+        _snprintf(line, sizeof(line),
+                  "UU input broker active text-delay-ms=%lu physical-delay-ms=%lu focus-timeout-ms=%lu keyboard-route=%s phone-text-mode=%s semantic-clipboard=%s\r\n",
+                  (unsigned long)text_key_delay_ms,
+                  (unsigned long)physical_key_delay_ms,
+                  (unsigned long)INPUT_BRIDGE_FOCUS_TIMEOUT_MS,
+                  native_only ? "native" : x11_input_configured && !x11_input_semantic_only ?
+                      "x11" : "rdp",
+                  phone_text_mode_name(configured_phone_text_mode),
+                  x11_input_configured ?
+                      (x11_input_semantic_only ? "relay" : "direct") :
+                      "unavailable");
+        line[sizeof(line) - 1] = '\0';
+        write_log(line);
+        flush_log();
+    }
+
+    for (;;) {
+        HANDLE pipe = CreateNamedPipeW(
+            INPUT_BRIDGE_PIPE, PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+            64 * 1024, 64 * 1024, 0, NULL);
+        BOOL connected;
+
+        if (pipe == INVALID_HANDLE_VALUE) {
+            Sleep(1000);
+            continue;
+        }
+
+        connected = ConnectNamedPipe(pipe, NULL) ||
+                    GetLastError() == ERROR_PIPE_CONNECTED;
+        if (connected)
+            serve_client(pipe);
+        FlushFileBuffers(pipe);
+        DisconnectNamedPipe(pipe);
+        CloseHandle(pipe);
+    }
+}

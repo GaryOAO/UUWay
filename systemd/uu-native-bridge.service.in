@@ -1,0 +1,36 @@
+# Managed by UURB native installer; unrelated UU/RDP units are not used.
+[Unit]
+Description=UU native Wayland GPU bridge
+After=graphical-session.target
+Wants=uu-native-text.service
+Wants=uu-native-display.service
+After=uu-native-text.service
+After=uu-native-display.service
+PartOf=graphical-session.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-service.py" --config "%h/.config/uurb/native-runtime.json"@DISPLAY_POLICY@
+Restart=on-failure
+RestartSec=10
+WatchdogSec=30
+TimeoutStartSec=90
+TimeoutStopSec=150
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=yes
+LimitCORE=0
+LimitNOFILE=65536
+MemoryHigh=3G
+MemoryMax=4G
+MemorySwapMax=1G
+TasksMax=1024
+OOMPolicy=stop
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical-session.target

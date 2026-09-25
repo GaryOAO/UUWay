@@ -1,0 +1,27 @@
+{
+  "dxvk_revision": "70d7508c01201ed3d4bfb33da42ba834eafe3857",
+  "dxvk_tag": "v3.1",
+  "source": "https://github.com/doitsujin/dxvk.git",
+  "submodules": {
+    "include/native/directx": "9df86f2341616ef1888ae59919feaa6d4fad693d",
+    "include/spirv": "04f10f650d514df88b76d25e83db360142c7b174",
+    "include/vulkan": "8864cdc896bbc2a9b6eb36b3218fc9ef57908d77",
+    "subprojects/dxbc-spirv": "37a97745bddaf56d717253b0e4565904ce5eb06c",
+    "subprojects/dxbc-spirv/submodules/spirv_headers": "c8ad050fcb29e42a2f57d9f59e97488f465c436d",
+    "subprojects/libdisplay-info": "275e6459c7ab1ddd4b125f28d0440716e4888078"
+  },
+  "packages": [
+    {
+      "file": "g++-mingw-w64-x86-64-posix_13.2.0-6ubuntu1+26.1_amd64.deb",
+      "url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/pool/universe/g/gcc-mingw-w64/g++-mingw-w64-x86-64-posix_13.2.0-6ubuntu1+26.1_amd64.deb",
+      "sha256": "52c3613f386e462ae71105d1a0b2a48d866ccb048ad253acff629c5a2291252d",
+      "marker": "usr/lib/gcc/x86_64-w64-mingw32/13-posix/cc1plus"
+    },
+    {
+      "file": "glslang-tools_15.1.0-2~ubuntu0.24.04.2_amd64.deb",
+      "url": "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/pool/universe/g/glslang/glslang-tools_15.1.0-2~ubuntu0.24.04.2_amd64.deb",
+      "sha256": "8767bba0e4cc781a5de0da3e662f656664cc3b8de2399aef6755bac61137727e",
+      "marker": "usr/bin/glslangValidator"
+    }
+  ]
+}

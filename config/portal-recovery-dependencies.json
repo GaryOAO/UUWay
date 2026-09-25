@@ -1,0 +1,22 @@
+{
+  "source_sha256": "b5c65ea25e8483502d033a613be6dc6b71883ac07f1a3e474ad18049c47d16d6",
+  "validation_packages": [
+    ["vulkan-validationlayers", "1.3.275.0-1", "amd64", "3f5e9b53fbaabe32d770d3608912c04a33b8683385df9a5472fe062c16850746"]
+  ],
+  "packages": [
+    ["gsettings-desktop-schemas-dev", "46.1-0ubuntu1", "amd64", "f5443a48c4f1478d06c29b6c71ed7707e8e208bb6c05d9d90dc80ee8c62f2252"],
+    ["libadwaita-1-dev", "1.5.0-1ubuntu2", "amd64", "33731458902cb70e11872b8f8537f65ba02c08b54ebe87264c6992fc394cfd4e"],
+    ["libappstream-dev", "1.0.2-1build6", "amd64", "3f19f2980db4eafcd6334277793afba68ce7e34f2b8bc84f807ec0c0a311cdfa"],
+    ["libgnome-bg-4-dev", "44.0-5build2", "amd64", "539f16c31deaf0d529a01fcc91d185ac296e80f5d3f998214f1292cd57262c38"],
+    ["libgnome-desktop-4-dev", "44.0-5build2", "amd64", "a55f4735c47d1a6f86c16d5d9ad393ef78ee0b2cda58d5ab78a329aa7c6012e5"],
+    ["libgraphene-1.0-dev", "1.10.8-3build2", "amd64", "dc1dd991c2a458523dccea0aac7ee95d1b2d20d9fd56bf5affdc7134cad06ad5"],
+    ["libgtk-4-dev", "4.14.2+ds-1ubuntu1", "amd64", "836a90673e33b3cfeba7de2c81575f0d8758edcb1ab5c9c8d450ba93ff97c8be"],
+    ["libseccomp-dev", "2.5.5-1ubuntu3.1", "amd64", "26421f22f2150986735b79ece61d811400debab7fa505b08b731ec5a7917e45f"],
+    ["libsystemd-dev", "255.4-1ubuntu8.17", "amd64", "52c436c9f3ef0bb1245be3f9f3ab959f9a9c1e0c5585149767bb23d556d3db7a"],
+    ["libxkbregistry-dev", "1.6.0-1build1", "amd64", "8b7292b4bbddb10f111f4d3f38a0e3587c53a920a7ceef05a59ccbb80027cf34"],
+    ["patchelf", "0.18.0-1.1build1", "amd64", "962a43e33cd56061522554898557a038ccbb8aa4e1e0f421b2d6f6adf1f80c60"],
+    ["xdg-desktop-portal-dev", "1.18.4-1ubuntu2.24.04.2", "all", "9557f2d7c6ae364b2db5ba4b08b82eacfbc5e2bd930b606976ae1ef7cbb387a2"],
+    ["libpipewire-0.3-dev", "1.0.5-1ubuntu3.3", "amd64", "1a0267989f02a8729cdb4df36d9acf3a5ac1a525200d428baffe8961ccb0e0ba"],
+    ["libspa-0.2-dev", "1.0.5-1ubuntu3.3", "amd64", "93a60e7656fb35c97a78159fd0556842c62c2d8b9aff096009f9a20c64c1f272"]
+  ]
+}

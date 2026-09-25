@@ -1,0 +1,31 @@
+Backport of GNOME upstream fixes (LGPL-2.1-or-later, as upstream):
+9a4dffaf775f6bdb372768f568167fa2c1187257
+056029c6506dd1e7bd285943099e9fcc091cff8b
+Keep the session pointer and callbacks from referencing freed dialog data.
+
+--- a/src/screencast.c
++++ b/src/screencast.c
+@@ -100,6 +100,8 @@
+ static void
+ screen_cast_dialog_handle_free (ScreenCastDialogHandle *dialog_handle)
+ {
++  g_signal_handlers_disconnect_by_data (dialog_handle->request, dialog_handle);
++  g_signal_handlers_disconnect_by_data (dialog_handle->dialog, dialog_handle);
+   g_clear_pointer (&dialog_handle->dialog, gtk_window_destroy);
+   g_clear_object (&dialog_handle->external_parent);
+   g_object_unref (dialog_handle->request);
+@@ -211,9 +213,12 @@
+                             GDBusMethodInvocation  *invocation,
+                             ScreenCastDialogHandle *dialog_handle)
+ {
+-  cancel_start_session (dialog_handle->session, 2);
++  ScreenCastSession *screen_cast_session = dialog_handle->session;
+ 
+-  screen_cast_dialog_handle_close (dialog_handle);
++  cancel_start_session (screen_cast_session, 2);
++
++  g_clear_pointer (&screen_cast_session->dialog_handle,
++                   screen_cast_dialog_handle_close);
+ 
+   return FALSE;
+ }
