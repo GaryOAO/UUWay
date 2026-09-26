@@ -107,6 +107,33 @@ class BrokerCleanupTests(unittest.TestCase):
                 log.write(b'UURB_GPU_FAILURE ' + json.dumps(value).encode() + b'\n');log.flush()
                 self.assertIsNone(broker.producer_failure(log))
 
+    def test_driver_mismatch_names_both_versions_only_when_they_differ(self):
+        proprietary = 'NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.95.05  Tue Sep 23 10:11:16 UTC 2025\n'
+        open_module = 'NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  580.95.05  Release Build\n'
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            proc, libraries = directory / 'version', directory / 'lib'
+            libraries.mkdir()
+            for name in ('libnvidia-encode.so', 'libnvidia-encode.so.1', 'libnvidia-encode.so.580.178.04'):
+                (libraries / name).touch()
+            check = lambda: broker.state_tools.nvidia_driver_mismatch(proc, libraries)
+            self.assertIsNone(check())  # no driver loaded
+            for text in (proprietary, open_module):
+                proc.write_text(text)
+                self.assertEqual(check(), dict(kernel_module='580.95.05', userspace='580.178.04'))
+            (libraries / 'libnvidia-encode.so.580.95.05').touch()
+            self.assertIsNone(check())  # the loaded module's libraries are still installed
+            for path in libraries.iterdir():
+                path.unlink()
+            self.assertIsNone(check())  # no user-space encoder at all is a different problem
+
+    def test_driver_mismatch_is_reported_only_for_a_producer_without_first_frame(self):
+        source = (Path(broker.__file__)).read_text()
+        check = source.index('state_tools.nvidia_driver_mismatch() if accepted_status is None else None')
+        self.assertLess(source.index("detail = producer_failure(log)"), check)
+        self.assertLess(check, source.index("event('gpu_driver_mismatch'"))
+        self.assertLess(source.index("event('gpu_driver_mismatch'"), source.index("event('capture_ended'"))
+
     def test_managed_producer_is_explicit_and_not_a_build_directory_default(self):
         binary = Path('/private/release/capture/uu-pipewire-native-probe')
         command = broker.producer_command(Path('/private/state.json'), 7, 0, 'embedded', capture_binary=binary)

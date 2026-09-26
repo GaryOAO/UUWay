@@ -340,6 +340,10 @@ def run(path, restore_state, duration=3600, cursor_mode='embedded', cursor_path=
                     detail = producer_failure(log)
                     if detail:
                         event('capture_gpu_failure', generation=generation, **detail)
+                    mismatch = state_tools.nvidia_driver_mismatch() if accepted_status is None else None
+                    if mismatch:
+                        # UU then shows only its own Wine screen; a reboot loads the new module.
+                        event('gpu_driver_mismatch', generation=generation, **mismatch)
                     if cursor:
                         cursor.reset(0)
                     event('capture_ended', generation=generation, peer_disconnected=peer_gone,

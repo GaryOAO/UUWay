@@ -6,6 +6,7 @@ unexpected paths and changed components must not become cleanup authority.
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import stat
 import tempfile
@@ -54,6 +55,25 @@ def notify(message):
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_CLOEXEC) as client:
         client.connect(endpoint)
         client.sendall(message.encode('ascii'))
+
+
+def nvidia_driver_mismatch(proc=Path('/proc/driver/nvidia/version'), libraries=Path('/usr/lib/x86_64-linux-gnu')):
+    """Loaded kernel module and installed user-space NVIDIA versions when they differ.
+
+    A driver update without a reboot leaves the old module loaded, and every new
+    process that opens the GPU fails. Capture only sees a producer that exits
+    before its first frame, so name the cause. Versions only, never log text.
+    """
+    try:
+        match = re.search(r'Kernel Module(?: for \S+)?\s+(\d+(?:\.\d+)+)\s', proc.read_text(errors='replace'))
+    except OSError:
+        return None
+    installed = {path.name.removeprefix('libnvidia-encode.so.') for path in libraries.glob('libnvidia-encode.so.*')}
+    installed = sorted((v for v in installed if re.fullmatch(r'\d+(?:\.\d+)+', v)),
+                       key=lambda v: tuple(map(int, v.split('.'))))
+    if not match or not installed or match.group(1) in installed:
+        return None
+    return dict(kernel_module=match.group(1), userspace=installed[-1])
 
 
 def state_directory(parent, value):
