@@ -1,5 +1,9 @@
 # Build and install
 
+`./install.sh` in the repository root runs every step below in order and stops only where you must
+act (signing in to UU, choosing the monitor to share); `./install.sh --help` lists its options. This
+guide is the same procedure by hand, for when you want to see or change a step.
+
 This is the procedure UUWay is developed and run with. It assumes Ubuntu 24.04, GNOME 46 on
 Wayland, an NVIDIA GPU with the proprietary driver, and a user session that stays logged in
 (auto-login plus a display dummy plug for headless machines). Nothing here replaces a system
