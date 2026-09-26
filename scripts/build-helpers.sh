@@ -4,6 +4,7 @@
 #   uu-terminal-proxy.exe PowerShell stand-in for UU's terminal launcher
 #   uu-conpty.dll        conpty.dll stand-in joining UU's terminal to the PTY
 #   uu-clipboard-bridge  clipboard bridge between UU's X display and the desktop
+#   uu-clipboard-files.exe saves files copied on the controller when pasted
 set -Eeuo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,7 +25,11 @@ cc "${common[@]}" -I "$repo_dir/src" \
 cc "${common[@]}" \
     -o "$output_dir/uu-clipboard-bridge" \
     "$repo_dir/src/uu_clipboard_bridge.c" -lX11 -lXfixes
+x86_64-w64-mingw32-gcc "${common[@]}" "${pe_link[@]}" -municode \
+    -o "$output_dir/uu-clipboard-files.exe" \
+    "$repo_dir/src/uu_clipboard_files.c" -lole32 -luuid
 
-x86_64-w64-mingw32-strip "$output_dir/uu-terminal-proxy.exe" "$output_dir/uu-conpty.dll"
+x86_64-w64-mingw32-strip "$output_dir/uu-terminal-proxy.exe" "$output_dir/uu-conpty.dll" \
+    "$output_dir/uu-clipboard-files.exe"
 strip "$output_dir/uu-terminal-bridge" "$output_dir/uu-clipboard-bridge"
 printf 'Built helpers in %s\n' "$output_dir"

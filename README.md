@@ -34,7 +34,7 @@ negotiation); Linux does the rest, directly on the GPU.
 | ⌨️ **Input & IME** | Mouse, wheel and keyboard (including the Super / ⌘ key) through libei/uinput; phone IME text is committed through Fcitx5 into the focused field, CJK included. |
 | 🖥️ **Display control** | Resolution, refresh rate and DPI changes from the controller map to Mutter, with automatic rollback if the new mode never reaches the stream. |
 | 💻 **Remote terminal** | UU's terminal opens your Linux login shell. Bytes flow raw between the PTY and UU; sessions persist when you leave, several can run at once, and closing one in UU ends its shell. |
-| 📋 **Clipboard** | Text, files and images in both directions between the controller and desktop apps. |
+| 📋 **Clipboard** | Text, files and images in both directions between the controller and desktop apps; files copied on the controller transfer only when you paste them. |
 | 🧩 **Upgrade-tolerant** | UUWay implements public Windows interfaces, not offsets inside UU. UU 4.39 → 4.42 needed a single script tweak and no binary patch. |
 | 🛠️ **Control console** | A small GTK app shows service state, applies input speed settings and restarts UU. |
 
@@ -93,7 +93,8 @@ Then follow the [build and install guide](docs/build.md). In short:
 | Video, input, IME, pointer, resolution changes | ✅ in daily use |
 | Remote terminal (persistent sessions) | ✅ in daily use |
 | Clipboard: text | ✅ both directions |
-| Clipboard: files and images | 🧪 implemented, awaiting controller acceptance |
+| Clipboard: files from the controller | ✅ fetched when you paste |
+| Clipboard: files to the controller | 🧪 implemented, awaiting controller acceptance |
 | UU 4.42.0.2770 | ✅ runs unpatched ([review](docs/releases/4.42.0.2770-native-review.md)) |
 | Super Screen (virtual displays) | ❌ relies on a Windows IddCx kernel driver that Wine cannot load |
 | 1440p/4K at 60 Hz | ⚠️ limited by the refresh rates your display (or dummy plug) advertises |

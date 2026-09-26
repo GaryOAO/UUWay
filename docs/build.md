@@ -68,7 +68,7 @@ scripts/build-uu-native-bootstrap.sh   # Wine-side bootstrap and winlogon stand-
 scripts/build-uu-native-input.sh       # input bridge, broker and uinput worker
 scripts/build-uu-native-display.sh     # display-mode and DPI backend
 scripts/build-native-ime.sh            # Fcitx5 text-commit add-on
-scripts/build-helpers.sh               # terminal broker/proxy, conpty.dll, clipboard bridge
+scripts/build-helpers.sh               # terminal broker/proxy, conpty.dll, clipboard bridge and files helper
 scripts/build-uu-settings.sh           # control console
 scripts/build-pipewire-probe.sh        # capture check used to grant screen-cast permission
 ```

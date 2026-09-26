@@ -109,6 +109,18 @@ event — typically the bridge offering the next desktop copy, which then flushe
 copy on top of it. Every Wine thread watches root-window properties, so the bridge touches one on
 UU's display four times a second; phone copies now arrive within about 250 ms.
 
+A file copied on the phone reaches UU as Windows *virtual files* — `FileGroupDescriptorW` plus
+one `FileContents` item per file, fetched from the phone only when a reader asks for that index,
+as Explorer does on paste. X cannot carry them, because Wine renders `FileContents` without an
+index. The bridge reads the file names at once and offers the desktop their future paths under
+`~/.cache/uurb-clipboard` as a file list only (`x-special/gnome-copied-files` and
+`text/uri-list`), which clipboard managers do not read, so nothing is transferred on copy. When a
+file manager pastes, the bridge runs `uu-clipboard-files.exe` in UU's prefix; it reads every file
+through OLE (at most 1 GiB in total), and the paste waits until it has finished, with a desktop
+notification if that takes more than a second. Saved files are removed ten minutes after their
+last use (a later paste fetches them again), when a newer copy replaces them, and when the bridge
+starts.
+
 When phone text falls back to the portal, it is pasted through the desktop clipboard; that
 selection is marked `application/x-uurb-transient`, and the bridge does not carry it to the phone.
 

@@ -6,10 +6,12 @@ import ctypes.util
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
 import unittest
+import urllib.parse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +69,15 @@ class ClipboardBridgeTests(unittest.TestCase):
             ["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(cls.executable),
              str(ROOT / "src" / "uu_clipboard_bridge.c"), "-lX11", "-lXfixes"],
             check=True, cwd=ROOT)
+        # Stands in for Wine running uu-clipboard-files.exe: saves one file
+        # into the Z:\ directory it is given, after the delay in a "delay" file.
+        (cls.build / "uu-clipboard-files.exe").write_bytes(b"")
+        cls.wine = cls.build / "wine"
+        cls.wine.write_text("#!/bin/sh\n"
+                            "directory=$(printf '%s' \"$2\" | sed 's/^Z://; s|\\\\|/|g')\n"
+                            "sleep \"$(cat \"$XDG_CACHE_HOME/delay\" 2>/dev/null || echo 0)\"\n"
+                            "printf 'phone bytes' > \"$directory/phone file.pdf\"\n")
+        cls.wine.chmod(0o755)
 
     @classmethod
     def tearDownClass(cls):
@@ -74,6 +85,15 @@ class ClipboardBridgeTests(unittest.TestCase):
 
     def setUp(self):
         self.environment = {key: value for key, value in os.environ.items() if key != "XAUTHORITY"}
+        self.cache = tempfile.TemporaryDirectory()
+        self.addCleanup(self.cache.cleanup)
+        # No session bus: transfer notifications must not reach a real desktop.
+        self.environment.update(WINELOADER=str(self.wine), WINEPREFIX=self.cache.name,
+                                XDG_CACHE_HOME=self.cache.name,
+                                DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent",
+                                UURB_CLIPBOARD_KEEP_SECONDS="2")
+        self.stale = Path(self.cache.name) / "uurb-clipboard" / "files-stale"
+        self.stale.mkdir(parents=True)
         self.servers = []
         self.uu = self.start_display()
         self.desktop = self.start_display()
@@ -111,7 +131,8 @@ class ClipboardBridgeTests(unittest.TestCase):
 
     def copy(self, display, text, target="UTF8_STRING"):
         subprocess.run(["xclip", "-display", display, "-selection", "clipboard", "-i", "-t", target],
-                       input=text.encode(), env=self.environment, check=True,
+                       input=text if isinstance(text, bytes) else text.encode(), env=self.environment,
+                       check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def paste(self, display, target="UTF8_STRING"):
@@ -134,6 +155,84 @@ class ClipboardBridgeTests(unittest.TestCase):
         self.copy(self.uu, "phone copy")
         self.wait_for(lambda: self.paste(self.desktop) == "phone copy", "phone copy did not reach desktop")
         self.assertTrue(self.bridge_owns(self.desktop))
+
+    def test_gnome_file_list_also_reaches_uu_as_uris(self):
+        self.copy(self.desktop, "copy\nfile:///home/fixture/a%20b.txt\nfile:///home/fixture/c",
+                  "x-special/gnome-copied-files")
+        self.wait_for(lambda: self.paste(self.uu, "text/uri-list") is not None,
+                      "file list did not reach UU as text/uri-list")
+        self.assertEqual(self.paste(self.uu, "text/uri-list"),
+                         "file:///home/fixture/a%20b.txt\r\nfile:///home/fixture/c\r\n")
+
+    @staticmethod
+    def descriptor(*names):
+        """FILEGROUPDESCRIPTORW: item count, then 592-byte descriptors with the
+        UTF-16 name at byte 72."""
+        data = struct.pack("<I", len(names))
+        for name in names:
+            encoded = name.encode("utf-16-le")
+            data += bytes(72) + encoded + bytes(520 - len(encoded))
+        return data
+
+    def paste_files(self):
+        """Paste as a file manager does; returns the listed paths."""
+        listing = self.paste(self.desktop, "x-special/gnome-copied-files")
+        action, *uris = listing.split("\n")
+        self.assertEqual(action, "copy")
+        return [Path(urllib.parse.unquote(uri[len("file://"):])) for uri in uris]
+
+    def offer_phone_file(self):
+        self.copy(self.uu, self.descriptor("phone file.pdf"), "FileGroupDescriptorW")
+        self.wait_for(lambda: b"offered uu->desktop" in self.read_log(), "phone file was not offered")
+
+    def test_phone_files_are_saved_only_when_pasted(self):
+        self.offer_phone_file()
+        self.assertEqual(self.paste(self.desktop, "TARGETS").split(),
+                         ["TARGETS", "TIMESTAMP", "x-special/gnome-copied-files", "text/uri-list"])
+        # Clipboard managers read text; there is none, and nothing is fetched.
+        self.assertIsNone(self.paste(self.desktop))
+        time.sleep(0.5)
+        self.assertNotIn(b"saving files", self.read_log())
+        [path] = self.paste_files()
+        self.assertEqual(path.name, "phone file.pdf")
+        self.assertEqual(path.read_bytes(), b"phone bytes")
+        self.assertEqual(self.paste(self.desktop, "text/uri-list"), path.as_uri() + "\r\n")
+
+    def test_paste_waits_for_phone_files_being_saved(self):
+        (Path(self.cache.name) / "delay").write_text("1")
+        self.offer_phone_file()
+        started = time.monotonic()
+        [path] = self.paste_files()
+        self.assertGreater(time.monotonic() - started, 0.5)
+        self.assertEqual(path.read_bytes(), b"phone bytes")
+
+    def test_copying_the_same_files_again_keeps_saving(self):
+        (Path(self.cache.name) / "delay").write_text("1")
+        self.offer_phone_file()
+        paste = subprocess.Popen(["xclip", "-display", self.desktop, "-selection", "clipboard", "-o",
+                                  "-t", "x-special/gnome-copied-files"], env=self.environment,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.wait_for(lambda: b"saving files" in self.read_log(), "paste did not start saving")
+        self.copy(self.uu, self.descriptor("phone file.pdf"), "FileGroupDescriptorW")
+        self.wait_for(lambda: b"same files copied again" in self.read_log(), "same copy was not recognised")
+        self.assertIn(b"phone%20file.pdf", paste.communicate(timeout=5)[0])
+        self.assertNotIn(b"abandoned", self.read_log())
+
+    def test_unused_saved_files_are_removed_and_saved_again(self):
+        self.offer_phone_file()
+        [path] = self.paste_files()
+        self.assertTrue(path.exists())
+        self.wait_for(lambda: not path.exists(), "unused saved file was kept", seconds=5)
+        self.assertEqual(self.paste_files(), [path])
+        self.assertEqual(path.read_bytes(), b"phone bytes")
+
+    def test_saved_files_of_an_earlier_bridge_are_removed(self):
+        self.assertFalse(self.stale.exists())
+
+    def test_unreadable_file_list_is_not_offered(self):
+        self.copy(self.uu, "descriptor", "FileGroupDescriptorW")
+        self.wait_for(lambda: b"unsupported files" in self.read_log(), "bad file list was not refused")
+        self.assertFalse(self.bridge_owns(self.desktop))
 
     def test_paste_in_progress_is_not_copied(self):
         self.copy(self.desktop, "typed text", "application/x-uurb-transient")

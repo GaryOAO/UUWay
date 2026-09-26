@@ -22,6 +22,13 @@
  * overwrite it. Every Wine thread watches root properties, so this bridge
  * touches one on UU's display a few times a second.
  *
+ * A phone file reaches UU as virtual files (FileGroupDescriptorW with
+ * per-index FileContents), which X cannot carry. The bridge offers the
+ * desktop their future paths under ~/.cache/uurb-clipboard as a file list
+ * only, which clipboard managers do not read, and only when a paste asks
+ * does it run uu-clipboard-files.exe in UU's prefix to save them; the paste
+ * waits meanwhile. Saved files go after ten minutes unused.
+ *
  * Both displays are found at run time: UU's from GameViewerServer.exe's
  * environment, the desktop's from the Xwayland command line. A supervisor
  * loop reconnects after either X server goes away. Clipboard contents are
@@ -34,7 +41,10 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <ftw.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -65,6 +75,9 @@ static const char *const copied_targets[] = {
  * phone text and marks that selection with this target. It is not a copy. */
 #define TRANSIENT_TARGET "application/x-uurb-transient"
 
+/* Phone files are saved in full before the desktop can paste them. */
+#define MAX_SAVED_FILE_BYTES "1073741824"
+
 struct format {
     char name[48];
     unsigned char *data;
@@ -93,7 +106,33 @@ struct side {
     Window pending_owner;
     Time pending_time;
     int64_t pending_ms;
+    /* UU's side only: how to run a helper in UU's Wine prefix. */
+    char wine_loader[PATH_MAX], wine_prefix[PATH_MAX], lang[64];
 };
+
+/* Phone files UU offers as Windows virtual files, offered to the desktop by
+ * name. Nothing is transferred until a paste asks for them; the paste waits
+ * in `deferred` while uu-clipboard-files.exe saves them into `directory`.
+ * Saved files are removed once unused for a while; a later paste saves them
+ * again. */
+#define MAX_DEFERRED 16
+#define MAX_SAVED_NAMES 64
+static struct {
+    struct side *uu, *offered_on;
+    Window owner;
+    uint64_t descriptor_digest, bytes;
+    char label[NAME_MAX + 64];
+    char directory[PATH_MAX];
+    int saved, announced;
+    pid_t pid;
+    int64_t started_ms, used_ms;
+    XSelectionRequestEvent deferred[MAX_DEFERRED];
+    int deferred_count;
+} files;
+static int64_t saved_files_keep_ms = 10 * 60 * 1000;
+
+static void start_download(void);
+static void retire_files(void);
 
 static volatile sig_atomic_t stop_requested;
 
@@ -193,8 +232,12 @@ static int discover(struct side *uu, struct side *desktop)
             continue;
         if (!found_uu && strstr(cmdline, "\\bin\\GameViewerServer.exe") != NULL &&
             environment_value(pid, "DISPLAY", uu->display_name, sizeof(uu->display_name)) &&
-            environment_value(pid, "XAUTHORITY", uu->authority, sizeof(uu->authority)))
+            environment_value(pid, "XAUTHORITY", uu->authority, sizeof(uu->authority))) {
             found_uu = 1;
+            environment_value(pid, "WINELOADER", uu->wine_loader, sizeof(uu->wine_loader));
+            environment_value(pid, "WINEPREFIX", uu->wine_prefix, sizeof(uu->wine_prefix));
+            environment_value(pid, "LANG", uu->lang, sizeof(uu->lang));
+        }
         if (!found_desktop && strcmp(strrchr(cmdline, '/') ? strrchr(cmdline, '/') + 1 : cmdline,
                                      "Xwayland") == 0) {
             /* argv: Xwayland :N ... -auth PATH ... */
@@ -261,13 +304,36 @@ static const struct format *find_format_in(const struct format *formats, int cou
     return NULL;
 }
 
+static int offers_target(struct side *side, Atom target)
+{
+    for (int index = 0; index < side->format_count; index++)
+        if (XInternAtom(side->display, side->formats[index].name, True) == target)
+            return 1;
+    return 0;
+}
+
 static void answer_request(struct side *side, XSelectionRequestEvent *request)
 {
     Display *display = side->display;
     XSelectionEvent reply;
     Atom property = request->property != None ? request->property : request->target;
     char *name;
+    int refuse = 0;
 
+    /* A paste of phone files waits until they are saved, as on Windows. */
+    if (files.offered_on == side && request->selection == side->clipboard &&
+        offers_target(side, request->target)) {
+        if (files.saved) {
+            files.used_ms = now_ms();
+        } else if (files.deferred_count < MAX_DEFERRED) {
+            files.deferred[files.deferred_count++] = *request;
+            if (files.pid <= 0)
+                start_download();
+            return;
+        } else {
+            refuse = 1;
+        }
+    }
     memset(&reply, 0, sizeof(reply));
     reply.type = SelectionNotify;
     reply.requestor = request->requestor;
@@ -275,7 +341,7 @@ static void answer_request(struct side *side, XSelectionRequestEvent *request)
     reply.target = request->target;
     reply.time = request->time;
     reply.property = None;
-    if (request->selection == side->clipboard && side->format_count > 0) {
+    if (!refuse && request->selection == side->clipboard && side->format_count > 0) {
         if (request->target == side->targets) {
             Atom offered[MAX_FORMATS + 3];
             int count = 0;
@@ -331,6 +397,8 @@ static void service_event(struct side *side, XEvent *event)
         answer_request(side, &event->xselectionrequest);
     } else if (event->type == SelectionClear) {
         clear_formats(side);
+        if (files.offered_on == side)
+            retire_files();
     }
 }
 
@@ -490,6 +558,33 @@ static struct format copied_files_from_uris(const struct format *uris)
     return result;
 }
 
+/* "URI\r\nURI\r\n" from "copy\nURI\nURI" (or "cut"), for Wine's CF_HDROP. */
+static struct format uris_from_copied_files(const struct format *files)
+{
+    struct format result = {.name = "text/uri-list"};
+    const unsigned char *end = files->data + files->size;
+    const unsigned char *line = memchr(files->data, '\n', files->size);
+
+    result.data = malloc(files->size * 2 + 1);
+    result.size = 0;
+    line = line != NULL ? line + 1 : end;
+    while (line < end) {
+        const unsigned char *next = memchr(line, '\n', (size_t)(end - line));
+        const unsigned char *stop = next != NULL ? next : end;
+
+        if (stop > line && stop[-1] == '\r')
+            stop--;
+        if (stop > line) {
+            memcpy(result.data + result.size, line, (size_t)(stop - line));
+            result.size += (size_t)(stop - line);
+            memcpy(result.data + result.size, "\r\n", 2);
+            result.size += 2;
+        }
+        line = next != NULL ? next + 1 : end;
+    }
+    return result;
+}
+
 /* FNV-1a over names and bytes; never 0, which means "unknown". */
 static uint64_t formats_digest(const struct format *formats, int count)
 {
@@ -532,6 +627,365 @@ static void offer_formats(struct side *side, struct format *formats, int count, 
     side->offered_ms = now_ms();
     XSetSelectionOwner(side->display, side->clipboard, side->window, CurrentTime);
     XFlush(side->display);
+}
+
+static int remove_entry(const char *path, const struct stat *info, int type, struct FTW *walk)
+{
+    (void)info;
+    (void)walk;
+    return type == FTW_DP ? rmdir(path) : unlink(path);
+}
+
+static void remove_tree(const char *path)
+{
+    nftw(path, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+}
+
+/* ~/.cache/uurb-clipboard, one directory per phone copy. */
+static int saved_files_root(char *path, size_t size)
+{
+    const char *cache = getenv("XDG_CACHE_HOME"), *home = getenv("HOME");
+
+    if (cache != NULL && cache[0] == '/')
+        return snprintf(path, size, "%s/uurb-clipboard", cache) < (int)size;
+    return home != NULL && home[0] == '/' &&
+           snprintf(path, size, "%s/.cache/uurb-clipboard", home) < (int)size;
+}
+
+/* Tell the user about a phone file transfer, which a paste silently waits
+ * for, in Chinese under a Chinese locale. A double fork leaves no child. */
+static void notify_files(const char *chinese, const char *english)
+{
+    const char *lang = getenv("LANG");
+    int zh = lang != NULL && strncmp(lang, "zh", 2) == 0;
+    char size[32] = "", body[NAME_MAX + 256];
+    pid_t child;
+
+    if (files.bytes >= 1u << 20)
+        snprintf(size, sizeof(size), zh ? "（%.1f MB）" : " (%.1f MB)", files.bytes / 1048576.0);
+    else if (files.bytes > 0)
+        snprintf(size, sizeof(size), zh ? "（%.0f KB）" : " (%.0f KB)", files.bytes / 1024.0);
+    snprintf(body, sizeof(body), zh ? chinese : english, files.label, size);
+    child = fork();
+    if (child == 0) {
+        if (fork() == 0) {
+            int null = open("/dev/null", O_RDWR);
+
+            dup2(null, 0);
+            dup2(null, 1);
+            dup2(null, 2);
+            closefrom(3);
+            execlp("notify-send", "notify-send", "--transient", "--app-name=UU",
+                   zh ? "UU 剪贴板" : "UU clipboard", body, (char *)NULL);
+        }
+        _exit(0);
+    }
+    if (child > 0)
+        waitpid(child, NULL, 0);
+}
+
+/* Answer the pastes that waited: with the saved files, or refused. */
+static void answer_deferred(int saved)
+{
+    struct side *desktop = files.offered_on;
+    int count = files.deferred_count;
+
+    files.deferred_count = 0;
+    for (int index = 0; index < count; index++) {
+        XSelectionRequestEvent *request = &files.deferred[index];
+        XSelectionEvent reply = {.type = SelectionNotify, .requestor = request->requestor,
+                                 .selection = request->selection, .target = request->target,
+                                 .time = request->time, .property = None};
+
+        if (saved && desktop != NULL) {
+            answer_request(desktop, request);
+        } else {
+            XSendEvent(request->display, request->requestor, False, NoEventMask, (XEvent *)&reply);
+            XFlush(request->display);
+        }
+    }
+}
+
+/* Save the offered files for waiting pastes: run uu-clipboard-files.exe,
+ * installed next to this bridge, in UU's prefix. */
+static void start_download(void)
+{
+    struct side *uu = files.uu;
+    char helper[PATH_MAX], windows[PATH_MAX + 2];
+    ssize_t length = readlink("/proc/self/exe", helper, sizeof(helper) - 32);
+    pid_t pid;
+
+    if (length <= 0) {
+        answer_deferred(0);
+        return;
+    }
+    helper[length] = '\0';
+    strcpy(strrchr(helper, '/') + 1, "uu-clipboard-files.exe");
+    /* An expired or failed save left no directory; the offered paths stay. */
+    mkdir(files.directory, 0700);
+    snprintf(windows, sizeof(windows), "Z:%s", files.directory);
+    for (char *cursor = windows; *cursor; cursor++)
+        if (*cursor == '/')
+            *cursor = '\\';
+    pid = fork();
+    if (pid == 0) {
+        const char *loader = uu->wine_loader[0] != '\0' ? uu->wine_loader : "wine";
+        int null = open("/dev/null", O_RDWR);
+
+        dup2(null, 0);
+        dup2(null, 1);
+        dup2(null, 2);
+        closefrom(3);
+        setenv("WINEPREFIX", uu->wine_prefix, 1);
+        setenv("DISPLAY", uu->display_name, 1);
+        if (uu->authority[0] != '\0')
+            setenv("XAUTHORITY", uu->authority, 1);
+        if (uu->lang[0] != '\0')
+            setenv("LANG", uu->lang, 1);
+        setenv("WINEDEBUG", "-all", 1);
+        execlp(loader, loader, helper, windows, MAX_SAVED_FILE_BYTES, (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0) {
+        answer_deferred(0);
+        return;
+    }
+    files.pid = pid;
+    files.started_ms = now_ms();
+    files.announced = 0;
+    log_line("saving files from uu owner=0x%lx bytes=%" PRIu64 " for a paste", files.owner, files.bytes);
+}
+
+static void stop_download(void)
+{
+    if (files.pid <= 0)
+        return;
+    kill(files.pid, SIGKILL);
+    waitpid(files.pid, NULL, 0);
+    files.pid = 0;
+    files.saved = 0;
+    remove_tree(files.directory);
+    log_line("abandoned saving files from uu owner=0x%lx", files.owner);
+}
+
+/* The desktop no longer offers these files: refuse waiting pastes and stop a
+ * transfer. Saved files stay until they expire, for a copy still reading. */
+static void retire_files(void)
+{
+    if (files.offered_on == NULL)
+        return;
+    stop_download();
+    answer_deferred(0);
+    files.offered_on = NULL;
+}
+
+/* The helper exited: answer the pastes waiting for it. */
+static void finish_download(int status)
+{
+    files.pid = 0;
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        log_line("failed saving files from uu owner=0x%lx status=%d", files.owner,
+                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+        notify_files("接收 %s%s 失败", "Receiving %s%s failed");
+        remove_tree(files.directory);
+        answer_deferred(0);
+        return;
+    }
+    files.saved = 1;
+    files.used_ms = now_ms();
+    if (files.announced)
+        notify_files("%s%s 已接收", "%s%s received");
+    log_line("saved files from uu owner=0x%lx for %d waiting requests", files.owner, files.deferred_count);
+    answer_deferred(1);
+}
+
+/* Append `text` to `out` as a file URI path, escaping all but unreserved bytes. */
+static size_t uri_escape(char *out, const char *text)
+{
+    size_t used = 0;
+
+    for (const unsigned char *byte = (const unsigned char *)text; *byte; byte++) {
+        if ((*byte >= 'a' && *byte <= 'z') || (*byte >= 'A' && *byte <= 'Z') ||
+            (*byte >= '0' && *byte <= '9') || strchr("-._~/", *byte) != NULL)
+            out[used++] = (char)*byte;
+        else
+            used += (size_t)sprintf(out + used, "%%%02X", *byte);
+    }
+    return used;
+}
+
+/* Top-level names in a FILEGROUPDESCRIPTORW (UTF-16 names at byte 72 of each
+ * 592-byte FILEDESCRIPTORW), as UTF-8; -1 unless every name is plain. Adds
+ * the declared sizes (FD_FILESIZE; high and low words at 64 and 68). */
+static int descriptor_names(const unsigned char *data, size_t size, char names[][NAME_MAX + 1], int max,
+                            uint64_t *bytes)
+{
+    uint32_t items;
+    int count = 0;
+
+    *bytes = 0;
+    if (size < 4)
+        return -1;
+    memcpy(&items, data, 4);
+    if (items == 0 || (size - 4) / 592 < items)
+        return -1;
+    for (uint32_t item = 0; item < items; item++) {
+        const unsigned char *descriptor = data + 4 + (size_t)item * 592;
+        const unsigned char *name = descriptor + 72;
+        char text[NAME_MAX + 1];
+        size_t used = 0;
+        uint32_t flags, high, low;
+        int known = 0;
+
+        memcpy(&flags, descriptor, 4);
+        memcpy(&high, descriptor + 64, 4);
+        memcpy(&low, descriptor + 68, 4);
+        if (flags & 0x40)
+            *bytes += (uint64_t)high << 32 | low;
+        for (int unit = 0; unit < 260; unit++) {
+            uint32_t code = name[unit * 2] | (uint32_t)name[unit * 2 + 1] << 8;
+
+            if (code == 0 || code == '\\' || code == '/')
+                break;
+            if (code >= 0xd800 && code < 0xdc00 && unit + 1 < 260) {
+                uint32_t low_unit = name[unit * 2 + 2] | (uint32_t)name[unit * 2 + 3] << 8;
+
+                if (low_unit < 0xdc00 || low_unit >= 0xe000)
+                    return -1;
+                code = 0x10000 + ((code - 0xd800) << 10) + (low_unit - 0xdc00);
+                unit++;
+            } else if (code >= 0xd800 && code < 0xe000) {
+                return -1;
+            }
+            if (code < 0x20 || code == ':' || used + 4 > NAME_MAX)
+                return -1;
+            if (code < 0x80) {
+                text[used++] = (char)code;
+            } else if (code < 0x800) {
+                text[used++] = (char)(0xc0 | code >> 6);
+                text[used++] = (char)(0x80 | (code & 0x3f));
+            } else if (code < 0x10000) {
+                text[used++] = (char)(0xe0 | code >> 12);
+                text[used++] = (char)(0x80 | (code >> 6 & 0x3f));
+                text[used++] = (char)(0x80 | (code & 0x3f));
+            } else {
+                text[used++] = (char)(0xf0 | code >> 18);
+                text[used++] = (char)(0x80 | (code >> 12 & 0x3f));
+                text[used++] = (char)(0x80 | (code >> 6 & 0x3f));
+                text[used++] = (char)(0x80 | (code & 0x3f));
+            }
+        }
+        text[used] = '\0';
+        if (used == 0 || strcmp(text, ".") == 0 || strcmp(text, "..") == 0)
+            return -1;
+        for (int index = 0; index < count; index++)
+            known |= strcmp(names[index], text) == 0;
+        if (known)
+            continue;
+        if (count == max)
+            return -1;
+        strcpy(names[count++], text);
+    }
+    return count;
+}
+
+/* UU offers phone files: offer their future paths to the desktop as GNOME's
+ * file list and URIs. Nothing is transferred until a paste asks. */
+static void offer_phone_files(struct side *uu, Window owner, Time when)
+{
+    static char names[MAX_SAVED_NAMES][NAME_MAX + 1];
+    struct side *desktop = uu->other;
+    struct format formats[MAX_FORMATS] = {{.name = "x-special/gnome-copied-files"}, {.name = "text/uri-list"}};
+    unsigned char *descriptor;
+    char root[PATH_MAX], sizes[256];
+    size_t size, capacity = 5;
+    uint64_t digest = 0, bytes = 0;
+    int count = -1;
+
+    descriptor = fetch_target(uu, when, XInternAtom(uu->display, "FileGroupDescriptorW", False), &size);
+    if (descriptor != NULL) {
+        struct format whole = {.data = descriptor, .size = size};
+
+        digest = formats_digest(&whole, 1);
+        count = descriptor_names(descriptor, size, names, MAX_SAVED_NAMES, &bytes);
+        free(descriptor);
+    }
+    /* Copying the same files again must not restart a long transfer. */
+    if (files.offered_on != NULL && digest != 0 && digest == files.descriptor_digest) {
+        log_line("same files copied again on uu owner=0x%lx", owner);
+        return;
+    }
+    retire_files();
+    if (count <= 0 || uu->wine_prefix[0] == '\0' || !saved_files_root(root, sizeof(root))) {
+        log_line("unsupported files on uu owner=0x%lx", owner);
+        return;
+    }
+    if (files.directory[0] != '\0')
+        remove_tree(files.directory);
+    mkdir(root, 0700);
+    if (snprintf(files.directory, sizeof(files.directory), "%s/files-XXXXXX", root) >=
+            (int)sizeof(files.directory) || mkdtemp(files.directory) == NULL) {
+        files.directory[0] = '\0';
+        log_line("unsupported files on uu owner=0x%lx (no directory)", owner);
+        return;
+    }
+    for (int index = 0; index < count; index++)
+        capacity += 3 * (strlen(files.directory) + 1 + strlen(names[index])) + 16;
+    for (int index = 0; index < 2; index++)
+        formats[index].data = malloc(capacity);
+    memcpy(formats[0].data, "copy", 4);
+    formats[0].size = 4;
+    for (int index = 0; index < count; index++) {
+        char path[PATH_MAX * 2], uri[PATH_MAX * 6];
+        size_t length;
+
+        snprintf(path, sizeof(path), "%s/%s", files.directory, names[index]);
+        memcpy(uri, "file://", 7);
+        length = 7 + uri_escape(uri + 7, path);
+        formats[0].data[formats[0].size++] = '\n';
+        memcpy(formats[0].data + formats[0].size, uri, length);
+        formats[0].size += length;
+        memcpy(formats[1].data + formats[1].size, uri, length);
+        memcpy(formats[1].data + formats[1].size + length, "\r\n", 2);
+        formats[1].size += length + 2;
+    }
+    files.uu = uu;
+    files.owner = owner;
+    files.descriptor_digest = digest;
+    files.bytes = bytes;
+    files.saved = 0;
+    if (count == 1)
+        snprintf(files.label, sizeof(files.label), "%s", names[0]);
+    else
+        snprintf(files.label, sizeof(files.label), "%s (+%d)", names[0], count - 1);
+    digest = formats_digest(formats, 2);
+    describe_formats(formats, 2, sizes, sizeof(sizes));
+    uu->holds = digest;
+    offer_formats(desktop, formats, 2, digest);
+    files.offered_on = desktop;
+    log_line("offered uu->desktop owner=0x%lx files=%d bytes=%" PRIu64 " digest=%08" PRIx32 "%s", owner,
+             count, bytes, (uint32_t)digest, sizes);
+}
+
+/* Timers: announce a slow transfer, and remove saved files once unused. */
+static void tend_files(void)
+{
+    int64_t now = now_ms();
+    int status;
+
+    if (files.pid > 0 && waitpid(files.pid, &status, WNOHANG) == files.pid)
+        finish_download(status);
+    if (files.pid > 0 && !files.announced && now - files.started_ms >= 1000) {
+        files.announced = 1;
+        notify_files("正在接收 %s%s……", "Receiving %s%s...");
+    }
+    if (files.saved && now - files.used_ms >= saved_files_keep_ms) {
+        files.saved = 0;
+        remove_tree(files.directory);
+        if (files.offered_on == NULL)
+            files.directory[0] = '\0';
+        log_line("removed unused saved files from uu owner=0x%lx", files.owner);
+    }
 }
 
 /* Copy the newest owner change of `source` to the other side. */
@@ -579,11 +1033,27 @@ static void copy_change(struct side *source)
         formats[count] = copied_files_from_uris(find_format_in(formats, count, "text/uri-list"));
         count++;
     }
+    /* Desktop icons offer only GNOME's list; Wine needs URIs for CF_HDROP. */
+    if (count < MAX_FORMATS && find_format_in(formats, count, "x-special/gnome-copied-files") &&
+        !find_format_in(formats, count, "text/uri-list")) {
+        formats[count] = uris_from_copied_files(
+            find_format_in(formats, count, "x-special/gnome-copied-files"));
+        count++;
+    }
     if (count == 0) {
         source->holds = 0;
+        for (int index = 0; index < available; index++) {
+            if (source->wine_prefix[0] != '\0' && strcmp(names[index], "FileGroupDescriptorW") == 0) {
+                offer_phone_files(source, owner, when);
+                return;
+            }
+        }
+        retire_files();
         log_line("unsupported on %s owner=0x%lx targets=%d", source->label, owner, available);
         return;
     }
+    /* A newer copy replaces phone files offered to the desktop. */
+    retire_files();
     digest = formats_digest(formats, count);
     source->holds = digest;
     describe_formats(formats, count, sizes, sizeof(sizes));
@@ -624,10 +1094,15 @@ static int run_bridge(const char *uu_display, const char *desktop_display)
 {
     struct side uu = {.label = "uu"}, desktop = {.label = "desktop"};
     int64_t next_wake = 0;
+    char root[PATH_MAX];
 
     if (uu_display != NULL) {
+        const char *loader = getenv("WINELOADER"), *prefix = getenv("WINEPREFIX");
+
         snprintf(uu.display_name, sizeof(uu.display_name), "%s", uu_display);
         snprintf(desktop.display_name, sizeof(desktop.display_name), "%s", desktop_display);
+        snprintf(uu.wine_loader, sizeof(uu.wine_loader), "%s", loader != NULL ? loader : "");
+        snprintf(uu.wine_prefix, sizeof(uu.wine_prefix), "%s", prefix != NULL ? prefix : "");
     } else if (!discover(&uu, &desktop)) {
         return 3;
     }
@@ -638,6 +1113,10 @@ static int run_bridge(const char *uu_display, const char *desktop_display)
         return 4;
     }
     log_line("bridge connected uu=%s desktop=%s", uu.display_name, desktop.display_name);
+    if (saved_files_root(root, sizeof(root)))
+        remove_tree(root);
+    if (getenv("UURB_CLIPBOARD_KEEP_SECONDS") != NULL)
+        saved_files_keep_ms = atoll(getenv("UURB_CLIPBOARD_KEEP_SECONDS")) * 1000;
     while (!stop_requested) {
         struct pollfd descriptors[2] = {
             {.fd = ConnectionNumber(uu.display), .events = POLLIN},
@@ -659,6 +1138,7 @@ static int run_bridge(const char *uu_display, const char *desktop_display)
             XNextEvent(desktop.display, &event);
             service_event(&desktop, &event);
         }
+        tend_files();
         newest = uu.pending && (!desktop.pending || uu.pending_ms >= desktop.pending_ms) ? &uu
                  : desktop.pending ? &desktop : NULL;
         if (newest != NULL) {
