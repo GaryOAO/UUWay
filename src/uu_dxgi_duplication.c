@@ -133,7 +133,10 @@ static void report_pointer(struct duplication *s, DXGI_OUTDUPL_FRAME_INFO *info,
     /* reserved[0] names the video policy; a pointer already drawn into the
      * video (embedded or composited) must not get a second, UU-drawn one. */
     if (!cursor_snapshot(s, &header) || header.reserved[0]) return;
-    int visible = header.active && header.visible && s->shape;
+    /* Apps hide the pointer while typing (Ghostty, GTK text fields), and a
+     * phone viewer then loses it until it taps. Keep showing the last shape
+     * wherever the desktop hides it; the video never contains a pointer. */
+    int visible = header.active && s->shape;
     POINT position = {header.x - s->shape_hotspot.x, header.y - s->shape_hotspot.y};
     int new_shape = visible && s->cursor_shape_delivered != s->cursor_shape_serial;
     if (s->cursor_reported && visible == s->cursor_visible && !new_shape &&

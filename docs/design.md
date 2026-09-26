@@ -47,6 +47,12 @@ they change. The controller draws the pointer locally with your real theme, and 
 follow it. Alternative policies that composite the pointer into the video remain available but
 cannot drive UU's follow-the-pointer view.
 
+Applications hide the pointer while you type (Ghostty's `mouse-hide-while-typing`, GTK text
+fields), and UU stops drawing a pointer that DXGI or `GetCursorInfo` reports hidden, so the
+controller would lose it until the next tap. UUWay keeps reporting the last shape the desktop
+showed, through both, whenever a pointer exists; the video never contains one, so nothing is drawn
+twice.
+
 ## Input and text
 
 - `SendInput` calls from UU are intercepted in its process and forwarded to the input worker, which

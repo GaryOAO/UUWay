@@ -99,13 +99,15 @@ static BOOL native_cursor_snapshot(struct uurb_cursor_header *header, HCURSOR *h
         if (memcmp(&first, &last, sizeof(first))) continue;
         *header = first;
         *handle = NULL;
-        if (first.active && first.visible && !native_cursor_video_composited) {
-            if (changed) {
+        if (first.active && !native_cursor_video_composited) {
+            if (first.visible && changed) {
                 HCURSOR next = native_cursor_create(&first);
                 if (!next) return FALSE;
                 native_cursor_handle = next;
                 native_cursor_cached = first;
             }
+            /* Apps hide the pointer while typing, and UU stops drawing one
+             * GetCursorInfo calls hidden: keep the last shape showing. */
             *handle = native_cursor_handle;
         }
         return TRUE;
