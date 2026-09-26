@@ -496,20 +496,28 @@ def verify(directory):
 
 
 CAPTURE_BACKEND_COMPONENT = 'app/bin/uurb-dxgi-capture.dll.so'
+# Components a source-only repack may swap one by one: same ABI and contract.
+REPLACEABLE_COMPONENTS = (CAPTURE_BACKEND_COMPONENT, 'runtime/uu-native-input')
 
 
 def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bridge=None,
-            replace_display_runtime=None, replace_capture_backend=None):
+            replace_display_runtime=None, replace_capture_backend=None, replace_components=None):
+    replace_components = dict(replace_components or {})
+    if replace_capture_backend is not None:
+        replace_components[CAPTURE_BACKEND_COMPONENT] = replace_capture_backend
     if replace_input_bridge is not None and (not with_input or reuse_runtime_from is None):
         raise ValueError('Input bridge replacement requires --with-input and --reuse-runtime-from')
     if replace_display_runtime is not None and (not with_input or reuse_runtime_from is None):
         raise ValueError('Display runtime replacement requires --with-input and --reuse-runtime-from')
-    if replace_capture_backend is not None:
-        replace_capture_backend = Path(replace_capture_backend)
+    for name, source in list(replace_components.items()):
+        source = Path(source)
+        if name not in REPLACEABLE_COMPONENTS:
+            raise ValueError('Not a replaceable component: ' + name)
         if reuse_runtime_from is None:
-            raise ValueError('Capture backend replacement requires --reuse-runtime-from')
-        if replace_capture_backend.is_symlink() or not replace_capture_backend.is_file():
-            raise ValueError('Capture backend replacement must be a regular file')
+            raise ValueError('Component replacement requires --reuse-runtime-from')
+        if source.is_symlink() or not source.is_file():
+            raise ValueError('Component replacement must be a regular file: ' + name)
+        replace_components[name] = source
     if replace_input_bridge is not None and replace_display_runtime is not None:
         raise ValueError('Input bridge and display runtime replacements are mutually exclusive')
     if replace_display_runtime is not None:
@@ -560,9 +568,10 @@ def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bri
                 for name in DISPLAY_RUNTIME_COMPONENTS:
                     sources[name] = replace_display_runtime / DISPLAY_RUNTIME_SOURCE_NAMES[name]
                 contract = display_runtime_contract(sources)
-            if replace_capture_backend is not None:
-                # Same DXGI duplication ABI; this build also reports pointers.
-                sources[CAPTURE_BACKEND_COMPONENT] = replace_capture_backend
+            for name, source in replace_components.items():
+                if name not in sources:
+                    raise ValueError('Component is not part of this bundle: ' + name)
+                sources[name] = source
         if with_input and contract in (INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT):
             if contract == DPI_V2_INPUT_CONTRACT:
                 verify_pe_export(sources[INPUT_BRIDGE_COMPONENT], DISPLAY_DPI_V2_EXPORT, 'Input bridge')
@@ -614,11 +623,14 @@ if __name__ == '__main__':
     create.add_argument('--replace-display-runtime', type=Path,
                         help='With a verified schema35/36 runtime, replace the input bridge and native display loader/.so together to publish DPI support')
     create.add_argument('--replace-capture-backend', type=Path,
-                        help='With --reuse-runtime-from, replace only the DXGI duplication backend .so')
+                        help='Shorthand for --replace-component ' + CAPTURE_BACKEND_COMPONENT + '=PATH')
+    create.add_argument('--replace-component', action='append', default=[], metavar='NAME=PATH',
+                        help='With --reuse-runtime-from, replace one of: ' + ', '.join(REPLACEABLE_COMPONENTS))
     check = commands.add_parser('verify')
     check.add_argument('bundle', type=Path)
     args = parser.parse_args()
     print(json.dumps(package(args.parent, args.with_input, args.reuse_runtime_from,
                              args.replace_input_bridge, args.replace_display_runtime,
-                             args.replace_capture_backend)
+                             args.replace_capture_backend,
+                             dict(item.split('=', 1) for item in args.replace_component))
                    if args.command == 'package' else verify(args.bundle), indent=2))

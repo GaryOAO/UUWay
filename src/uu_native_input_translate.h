@@ -65,18 +65,23 @@ static inline int uurb_native_translate(const uurb_x11_input_event *in, struct u
         const unsigned move = 1, absolute = 0x8000, wheel = 0x800, hwheel = 0x1000;
         const unsigned xdown = 0x80, xup = 0x100;
         if (flags & ~0xf9ffu || in->virtual_key || in->scan_code) return 0;
-        if ((flags & (absolute | 0x4000 | 0x2000)) && !(flags & move)) return 0;
         if ((flags & (wheel | hwheel)) && (flags & (xdown | xup))) return 0;
         if ((flags & wheel) && (flags & hwheel)) return 0;
+        /* As SendInput does: without MOUSEEVENTF_MOVE the coordinates (and the
+         * ABSOLUTE/VIRTUALDESK flags) are ignored and buttons act at the
+         * current position; absolute positions past the edge are clamped. UU
+         * sends a phone tap as an absolute move, then separate absolute
+         * button-down/up events without MOVE. */
         if (flags & move) {
             if (flags & absolute) {
-                if (in->x < 0 || in->x > 65535 || in->y < 0 || in->y > 65535) return 0;
-                uurb_emit(out, EV_ABS, ABS_X, in->x); uurb_emit(out, EV_ABS, ABS_Y, in->y);
+                int x = in->x < 0 ? 0 : in->x > 65535 ? 65535 : in->x;
+                int y = in->y < 0 ? 0 : in->y > 65535 ? 65535 : in->y;
+                uurb_emit(out, EV_ABS, ABS_X, x); uurb_emit(out, EV_ABS, ABS_Y, y);
             } else {
                 if (in->x < -32768 || in->x > 32767 || in->y < -32768 || in->y > 32767) return 0;
                 uurb_emit(out, EV_REL, REL_X, in->x); uurb_emit(out, EV_REL, REL_Y, in->y);
             }
-        } else if (in->x || in->y) return 0;
+        }
         const unsigned bits[] = {2, 4, 8, 16, 32, 64};
         const unsigned buttons[] = {BTN_LEFT, BTN_LEFT, BTN_RIGHT, BTN_RIGHT, BTN_MIDDLE, BTN_MIDDLE};
         for (unsigned i = 0; i < 6; ++i) if (flags & bits[i])
