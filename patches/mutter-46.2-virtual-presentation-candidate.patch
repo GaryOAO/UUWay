@@ -1,0 +1,32 @@
+Subject: [LOCAL CANDIDATE] Timestamp virtual capture using frame presentation
+
+The monitor source uses Clutter's target presentation timestamp. The virtual
+source instead samples the clock after rendering, so render-duration jitter
+feeds the minimum-interval limiter. Use the same timestamp selection as the
+monitor source, with the existing monotonic-clock fallback. Not deployed until
+private and live validation pass. This does not disable the negotiated cap.
+
+--- a/src/backends/meta-screen-cast-virtual-stream-src.c
++++ b/src/backends/meta-screen-cast-virtual-stream-src.c
+@@ -207,12 +207,18 @@
+   MetaScreenCastStreamSrc *src = META_SCREEN_CAST_STREAM_SRC (user_data);
+   MetaScreenCastPaintPhase paint_phase;
+   MetaScreenCastRecordFlag flags;
++  int64_t presentation_time_us;
++
++  if (!clutter_frame_get_target_presentation_time (frame, &presentation_time_us))
++    presentation_time_us = g_get_monotonic_time ();
+ 
+   flags = META_SCREEN_CAST_RECORD_FLAG_NONE;
+   paint_phase = META_SCREEN_CAST_PAINT_PHASE_PRE_SWAP_BUFFER;
+-  meta_screen_cast_stream_src_maybe_record_frame (src, flags,
+-                                                  paint_phase,
+-                                                  redraw_clip);
++  meta_screen_cast_stream_src_maybe_record_frame_with_timestamp (src,
++                                                                 flags,
++                                                                 paint_phase,
++                                                                 redraw_clip,
++                                                                 presentation_time_us);
+ }
+ 
+ static void

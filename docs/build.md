@@ -36,7 +36,8 @@ export WINEPREFIX=~/.local/share/wineprefixes/uu-remote
 ```
 
 Optionally inspect a new installer first without touching any prefix — it runs in a networkless
-sandbox and reports the server's hash and patch candidates:
+sandbox and reports the server's hash and what a read-only audit finds in it (UUWay never patches
+UU):
 
 ```bash
 scripts/stage-uu-release.sh --installer /path/to/UURemote_Setup.exe --sandbox-install

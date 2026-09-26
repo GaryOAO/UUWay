@@ -6,5 +6,4 @@
 *.so
 __pycache__/
 .pytest_cache/
-.playwright-mcp/
 native/settings/target/

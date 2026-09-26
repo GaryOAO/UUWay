@@ -15,10 +15,10 @@
 
 </div>
 
-UU Remote only ships a Windows host. UUWay runs the **official, unmodified** Windows host under
-Wine and serves every Windows interface it depends on — desktop capture, hardware encoding, input,
-display modes, the pointer, its remote terminal and the clipboard — from native Linux
-implementations. UU keeps doing what it is good at (accounts, relays, codec and bitrate
+UU Remote only ships a Windows host. UUWay runs the **official** Windows host under Wine, with its
+files unmodified on disk, and serves every Windows interface it depends on — desktop capture,
+hardware encoding, input, display modes, the pointer, its remote terminal and the clipboard — from
+native Linux implementations. UU keeps doing what it is good at (accounts, relays, codec and bitrate
 negotiation); Linux does the rest, directly on the GPU.
 
 <p align="center">
@@ -34,7 +34,7 @@ negotiation); Linux does the rest, directly on the GPU.
 | ⌨️ **Input & IME** | Mouse, wheel and keyboard (including the Super / ⌘ key) through libei/uinput; phone IME text is committed through Fcitx5 into the focused field, CJK included. |
 | 🖥️ **Display control** | Resolution, refresh rate and DPI changes from the controller map to Mutter, with automatic rollback if the new mode never reaches the stream. |
 | 💻 **Remote terminal** | UU's terminal opens your Linux login shell. Bytes flow raw between the PTY and UU; sessions persist when you leave, several can run at once, and closing one in UU ends its shell. |
-| 📋 **Clipboard** | Text, files and images in both directions between the controller and desktop apps; files copied on the controller transfer only when you paste them. |
+| 📋 **Clipboard** | Text in both directions between the controller and desktop apps; files and images copied on the controller transfer only when you paste them. |
 | 🧩 **Upgrade-tolerant** | UUWay implements public Windows interfaces, not offsets inside UU. UU 4.39 → 4.42 needed a single script tweak and no binary patch. |
 | 🛠️ **Control console** | A small GTK app shows service state, applies input speed settings and restarts UU. |
 
