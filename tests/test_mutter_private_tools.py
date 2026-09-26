@@ -1,7 +1,9 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -76,6 +78,50 @@ class MutterPrivateToolTests(unittest.TestCase):
         self.assertIn('add_mutually_exclusive_group', runner)
         self.assertIn("'--virtual-lifecycle'", runner)
         self.assertIn('lifecycle=virtual_lifecycle', runner)
+
+    def test_shell_gate_loads_private_library_only_beside_the_mutter_it_was_built_for(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            system, bundle = directory / 'libmutter-clutter-14.so.0.0.0', directory / 'bundle'
+            system.write_bytes(b'clutter 46.2-1ubuntu0.24.04.16')
+            bundle.mkdir()
+            shell = directory / 'gnome-shell'
+            shell.write_text('#!/bin/sh\nprintf "%s|%s" "$LD_LIBRARY_PATH" "$*"\n')
+            shell.chmod(0o755)
+            gate = bundle / 'start-gnome-shell'
+            gate.write_text(stage.gate_script(str(shell)))
+            gate.chmod(0o755)
+            digest = subprocess.check_output(['sha256sum', str(system)], text=True)
+            (bundle / 'system-mutter.sha256').write_text(digest)
+            run = lambda: subprocess.run([str(gate), '--mode=user'], capture_output=True, text=True, timeout=5,
+                                         env=dict(os.environ, LD_LIBRARY_PATH=''))
+            result = run()
+            self.assertEqual(result.stdout, f'{bundle}|--mode=user')
+            self.assertEqual(result.stderr, '')
+            system.write_bytes(b'clutter 46.2-1ubuntu0.24.04.17')  # a Mutter update
+            result = run()
+            self.assertEqual(result.stdout, '|--mode=user')
+            self.assertIn('system Mutter changed', result.stderr)
+            (bundle / 'system-mutter.sha256').unlink()
+            self.assertEqual(run().stdout, '|--mode=user')
+
+    def test_staging_pins_every_system_mutter_library_and_the_package_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            changelog = Path(temporary) / 'changelog'
+            changelog.write_text('mutter (46.2-1ubuntu0.24.04.16) noble; urgency=medium\n\n  * Fixes.\n')
+            self.assertEqual(stage.debian_version(changelog), '46.2-1ubuntu0.24.04.16')
+        self.assertEqual(stage.system_library('libmutter-14.so.0.0.0'),
+                         Path('/usr/lib/x86_64-linux-gnu/libmutter-14.so.0.0.0'))
+        self.assertEqual(stage.system_library('libmutter-clutter-14.so.0.0.0'),
+                         Path('/usr/lib/x86_64-linux-gnu/mutter-14/libmutter-clutter-14.so.0.0.0'))
+        source = (ROOT / 'scripts/stage-mutter-capture.py').read_text()
+        self.assertLess(source.index("parser.error(f'Build is Mutter"), source.index('output.mkdir('))
+        self.assertIn('for name in LIBRARIES}', source)
+        build = (ROOT / 'scripts/build-mutter-capture.sh').read_text()
+        self.assertLess(build.index("dpkg-query -W -f='${Version}' libmutter-14-0"), build.index('curl --fail'))
+        self.assertNotIn('0ubuntu0.24.04.', build)
+        review = json.loads((ROOT / 'config/mutter-capture-review.json').read_text())
+        self.assertIn(review['installed_package_version'], review['debian_patches_url'])
 
     def test_staging_is_core_only_and_never_overwrites_a_bundle(self):
         source = (ROOT / 'scripts/stage-mutter-capture.py').read_text()

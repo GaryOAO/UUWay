@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 """Stage a fresh private library bundle; validate against installed GNOME ABI.
 No service/config changes. Never overwrites a bundle or the system libraries.
+
+The bundle carries start-gnome-shell, which loads the private libmutter only
+while the system Mutter it was built against is still installed.
 """
 import argparse
 import hashlib
@@ -18,6 +21,38 @@ LIBRARIES = {
     'libmutter-cogl-pango-14.so.0.0.0': 'cogl/cogl-pango',
     'libmutter-mtk-14.so.0.0.0': 'mtk/mtk',
 }
+
+
+SYSTEM = Path('/usr/lib/x86_64-linux-gnu')
+GATE = """#!/bin/sh
+# Start GNOME Shell on this bundle's capture-pacing libmutter only while the
+# system Mutter it was built against is still installed. The private library
+# keeps the system Clutter/Cogl; after a Mutter update their class sizes no
+# longer match and the shell would crash at every start, so fall back to the
+# stock library instead.
+bundle=$(dirname "$(readlink -f "$0")")
+if sha256sum --status --check "$bundle/system-mutter.sha256" 2>/dev/null; then
+    LD_LIBRARY_PATH="$bundle${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+else
+    echo "uurb: system Mutter changed since $bundle was built; starting the stock library" >&2
+fi
+exec @SHELL@ "$@"
+"""
+
+
+def system_library(name):
+    return SYSTEM / name if name == 'libmutter-14.so.0.0.0' else SYSTEM / 'mutter-14' / name
+
+
+def gate_script(shell='/usr/bin/gnome-shell'):
+    return GATE.replace('@SHELL@', shell)
+
+
+def debian_version(changelog):
+    """Version in the first entry of a Debian changelog, e.g. 46.2-1ubuntu0.24.04.16."""
+    first = changelog.read_text().split('\n', 1)[0]
+    return first[first.index('(') + 1:first.index(')')]
 
 
 def symbols(library):
@@ -38,9 +73,13 @@ def main():
     output = args.output.absolute()
     if output.exists() or output.is_symlink():
         parser.error('Output must be a new, nonexistent bundle directory')
+    built = debian_version(build / 'mutter-46.2/debian/changelog')
+    installed_version = subprocess.check_output(['dpkg-query', '-W', '-f=${Version}', 'libmutter-14-0'], text=True)
+    if built != installed_version:
+        parser.error(f'Build is Mutter {built} but {installed_version} is installed')
     patch = (ROOT / 'patches/mutter-46.2-capture-jitter-candidate.patch').read_bytes()
     report = dict(build=str(build), patch_sha256=hashlib.sha256(patch).hexdigest(),
-                  system_support_libraries=args.core_only, libraries={})
+                  mutter_package_version=built, system_support_libraries=args.core_only, libraries={})
     source_dir = build / 'mutter-46.2/src/backends'
     report['built_source_sha256'] = {
         name: hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
@@ -52,10 +91,7 @@ def main():
         if args.core_only and name != 'libmutter-14.so.0.0.0':
             continue
         source = build / 'compiled' / relative / name
-        system = Path('/usr/lib/x86_64-linux-gnu')
-        if name != 'libmutter-14.so.0.0.0':
-            system /= 'mutter-14'
-        installed = system / name
+        installed = system_library(name)
         old, new = symbols(installed), symbols(source)
         if old - new:
             raise RuntimeError(f'Missing installed ABI symbols in {name}: {sorted(old - new)}')
@@ -81,6 +117,15 @@ def main():
     if 'not found' in linked.stdout + linked.stderr or 'undefined symbol' in linked.stdout + linked.stderr:
         raise RuntimeError('Staged GNOME Shell has unresolved runtime dependencies: ' + linked.stdout + linked.stderr)
     report['shell_version'] = subprocess.check_output(['/usr/bin/gnome-shell', '--version'], env=env, text=True, timeout=10).strip()
+    # Every system Mutter library, not just the one replaced: the private build
+    # is only valid beside the exact Clutter/Cogl/Mtk it was compiled against.
+    pinned = {str(system_library(name)): hashlib.sha256(system_library(name).read_bytes()).hexdigest()
+              for name in LIBRARIES}
+    (output / 'system-mutter.sha256').write_text(''.join(f'{digest}  {path}\n' for path, digest in pinned.items()))
+    gate = output / 'start-gnome-shell'
+    gate.write_text(gate_script())
+    gate.chmod(0o755)
+    report['system_mutter_sha256'] = pinned
     report['installed'] = False
     print(json.dumps(report, indent=2))
 

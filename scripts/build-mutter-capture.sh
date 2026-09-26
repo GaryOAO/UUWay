@@ -9,8 +9,19 @@ review="$repo_dir/build/mutter-review"
 manifest="$repo_dir/config/mutter-build-dependencies.json"
 mkdir -p "$work/downloads"
 for tool in jq curl tar patch meson ninja pkg-config; do command -v "$tool" >/dev/null; done
-printf '%s  %s\n' "$(jq -r .source_sha256 "$repo_dir/config/mutter-capture-review.json")" "$review/mutter-46.2.tar.xz" | sha256sum -c -
-printf '%s  %s\n' "$(jq -r .debian_patches_sha256 "$repo_dir/config/mutter-capture-review.json")" "$review/mutter_46.2-1ubuntu0.24.04.9.debian.tar.xz" | sha256sum -c -
+pins="$repo_dir/config/mutter-capture-review.json"
+# The private libmutter keeps the system Clutter/Cogl, so it must come from the
+# exact Ubuntu revision that is installed: a newer system Clutter changes class
+# sizes and the shell crashes at startup.
+mutter_version=$(jq -r .installed_package_version "$pins")
+installed=$(dpkg-query -W -f='${Version}' libmutter-14-0)
+if [[ "$installed" != "$mutter_version" ]]; then
+    printf 'Pinned Mutter %s does not match installed %s; update %s first\n' "$mutter_version" "$installed" "$pins" >&2
+    exit 1
+fi
+debian_tarball="$review/mutter_${mutter_version}.debian.tar.xz"
+printf '%s  %s\n' "$(jq -r .source_sha256 "$pins")" "$review/mutter-46.2.tar.xz" | sha256sum -c -
+printf '%s  %s\n' "$(jq -r .debian_patches_sha256 "$pins")" "$debian_tarball" | sha256sum -c -
 while IFS=$'\t' read -r package version arch digest url; do
     archive="$work/downloads/${package}_${version}_${arch}.deb"
     if [[ ! -f "$archive" ]]; then
@@ -49,7 +60,7 @@ for library in "$headers"/usr/lib/x86_64-linux-gnu/*.so; do
 done
 tar -xJf "$review/mutter-46.2.tar.xz" -C "$build_dir"
 source_dir="$build_dir/mutter-46.2"
-tar -xJf "$review/mutter_46.2-1ubuntu0.24.04.9.debian.tar.xz" -C "$source_dir"
+tar -xJf "$debian_tarball" -C "$source_dir"
 while IFS= read -r entry; do
     [[ -z "$entry" || "$entry" == \#* ]] && continue
     [[ "$entry" != *' '* && "$entry" != /* && "$entry" != *'..'* ]] || { printf 'Unexpected patch entry\n' >&2; exit 1; }

@@ -86,17 +86,33 @@ install -m 0755 build/helpers/* ~/.local/share/wineprefixes/uu-remote/compat/
 
 Stock Mutter 46.2 drops about a third of 60 Hz screen-cast frames because its frame limiter
 rejects frames that arrive a few microseconds early. `patches/mutter-46.2-capture-jitter-candidate.patch`
-tolerates that jitter:
+tolerates that jitter.
+
+The private build replaces only `libmutter-14` and keeps the system Clutter and Cogl, so it must
+come from the Ubuntu revision that is installed. `config/mutter-capture-review.json` pins that
+revision, and the build refuses to start when `libmutter-14-0` differs. After a Mutter update,
+download the new `.debian.tar.xz` from Launchpad, check it against the `.dsc`, and update
+`installed_package_version`, the two URLs and `debian_patches_sha256`.
 
 ```bash
-scripts/build-mutter-capture.sh
-python3 scripts/stage-mutter-capture.py build/mutter-build ~/.local/lib/uurb/mutter-46.2-jitter
+scripts/build-mutter-capture.sh          # prints the retained build directory
+bundle=~/.local/lib/uurb/mutter-$(dpkg-query -W -f='${Version}' libmutter-14-0)-jitter-core
+python3 scripts/stage-mutter-capture.py build/mutter-build/rebuild.XXXXXX "$bundle"
+python3 tests/probes/mutter_bundle_probe.py "$bundle"   # a private headless Shell must start
 mkdir -p ~/.config/systemd/user/org.gnome.Shell@wayland.service.d
-printf '[Service]\nEnvironment=LD_LIBRARY_PATH=%s\n' ~/.local/lib/uurb/mutter-46.2-jitter \
+printf '[Service]\nExecStart=\nExecStart=%s/start-gnome-shell\n' "$bundle" \
     > ~/.config/systemd/user/org.gnome.Shell@wayland.service.d/92-uurb-mutter-jitter.conf
+systemctl --user daemon-reload
 ```
 
-Log out and back in to load it. Delete the drop-in to return to the distribution library.
+Log out and back in to load it. `start-gnome-shell` checks the system Mutter libraries against the
+bundle's `system-mutter.sha256` and loads the private library only while they match. After a
+Mutter update it starts the stock library and logs `system Mutter changed` to the journal; rebuild
+when you see that. Delete the drop-in to return to the distribution library for good.
+
+Never point `LD_LIBRARY_PATH` at a bundle directly. Beside a newer system Clutter the Shell dies at
+every start (`MetaStageView` class size smaller than `ClutterStageView`) and the desktop never
+comes up.
 
 ### Optional: portal fixes
 
@@ -164,6 +180,19 @@ UUWay does not pin a UU version. For a new release: stage it with `stage-uu-rele
 `uu-native-bridge`, copy the prefix aside, run the new installer with `/S` in the prefix, copy
 `compat/uu-terminal-proxy.exe` to `bin/powershell.exe` if the release ships none, and start the
 service again. See [the 4.42 review](releases/4.42.0.2770-native-review.md) for what to compare.
+
+## Troubleshooting
+
+- **The controller shows only UU's Wine desktop.** The bridge runs but capture fails. Read the newest
+  `~/.local/state/uurb/trial-*/capture.log`. `gpu_driver_mismatch` means the NVIDIA packages were
+  updated without a reboot, so the loaded kernel module no longer matches the user-space driver:
+  reboot. `capture_ended` without `capture_frame_accepted` for another reason: check step 4.
+- **No desktop after a system update, and `gnome-shell` segfaults in `libmutter-14.so` every few
+  seconds.** A private Mutter library that no longer matches the system Mutter. The gated drop-in
+  above falls back by itself; for an older drop-in that sets `LD_LIBRARY_PATH`, move it out of
+  `org.gnome.Shell@wayland.service.d` over SSH and run `systemctl --user daemon-reload`.
+- NVIDIA driver, kernel and Mutter updates all need a reboot, and Mutter ones a pacing rebuild.
+  Install them when you can reboot, not from the Software Updater during a remote session.
 
 ## Tests
 
