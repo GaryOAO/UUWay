@@ -8,10 +8,24 @@
  * text, file lists and PNG images) and offer them on the other side. Wine
  * converts file lists to CF_HDROP and PNG to bitmaps for UU.
  *
+ * While a transfer waits on one display, both displays stay served: requests
+ * for what this bridge offers are answered and owner changes are queued, never
+ * dropped. The newest change wins; one that a later change on the other side
+ * overtook is not copied back over it, and content a side already holds is
+ * not offered to it again, so the two clipboards cannot echo.
+ *
+ * Wine 11 takes CLIPBOARD for a Windows copy (a phone copy UU writes) with an
+ * X request its clipboard thread leaves unflushed: winex11 does not flush
+ * after acquire_selection, and win32u runs the driver only when its
+ * connection has input. The request then waits for the next X event, which
+ * held phone copies back until a desktop copy woke Wine and let the stale one
+ * overwrite it. Every Wine thread watches root properties, so this bridge
+ * touches one on UU's display a few times a second.
+ *
  * Both displays are found at run time: UU's from GameViewerServer.exe's
  * environment, the desktop's from the Xwayland command line. A supervisor
  * loop reconnects after either X server goes away. Clipboard contents are
- * never logged. */
+ * never logged, only format sizes and a short digest. */
 #define _GNU_SOURCE
 
 #include <X11/Xatom.h>
@@ -20,13 +34,16 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -36,12 +53,17 @@
 #define MAX_FORMAT_BYTES (12u << 20)
 #define TRANSFER_TIMEOUT_MS 5000
 #define RETRY_SECONDS 2
+#define WINE_WAKE_MS 250
 
 /* Targets copied between displays, by name; atoms differ per display. */
 static const char *const copied_targets[] = {
     "UTF8_STRING", "text/uri-list", "x-special/gnome-copied-files", "image/png",
 };
 #define MAX_FORMATS 4
+
+/* The native text service owns the desktop clipboard for a moment to paste
+ * phone text and marks that selection with this target. It is not a copy. */
+#define TRANSIENT_TARGET "application/x-uurb-transient"
 
 struct format {
     char name[48];
@@ -56,13 +78,23 @@ struct side {
     Display *display;
     Window window;
     int xfixes_event;
+    struct side *other;
+    /* Atoms are per X server. */
+    Atom clipboard, targets, incr, timestamp, transfer, wake;
     /* Formats this side currently offers as CLIPBOARD owner. */
     struct format formats[MAX_FORMATS];
     int format_count;
+    Time owned_since;
+    int64_t offered_ms;
+    /* Digest of the content this side is known to hold; 0 when unknown. */
+    uint64_t holds;
+    /* The newest owner change not yet copied; a later one replaces it. */
+    int pending;
+    Window pending_owner;
+    Time pending_time;
+    int64_t pending_ms;
 };
 
-static Atom clipboard, targets_atom, incr_atom,
-    timestamp_atom, transfer_atom;
 static volatile sig_atomic_t stop_requested;
 
 static void handle_stop(int signal_number)
@@ -77,6 +109,22 @@ static int64_t now_ms(void)
 
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static void log_line(const char *format, ...)
+{
+    struct timeval now;
+    char stamp[32];
+    va_list arguments;
+
+    gettimeofday(&now, NULL);
+    strftime(stamp, sizeof(stamp), "%F %T", localtime(&now.tv_sec));
+    fprintf(stderr, "%s.%03ld clipboard ", stamp, (long)(now.tv_usec / 1000));
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+    fflush(stderr);
 }
 
 /* Read NUL-separated KEY=value pairs from a process environment. */
@@ -175,48 +223,141 @@ static int open_side(struct side *side)
 {
     int error_base;
 
-    setenv("XAUTHORITY", side->authority, 1);
+    if (side->authority[0] != '\0')
+        setenv("XAUTHORITY", side->authority, 1);
     side->display = XOpenDisplay(side->display_name);
     if (side->display == NULL)
         return 0;
     if (!XFixesQueryExtension(side->display, &side->xfixes_event, &error_base))
         return 0;
+    side->clipboard = XInternAtom(side->display, "CLIPBOARD", False);
+    side->targets = XInternAtom(side->display, "TARGETS", False);
+    side->incr = XInternAtom(side->display, "INCR", False);
+    side->timestamp = XInternAtom(side->display, "TIMESTAMP", False);
+    side->transfer = XInternAtom(side->display, "UURB_CLIPBOARD", False);
+    side->wake = XInternAtom(side->display, "UURB_CLIPBOARD_WAKE", False);
     side->window = XCreateSimpleWindow(side->display, DefaultRootWindow(side->display),
                                        -10, -10, 1, 1, 0, 0, 0);
     XSelectInput(side->display, side->window, PropertyChangeMask);
-    clipboard = XInternAtom(side->display, "CLIPBOARD", False);
-    XFixesSelectSelectionInput(side->display, side->window, clipboard,
+    XFixesSelectSelectionInput(side->display, side->window, side->clipboard,
                                XFixesSetSelectionOwnerNotifyMask);
     XFlush(side->display);
     return 1;
 }
 
-static void intern_atoms(Display *display)
+static void clear_formats(struct side *side)
 {
-    clipboard = XInternAtom(display, "CLIPBOARD", False);
-    targets_atom = XInternAtom(display, "TARGETS", False);
-    incr_atom = XInternAtom(display, "INCR", False);
-    timestamp_atom = XInternAtom(display, "TIMESTAMP", False);
-    transfer_atom = XInternAtom(display, "UURB_CLIPBOARD", False);
+    for (int index = 0; index < side->format_count; index++)
+        free(side->formats[index].data);
+    side->format_count = 0;
 }
 
-/* Wait for a specific event on one display, handling nothing else. */
-static int wait_event(Display *display, int type, Window window, XEvent *event,
-                      int64_t deadline)
+static const struct format *find_format_in(const struct format *formats, int count,
+                                           const char *name)
 {
+    for (int index = 0; index < count; index++)
+        if (strcmp(formats[index].name, name) == 0)
+            return &formats[index];
+    return NULL;
+}
+
+static void answer_request(struct side *side, XSelectionRequestEvent *request)
+{
+    Display *display = side->display;
+    XSelectionEvent reply;
+    Atom property = request->property != None ? request->property : request->target;
+    char *name;
+
+    memset(&reply, 0, sizeof(reply));
+    reply.type = SelectionNotify;
+    reply.requestor = request->requestor;
+    reply.selection = request->selection;
+    reply.target = request->target;
+    reply.time = request->time;
+    reply.property = None;
+    if (request->selection == side->clipboard && side->format_count > 0) {
+        if (request->target == side->targets) {
+            Atom offered[MAX_FORMATS + 3];
+            int count = 0;
+
+            offered[count++] = side->targets;
+            offered[count++] = side->timestamp;
+            for (int index = 0; index < side->format_count; index++)
+                offered[count++] = XInternAtom(display, side->formats[index].name, False);
+            if (find_format_in(side->formats, side->format_count, "UTF8_STRING"))
+                offered[count++] = XInternAtom(display, "text/plain;charset=utf-8", False);
+            XChangeProperty(display, request->requestor, property, XA_ATOM, 32,
+                            PropModeReplace, (unsigned char *)offered, count);
+            reply.property = property;
+        } else if (request->target == side->timestamp) {
+            long owned_since = (long)side->owned_since;
+
+            XChangeProperty(display, request->requestor, property, XA_INTEGER, 32,
+                            PropModeReplace, (unsigned char *)&owned_since, 1);
+            reply.property = property;
+        } else if ((name = XGetAtomName(display, request->target)) != NULL) {
+            const struct format *format = find_format_in(
+                side->formats, side->format_count,
+                strcmp(name, "text/plain;charset=utf-8") == 0 ? "UTF8_STRING" : name);
+
+            if (format != NULL) {
+                XChangeProperty(display, request->requestor, property, request->target, 8,
+                                PropModeReplace, format->data, (int)format->size);
+                reply.property = property;
+            }
+            XFree(name);
+        }
+    }
+    XSendEvent(display, request->requestor, False, NoEventMask, (XEvent *)&reply);
+    XFlush(display);
+}
+
+/* Serve one event from `side` that no transfer is waiting for: answer
+ * requests, and remember the newest foreign owner for the main loop. */
+static void service_event(struct side *side, XEvent *event)
+{
+    if (event->type == side->xfixes_event + XFixesSelectionNotify) {
+        XFixesSelectionNotifyEvent *notify = (XFixesSelectionNotifyEvent *)event;
+
+        if (notify->owner == side->window) {
+            side->owned_since = notify->selection_timestamp;
+        } else if (notify->owner != None) {
+            side->pending = 1;
+            side->pending_owner = notify->owner;
+            side->pending_time = notify->selection_timestamp;
+            side->pending_ms = now_ms();
+        }
+    } else if (event->type == SelectionRequest) {
+        answer_request(side, &event->xselectionrequest);
+    } else if (event->type == SelectionClear) {
+        clear_formats(side);
+    }
+}
+
+/* Serve both displays until `side`'s window gets an event of `type`. */
+static int wait_event(struct side *side, int type, XEvent *event, int64_t deadline)
+{
+    struct side *sides[2] = {side, side->other};
+
     while (!stop_requested) {
-        struct pollfd descriptor = {.fd = ConnectionNumber(display), .events = POLLIN};
+        struct pollfd descriptors[2];
         int64_t remaining;
 
-        while (XPending(display)) {
-            XNextEvent(display, event);
-            if (event->type == type && event->xany.window == window)
-                return 1;
+        for (int index = 0; index < 2; index++) {
+            while (XPending(sides[index]->display)) {
+                XNextEvent(sides[index]->display, event);
+                if (index == 0 && event->type == type && event->xany.window == side->window)
+                    return 1;
+                service_event(sides[index], event);
+            }
         }
         remaining = deadline - now_ms();
         if (remaining <= 0)
             return 0;
-        poll(&descriptor, 1, (int)remaining);
+        for (int index = 0; index < 2; index++)
+            descriptors[index] = (struct pollfd){.fd = ConnectionNumber(sides[index]->display),
+                                                 .events = POLLIN};
+        poll(descriptors, 2, (int)remaining);
     }
     return 0;
 }
@@ -227,7 +368,7 @@ static size_t property_bytes(unsigned long items, int format)
     return items * (format == 32 ? sizeof(long) : (size_t)(format / 8));
 }
 
-/* Fetch CLIPBOARD as `target` from `side` (atoms are per display). */
+/* Fetch CLIPBOARD as `target` from `side`. */
 static unsigned char *fetch_target(struct side *side, Time when, Atom target, size_t *size)
 {
     Display *display = side->display;
@@ -239,19 +380,22 @@ static unsigned char *fetch_target(struct side *side, Time when, Atom target, si
     unsigned long items, remaining;
     unsigned char *data = NULL;
 
-    intern_atoms(display);
     *size = 0;
-    XDeleteProperty(display, side->window, transfer_atom);
-    XConvertSelection(display, clipboard, target, transfer_atom, side->window, when);
+    XDeleteProperty(display, side->window, side->transfer);
+    XConvertSelection(display, side->clipboard, target, side->transfer, side->window, when);
     XFlush(display);
-    if (!wait_event(display, SelectionNotify, side->window, &event, deadline) ||
-        event.xselection.property == None)
+    /* A reply to an earlier request that timed out may still arrive. */
+    do {
+        if (!wait_event(side, SelectionNotify, &event, deadline))
+            return NULL;
+    } while (event.xselection.selection != side->clipboard || event.xselection.target != target);
+    if (event.xselection.property == None)
         return NULL;
-    if (XGetWindowProperty(display, side->window, transfer_atom, 0, MAX_FORMAT_BYTES / 4 + 1, True,
-                           AnyPropertyType, &type, &format, &items, &remaining,
+    if (XGetWindowProperty(display, side->window, side->transfer, 0, MAX_FORMAT_BYTES / 4 + 1,
+                           True, AnyPropertyType, &type, &format, &items, &remaining,
                            &data) != Success)
         return NULL;
-    if (type == incr_atom) {
+    if (type == side->incr) {
         /* Chunked transfer: each PropertyNewValue carries the next piece. */
         XFree(data);
         XFlush(display);
@@ -259,15 +403,15 @@ static unsigned char *fetch_target(struct side *side, Time when, Atom target, si
             size_t chunk;
 
             do {
-                if (!wait_event(display, PropertyNotify, side->window, &event, deadline)) {
+                if (!wait_event(side, PropertyNotify, &event, deadline)) {
                     free(result);
                     return NULL;
                 }
-            } while (event.xproperty.atom != transfer_atom ||
+            } while (event.xproperty.atom != side->transfer ||
                      event.xproperty.state != PropertyNewValue);
-            if (XGetWindowProperty(display, side->window, transfer_atom, 0, MAX_FORMAT_BYTES / 4 + 1,
-                                   True, AnyPropertyType, &type, &format, &items,
-                                   &remaining, &data) != Success) {
+            if (XGetWindowProperty(display, side->window, side->transfer, 0,
+                                   MAX_FORMAT_BYTES / 4 + 1, True, AnyPropertyType, &type,
+                                   &format, &items, &remaining, &data) != Success) {
                 free(result);
                 return NULL;
             }
@@ -300,100 +444,13 @@ static unsigned char *fetch_target(struct side *side, Time when, Atom target, si
     return result;
 }
 
-static void clear_formats(struct side *side)
-{
-    for (int index = 0; index < side->format_count; index++)
-        free(side->formats[index].data);
-    side->format_count = 0;
-}
-
-static void log_event(const char *event, const struct side *side, const struct format *formats,
-                      int count)
-{
-    char stamp[32];
-    time_t now = time(NULL);
-
-    strftime(stamp, sizeof(stamp), "%F %T", localtime(&now));
-    fprintf(stderr, "%s clipboard %s on %s", stamp, event, side->label);
-    for (int index = 0; index < count; index++)
-        fprintf(stderr, " %s=%zu", formats[index].name, formats[index].size);
-    fprintf(stderr, "\n");
-}
-
-static void offer_formats(struct side *side, struct format *formats, int count)
-{
-    clear_formats(side);
-    memcpy(side->formats, formats, sizeof(*formats) * (size_t)count);
-    side->format_count = count;
-    intern_atoms(side->display);
-    XSetSelectionOwner(side->display, clipboard, side->window, CurrentTime);
-    XFlush(side->display);
-    log_event(XGetSelectionOwner(side->display, clipboard) == side->window ? "offered" : "not-owned",
-              side, formats, count);
-}
-
-static const struct format *find_format_in(const struct format *formats, int count,
-                                           const char *name);
-
-static const struct format *find_format(const struct side *side, const char *name)
-{
-    return find_format_in(side->formats, side->format_count, name);
-}
-
-static void answer_request(struct side *side, XSelectionRequestEvent *request)
-{
-    Display *display = side->display;
-    XSelectionEvent reply;
-    Atom property = request->property != None ? request->property : request->target;
-    char *name;
-
-    intern_atoms(display);
-    memset(&reply, 0, sizeof(reply));
-    reply.type = SelectionNotify;
-    reply.requestor = request->requestor;
-    reply.selection = request->selection;
-    reply.target = request->target;
-    reply.time = request->time;
-    reply.property = None;
-    if (request->selection == clipboard && side->format_count > 0) {
-        if (request->target == targets_atom) {
-            Atom offered[MAX_FORMATS + 3];
-            int count = 0;
-
-            offered[count++] = targets_atom;
-            offered[count++] = timestamp_atom;
-            for (int index = 0; index < side->format_count; index++)
-                offered[count++] = XInternAtom(display, side->formats[index].name, False);
-            if (find_format(side, "UTF8_STRING"))
-                offered[count++] = XInternAtom(display, "text/plain;charset=utf-8", False);
-            XChangeProperty(display, request->requestor, property, XA_ATOM, 32,
-                            PropModeReplace, (unsigned char *)offered, count);
-            reply.property = property;
-        } else if ((name = XGetAtomName(display, request->target)) != NULL) {
-            const struct format *format = find_format(
-                side, strcmp(name, "text/plain;charset=utf-8") == 0 ? "UTF8_STRING" : name);
-
-            if (format != NULL) {
-                XChangeProperty(display, request->requestor, property, request->target, 8,
-                                PropModeReplace, format->data, (int)format->size);
-                reply.property = property;
-            }
-            XFree(name);
-        }
-    }
-    XSendEvent(display, request->requestor, False, NoEventMask, (XEvent *)&reply);
-    XFlush(display);
-}
-
 /* List CLIPBOARD's targets on `side` by name. */
 static int fetch_target_names(struct side *side, Time when, char names[][48], int max)
 {
     size_t size;
-    unsigned char *atoms;
+    unsigned char *atoms = fetch_target(side, when, side->targets, &size);
     int count = 0;
 
-    intern_atoms(side->display);
-    atoms = fetch_target(side, when, targets_atom, &size);
     if (atoms == NULL)
         return 0;
     for (size_t index = 0; index < size / sizeof(long) && count < max; index++) {
@@ -433,38 +490,87 @@ static struct format copied_files_from_uris(const struct format *uris)
     return result;
 }
 
-static const struct format *find_format_in(const struct format *formats, int count,
-                                           const char *name)
+/* FNV-1a over names and bytes; never 0, which means "unknown". */
+static uint64_t formats_digest(const struct format *formats, int count)
 {
-    for (int index = 0; index < count; index++)
-        if (strcmp(formats[index].name, name) == 0)
-            return &formats[index];
-    return NULL;
+    uint64_t hash = 0xcbf29ce484222325ull;
+
+    for (int index = 0; index < count; index++) {
+        const unsigned char *parts[2] = {(const unsigned char *)formats[index].name,
+                                         formats[index].data};
+        size_t sizes[2] = {strlen(formats[index].name) + 1, formats[index].size};
+
+        for (int part = 0; part < 2; part++)
+            for (size_t byte = 0; byte < sizes[part]; byte++)
+                hash = (hash ^ parts[part][byte]) * 0x100000001b3ull;
+    }
+    return hash != 0 ? hash : 1;
 }
 
-/* Copy every understood format of `side`'s new clipboard to `other`. */
-static void copy_clipboard(struct side *side, struct side *other, Time when)
+static void describe_formats(const struct format *formats, int count, char *text, size_t size)
 {
-    char names[256][48];
-    struct format formats[MAX_FORMATS];
-    int available = fetch_target_names(side, when, names, 256);
-    int count = 0;
+    size_t used = 0;
 
+    text[0] = '\0';
+    for (int index = 0; index < count && used < size; index++)
+        used += (size_t)snprintf(text + used, size - used, " %s=%zu", formats[index].name,
+                                 formats[index].size);
+}
+
+static void free_formats(struct format *formats, int count)
+{
+    for (int index = 0; index < count; index++)
+        free(formats[index].data);
+}
+
+static void offer_formats(struct side *side, struct format *formats, int count, uint64_t digest)
+{
+    clear_formats(side);
+    memcpy(side->formats, formats, sizeof(*formats) * (size_t)count);
+    side->format_count = count;
+    side->holds = digest;
+    side->offered_ms = now_ms();
+    XSetSelectionOwner(side->display, side->clipboard, side->window, CurrentTime);
+    XFlush(side->display);
+}
+
+/* Copy the newest owner change of `source` to the other side. */
+static void copy_change(struct side *source)
+{
+    struct side *target = source->other;
+    Time when = source->pending_time;
+    Window owner = source->pending_owner;
+    int64_t changed_ms = source->pending_ms;
+    char names[256][48], sizes[256];
+    struct format formats[MAX_FORMATS];
+    int available, count = 0;
+    uint64_t digest;
+
+    source->pending = 0;
+    /* This change is newer than any queued on the other side. */
+    if (target->pending && target->pending_ms <= changed_ms)
+        target->pending = 0;
+    available = fetch_target_names(source, when, names, 256);
+    for (int index = 0; index < available; index++) {
+        if (strcmp(names[index], TRANSIENT_TARGET) == 0) {
+            log_line("transient on %s owner=0x%lx", source->label, owner);
+            return;
+        }
+    }
     for (size_t wanted = 0; wanted < sizeof(copied_targets) / sizeof(copied_targets[0]); wanted++) {
-        const char *target = copied_targets[wanted];
+        const char *name = copied_targets[wanted];
         int present = 0;
 
         for (int index = 0; index < available; index++)
-            present |= strcmp(names[index], target) == 0;
+            present |= strcmp(names[index], name) == 0;
         /* Some owners answer no TARGETS; text is still worth asking for. */
         if (!present && !(available == 0 && wanted == 0))
             continue;
-        intern_atoms(side->display);
-        formats[count].data = fetch_target(side, when, XInternAtom(side->display, target, False),
+        formats[count].data = fetch_target(source, when, XInternAtom(source->display, name, False),
                                            &formats[count].size);
         if (formats[count].data == NULL)
             continue;
-        strcpy(formats[count].name, target);
+        strcpy(formats[count].name, name);
         count++;
     }
     /* Nautilus pastes files only from its own list; derive it from URIs. */
@@ -474,56 +580,96 @@ static void copy_clipboard(struct side *side, struct side *other, Time when)
         count++;
     }
     if (count == 0) {
-        log_event("unsupported", side, NULL, 0);
+        source->holds = 0;
+        log_line("unsupported on %s owner=0x%lx targets=%d", source->label, owner, available);
         return;
     }
-    offer_formats(other, formats, count);
-}
-
-/* Handle one event from `side`; `other` receives what it copies. */
-static void handle_event(struct side *side, struct side *other, XEvent *event)
-{
-    if (event->type == side->xfixes_event + XFixesSelectionNotify) {
-        XFixesSelectionNotifyEvent *notify = (XFixesSelectionNotifyEvent *)event;
-
-        if (notify->owner == None || notify->owner == side->window)
-            return;
-        copy_clipboard(side, other, notify->selection_timestamp);
-    } else if (event->type == SelectionRequest) {
-        answer_request(side, &event->xselectionrequest);
-    } else if (event->type == SelectionClear) {
-        clear_formats(side);
+    digest = formats_digest(formats, count);
+    source->holds = digest;
+    describe_formats(formats, count, sizes, sizeof(sizes));
+    if (source->pending || (target->pending && target->pending_ms > changed_ms)) {
+        /* Either side changed while this was fetched; that change wins. */
+        free_formats(formats, count);
+        log_line("superseded %s->%s owner=0x%lx digest=%08" PRIx32 "%s", source->label,
+                 target->label, owner, (uint32_t)digest, sizes);
+        return;
     }
+    if (!target->pending && target->holds == digest) {
+        free_formats(formats, count);
+        log_line("unchanged %s->%s owner=0x%lx digest=%08" PRIx32 "%s", source->label,
+                 target->label, owner, (uint32_t)digest, sizes);
+        return;
+    }
+    target->pending = 0;
+    offer_formats(target, formats, count, digest);
+    /* since-offer: how soon the source changed after this bridge offered
+     * there; a few ms points at a reaction rather than a user copy. */
+    log_line("copied %s->%s owner=0x%lx digest=%08" PRIx32 "%s after=%" PRId64
+             "ms since-offer=%" PRId64 "ms",
+             source->label, target->label, owner, (uint32_t)digest, sizes, now_ms() - changed_ms,
+             source->offered_ms ? changed_ms - source->offered_ms : -1);
 }
 
-static int run_bridge(void)
+/* Wake every Wine thread on UU's display so pending X requests go out. */
+static void wake_wine(struct side *uu)
+{
+    long nothing = 0;
+
+    XChangeProperty(uu->display, DefaultRootWindow(uu->display), uu->wake, XA_CARDINAL, 32,
+                    PropModeAppend, (unsigned char *)&nothing, 0);
+    XFlush(uu->display);
+}
+
+static int run_bridge(const char *uu_display, const char *desktop_display)
 {
     struct side uu = {.label = "uu"}, desktop = {.label = "desktop"};
-    struct pollfd descriptors[2];
+    int64_t next_wake = 0;
 
-    if (!discover(&uu, &desktop))
+    if (uu_display != NULL) {
+        snprintf(uu.display_name, sizeof(uu.display_name), "%s", uu_display);
+        snprintf(desktop.display_name, sizeof(desktop.display_name), "%s", desktop_display);
+    } else if (!discover(&uu, &desktop)) {
         return 3;
+    }
+    uu.other = &desktop;
+    desktop.other = &uu;
     if (!open_side(&uu) || !open_side(&desktop)) {
-        fprintf(stderr, "clipboard bridge could not open uu=%s desktop=%s\n",
-                uu.display_name, desktop.display_name);
+        log_line("bridge could not open uu=%s desktop=%s", uu.display_name, desktop.display_name);
         return 4;
     }
-    fprintf(stderr, "clipboard bridge connected uu=%s desktop=%s\n",
-            uu.display_name, desktop.display_name);
-    descriptors[0] = (struct pollfd){.fd = ConnectionNumber(uu.display), .events = POLLIN};
-    descriptors[1] = (struct pollfd){.fd = ConnectionNumber(desktop.display), .events = POLLIN};
+    log_line("bridge connected uu=%s desktop=%s", uu.display_name, desktop.display_name);
     while (!stop_requested) {
+        struct pollfd descriptors[2] = {
+            {.fd = ConnectionNumber(uu.display), .events = POLLIN},
+            {.fd = ConnectionNumber(desktop.display), .events = POLLIN},
+        };
+        struct side *newest;
         XEvent event;
+        int64_t now = now_ms();
 
+        if (now >= next_wake) {
+            wake_wine(&uu);
+            next_wake = now + WINE_WAKE_MS;
+        }
         while (XPending(uu.display)) {
             XNextEvent(uu.display, &event);
-            handle_event(&uu, &desktop, &event);
+            service_event(&uu, &event);
         }
         while (XPending(desktop.display)) {
             XNextEvent(desktop.display, &event);
-            handle_event(&desktop, &uu, &event);
+            service_event(&desktop, &event);
         }
-        if (poll(descriptors, 2, 1000) < 0 && errno != EINTR)
+        newest = uu.pending && (!desktop.pending || uu.pending_ms >= desktop.pending_ms) ? &uu
+                 : desktop.pending ? &desktop : NULL;
+        if (newest != NULL) {
+            copy_change(newest);
+            continue;
+        }
+        /* Round trips may have queued events that poll cannot see. */
+        if (XEventsQueued(uu.display, QueuedAlready) || XEventsQueued(desktop.display, QueuedAlready))
+            continue;
+        now = now_ms();
+        if (poll(descriptors, 2, next_wake > now ? (int)(next_wake - now) : 0) < 0 && errno != EINTR)
             return 5;
         if ((descriptors[0].revents | descriptors[1].revents) & (POLLERR | POLLHUP | POLLNVAL))
             return 6;
@@ -531,12 +677,15 @@ static int run_bridge(void)
     return 0;
 }
 
-/* Xlib exits the process on a lost connection; the supervisor reconnects. */
-int main(void)
+/* Xlib exits the process on a lost connection; the supervisor reconnects.
+ * Tests may name both displays: uu-clipboard-bridge UU_DISPLAY DESKTOP_DISPLAY. */
+int main(int argc, char **argv)
 {
     struct sigaction action;
     pid_t worker = 0;
 
+    if (argc != 1 && argc != 3)
+        return 2;
     memset(&action, 0, sizeof(action));
     action.sa_handler = handle_stop;
     sigaction(SIGTERM, &action, NULL);
@@ -547,7 +696,7 @@ int main(void)
         worker = fork();
         if (worker == 0) {
             signal(SIGTERM, SIG_DFL);
-            _exit(run_bridge());
+            _exit(run_bridge(argc == 3 ? argv[1] : NULL, argc == 3 ? argv[2] : NULL));
         }
         while (worker > 0 && waitpid(worker, &status, 0) < 0) {
             if (errno == EINTR && stop_requested)

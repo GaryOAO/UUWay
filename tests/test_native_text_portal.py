@@ -99,6 +99,20 @@ class NativeTextTests(unittest.TestCase):
         self.assertEqual(offered[-1], {'text/plain': b'prior fixture'})
         self.assertFalse(backend.busy)
 
+    def test_paste_selection_is_marked_transient_and_restore_is_not(self):
+        backend = self.make()
+        backend.preserve = Mock(return_value=({'text/plain': b'prior fixture'}, 0))
+        offered = []
+        def offer(payload):
+            offered.append(payload); backend.owner = True; backend.owner_epoch += 1
+        backend.offer = offer
+        backend.key = Mock(side_effect=[None, RuntimeError('ambiguous'), None, None])
+        with self.assertRaises(RuntimeError):
+            backend.commit('fixture')
+        self.assertEqual(offered[0][portal.TRANSIENT], b'')
+        self.assertEqual(offered[0]['UTF8_STRING'], b'fixture')
+        self.assertNotIn(portal.TRANSIENT, offered[-1])
+
     def test_user_copy_during_paste_is_never_overwritten(self):
         backend = self.make()
         backend.preserve = Mock(return_value=({'text/plain': b'prior fixture'}, 0))

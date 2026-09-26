@@ -97,6 +97,21 @@ bridge watches `CLIPBOARD` ownership with XFixes on that display and on Xwayland
 text, `text/uri-list`, `x-special/gnome-copied-files` and `image/png` across. Wine converts file
 lists to `CF_HDROP` and PNG to bitmaps; Mutter mirrors Xwayland's clipboard to Wayland apps.
 
+While a transfer waits on one display, the bridge keeps answering requests on both and queues
+owner changes instead of dropping them. The newest change wins, and content a side already holds
+is never offered to it again, so the two clipboards cannot echo. Each transfer is logged with its
+direction, sizes and a short digest, never its content.
+
+Wine 11 needs one workaround. When UU writes the Windows clipboard (a copy on the phone),
+winex11 takes `CLIPBOARD` with an X request that its clipboard thread never flushes, and win32u
+only runs the X driver when its connection has input. The request therefore waited for the next X
+event — typically the bridge offering the next desktop copy, which then flushed the stale phone
+copy on top of it. Every Wine thread watches root-window properties, so the bridge touches one on
+UU's display four times a second; phone copies now arrive within about 250 ms.
+
+When phone text falls back to the portal, it is pasted through the desktop clipboard; that
+selection is marked `application/x-uurb-transient`, and the bridge does not carry it to the phone.
+
 Wine's ANSI code page follows the locale, and UU reads outgoing text in that code page, so the
 service runs Wine with the session `LANG` rather than a desktop-wide `LC_ALL` override — otherwise
 CJK text would arrive on the phone as `?`.

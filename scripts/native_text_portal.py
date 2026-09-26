@@ -17,6 +17,9 @@ SERVICE = 'org.freedesktop.portal.Desktop'
 PATH = '/org/freedesktop/portal/desktop'
 REMOTE = 'org.freedesktop.portal.RemoteDesktop'
 CLIPBOARD = 'org.freedesktop.portal.Clipboard'
+# Marks the selection that only carries a paste; the UU clipboard bridge does
+# not treat it as a copy for the phone.
+TRANSIENT = 'application/x-uurb-transient'
 spec = importlib.util.spec_from_file_location('text_restore', Path(__file__).with_name('probe-wayland-portal.py'))
 restore = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(restore)
@@ -300,7 +303,7 @@ class TextPortal:
             previous, _ = self.preserve()
             self.phase = 'offer'
             self.offer({'text/plain;charset=utf-8': encoded, 'text/plain': encoded,
-                        'UTF8_STRING': encoded})
+                        'UTF8_STRING': encoded, TRANSIENT: b''})
             owned_epoch = self.owner_epoch
             if delete_before:
                 self.phase = 'select_verified_candidate'
