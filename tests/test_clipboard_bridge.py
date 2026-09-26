@@ -229,6 +229,28 @@ class ClipboardBridgeTests(unittest.TestCase):
     def test_saved_files_of_an_earlier_bridge_are_removed(self):
         self.assertFalse(self.stale.exists())
 
+    def test_a_paste_that_gave_up_does_not_end_the_bridge(self):
+        (Path(self.cache.name) / "delay").write_text("1")
+        self.offer_phone_file()
+        paste = subprocess.Popen(["xclip", "-display", self.desktop, "-selection", "clipboard", "-o",
+                                  "-t", "x-special/gnome-copied-files"], env=self.environment,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.wait_for(lambda: b"saving files" in self.read_log(), "paste did not start saving")
+        paste.kill()
+        paste.wait()
+        # Answering the vanished requestor raises an X error, which is logged.
+        self.wait_for(lambda: b"X error" in self.read_log(), "late answer raised no X error", seconds=5)
+        self.copy(self.desktop, "after")
+        self.wait_for(lambda: self.paste(self.uu) == "after", "bridge stopped serving")
+        self.assertEqual(self.read_log().count(b"bridge connected"), 1)
+
+    def test_names_windows_would_alter_or_refuse_are_not_offered(self):
+        hostile = ["..", ".", "...", "trailing.", "trailing ", "C:x", "a<b", "q?", "star*", "pipe|x"]
+        for count, name in enumerate(hostile, 1):
+            self.copy(self.uu, self.descriptor(name), "FileGroupDescriptorW")
+            self.wait_for(lambda: self.read_log().count(b"unsupported files") == count, "accepted " + name)
+        self.assertFalse(self.bridge_owns(self.desktop))
+
     def test_unreadable_file_list_is_not_offered(self):
         self.copy(self.uu, "descriptor", "FileGroupDescriptorW")
         self.wait_for(lambda: b"unsupported files" in self.read_log(), "bad file list was not refused")

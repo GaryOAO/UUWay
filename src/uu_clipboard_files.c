@@ -8,7 +8,8 @@
  * then exits; the bridge offers the saved files to the desktop.
  *
  * usage: uu-clipboard-files.exe DIRECTORY MAX_BYTES
- * Exit 0: every item saved. Names that would leave DIRECTORY are refused. */
+ * Exit 0: every item saved. Names that would leave DIRECTORY or that Windows
+ * cannot create are refused, and saving stops once MAX_BYTES are written. */
 #define COBJMACROS
 #include <windows.h>
 #include <ole2.h>
@@ -18,19 +19,23 @@
 
 enum { OK, USAGE, NO_OLE, NO_CLIPBOARD, NO_FILES, TOO_LARGE, BAD_NAME, WRITE_FAILED, READ_FAILED };
 
-/* Relative, no drive, no empty, "." or ".." component. */
+/* Relative, and every component a plain Windows name: not empty, no
+ * characters Windows forbids, and no trailing dot or space, which Windows
+ * strips (so "..." would become ".." and "." would name the parent). */
 static BOOL safe_name(const WCHAR *name)
 {
     const WCHAR *component = name;
 
-    if (!name[0] || name[0] == L'\\' || name[0] == L'/' || wcschr(name, L':'))
+    if (!name[0] || name[0] == L'\\' || name[0] == L'/')
         return FALSE;
     for (;;) {
         size_t length = wcscspn(component, L"\\/");
 
-        if (length == 0 || (length == 1 && component[0] == L'.') ||
-            (length == 2 && component[0] == L'.' && component[1] == L'.'))
+        if (length == 0 || component[length - 1] == L'.' || component[length - 1] == L' ')
             return FALSE;
+        for (size_t index = 0; index < length; index++)
+            if (component[index] < 0x20 || wcschr(L"<>:\"|?*", component[index]))
+                return FALSE;
         if (!component[length])
             return TRUE;
         component += length + 1;
@@ -58,8 +63,17 @@ static BOOL write_all(HANDLE file, const void *data, DWORD size)
     return WriteFile(file, data, size, &written, NULL) && written == size;
 }
 
+/* Write `size` more bytes if the budget allows. */
+static int write_within(HANDLE file, const void *data, SIZE_T size, ULONGLONG *budget)
+{
+    if (size > *budget)
+        return TOO_LARGE;
+    *budget -= size;
+    return size <= MAXDWORD && write_all(file, data, (DWORD)size) ? OK : WRITE_FAILED;
+}
+
 static int save_contents(IDataObject *data, CLIPFORMAT format, LONG index,
-                         const FILEDESCRIPTORW *descriptor, const WCHAR *path)
+                         const FILEDESCRIPTORW *descriptor, const WCHAR *path, ULONGLONG *budget)
 {
     FORMATETC request = {format, NULL, DVASPECT_CONTENT, index, TYMED_ISTREAM | TYMED_HGLOBAL};
     STGMEDIUM medium;
@@ -82,8 +96,8 @@ static int save_contents(IDataObject *data, CLIPFORMAT format, LONG index,
                 result = READ_FAILED;
                 break;
             }
-            if (received && !write_all(file, buffer, received))
-                result = WRITE_FAILED;
+            if (received)
+                result = write_within(file, buffer, received, budget);
         } while (received == sizeof(buffer) && result == OK);
     } else if (medium.tymed == TYMED_HGLOBAL) {
         SIZE_T size = GlobalSize(medium.hGlobal);
@@ -93,8 +107,7 @@ static int save_contents(IDataObject *data, CLIPFORMAT format, LONG index,
         if (descriptor->dwFlags & FD_FILESIZE && descriptor->nFileSizeHigh == 0 &&
             descriptor->nFileSizeLow < size)
             size = descriptor->nFileSizeLow;
-        if (bytes == NULL || size > MAXDWORD || !write_all(file, bytes, (DWORD)size))
-            result = WRITE_FAILED;
+        result = bytes != NULL ? write_within(file, bytes, size, budget) : READ_FAILED;
         GlobalUnlock(medium.hGlobal);
     } else {
         result = READ_FAILED;
@@ -134,12 +147,17 @@ static int save_files(IDataObject *data, const WCHAR *directory, ULONGLONG limit
             result = BAD_NAME;
             goto done;
         }
-        if (descriptor->dwFlags & FD_FILESIZE)
-            total += ((ULONGLONG)descriptor->nFileSizeHigh << 32) | descriptor->nFileSizeLow;
-    }
-    if (total > limit) {
-        result = TOO_LARGE;
-        goto done;
+        /* Refuse early when the declared sizes already exceed the limit;
+         * the written bytes are counted against it as well. */
+        if (descriptor->dwFlags & FD_FILESIZE) {
+            ULONGLONG declared = ((ULONGLONG)descriptor->nFileSizeHigh << 32) | descriptor->nFileSizeLow;
+
+            if (declared > limit - total) {
+                result = TOO_LARGE;
+                goto done;
+            }
+            total += declared;
+        }
     }
     for (UINT index = 0; index < group->cItems && result == OK; index++) {
         const FILEDESCRIPTORW *descriptor = &group->fgd[index];
@@ -152,7 +170,7 @@ static int save_files(IDataObject *data, const WCHAR *directory, ULONGLONG limit
             descriptor->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             CreateDirectoryW(path, NULL);
         else
-            result = save_contents(data, contents, (LONG)index, descriptor, path);
+            result = save_contents(data, contents, (LONG)index, descriptor, path, &limit);
         free(path);
     }
 done:

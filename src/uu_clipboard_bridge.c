@@ -857,7 +857,7 @@ static int descriptor_names(const unsigned char *data, size_t size, char names[]
             } else if (code >= 0xd800 && code < 0xe000) {
                 return -1;
             }
-            if (code < 0x20 || code == ':' || used + 4 > NAME_MAX)
+            if (code < 0x20 || strchr("<>:\"|?*", (int)code) != NULL || used + 4 > NAME_MAX)
                 return -1;
             if (code < 0x80) {
                 text[used++] = (char)code;
@@ -876,7 +876,8 @@ static int descriptor_names(const unsigned char *data, size_t size, char names[]
             }
         }
         text[used] = '\0';
-        if (used == 0 || strcmp(text, ".") == 0 || strcmp(text, "..") == 0)
+        /* Windows drops a trailing dot or space, so "..." would mean "..". */
+        if (used == 0 || text[used - 1] == '.' || text[used - 1] == ' ')
             return -1;
         for (int index = 0; index < count; index++)
             known |= strcmp(names[index], text) == 0;
@@ -916,6 +917,10 @@ static void offer_phone_files(struct side *uu, Window owner, Time when)
         return;
     }
     retire_files();
+    if (uu->pending || uu->other->pending) {
+        log_line("superseded files on uu owner=0x%lx", owner);
+        return;
+    }
     if (count <= 0 || uu->wine_prefix[0] == '\0' || !saved_files_root(root, sizeof(root))) {
         log_line("unsupported files on uu owner=0x%lx", owner);
         return;
@@ -1090,6 +1095,17 @@ static void wake_wine(struct side *uu)
     XFlush(uu->display);
 }
 
+/* A requestor may be gone by the time a deferred paste is answered; Xlib's
+ * default handler would exit on that BadWindow. Only a lost connection
+ * (the I/O error handler) should end this worker. */
+static int log_x_error(Display *display, XErrorEvent *error)
+{
+    (void)display;
+    log_line("X error %d on request %d.%d resource 0x%lx ignored", error->error_code,
+             error->request_code, error->minor_code, error->resourceid);
+    return 0;
+}
+
 static int run_bridge(const char *uu_display, const char *desktop_display)
 {
     struct side uu = {.label = "uu"}, desktop = {.label = "desktop"};
@@ -1108,6 +1124,7 @@ static int run_bridge(const char *uu_display, const char *desktop_display)
     }
     uu.other = &desktop;
     desktop.other = &uu;
+    XSetErrorHandler(log_x_error);
     if (!open_side(&uu) || !open_side(&desktop)) {
         log_line("bridge could not open uu=%s desktop=%s", uu.display_name, desktop.display_name);
         return 4;
