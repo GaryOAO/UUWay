@@ -1,130 +1,102 @@
 <div align="center">
 
-# UUWay
+<img src="docs/images/hero.zh.svg" alt="UUWay：网易 UU 远程 Linux 原生被控端" width="100%">
 
-**Run NetEase UU Remote as a first-class host on Linux — Wayland-native, GPU-accelerated, no RDP in between.**
-
-[English](README.md) · [简体中文](README.zh-CN.md)
+[简体中文](README.md) · [English](README.en.md)
 
 ![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)
 ![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
-![Status](https://img.shields.io/badge/status-developer_preview-f59e0b)
-![License MIT](https://img.shields.io/badge/license-MIT-0ea5e9)
+![Status](https://img.shields.io/badge/状态-开发者预览-f59e0b)
+![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
 
 </div>
 
-UU Remote only ships a Windows host. UUWay runs the **official** Windows host under Wine, with its
-files unmodified on disk, and serves every Windows interface it depends on — desktop capture,
-hardware encoding, input, display modes, the pointer, its remote terminal and the clipboard — from
-native Linux implementations. UU keeps doing what it is good at (accounts, relays, codec and bitrate
-negotiation); Linux does the rest, directly on the GPU.
+**网易 UU 远程官方只有 Windows 被控端，没有 Linux 版客户端。** UUWay 让官方原版被控端在 Wine 中运行（磁盘上的文件不做任何修改），再把它依赖的每一个 Windows 接口交给 Linux 原生实现。于是，用手机打开 UU 远程，就能像控制一台 Windows 电脑一样控制你的 Linux 桌面。
+
+## ✨ UU 的功能，几乎全部可用
+
+| UU 功能 | Linux 上 | 说明 |
+| --- | :---: | --- |
+| 🎞️ 画面串流 | ✅ | GPU 零拷贝 + NVENC 硬件编码，1080p 可达 60 帧 |
+| 🖱️ 鼠标指针 | ✅ | 手机上显示你本机真实的光标主题，放大画面也跟随指针 |
+| ⌨️ 键盘与鼠标 | ✅ | 包括 Win / ⌘ 键，经 libei / uinput 注入 |
+| 🀄 手机输入法 | ✅ | 中文直接提交到当前输入框（Fcitx5） |
+| 🖥️ 分辨率 · 刷新率 · 缩放 | ✅ | 同步到 Mutter，新模式没出画面会自动回滚 |
+| 💻 **远程终端** | ✅ | 打开的是 Linux 登录 shell，会话常驻、可以多开 |
+| 📋 剪贴板 | ✅ | 文本双向实时同步 |
+| 📁 文件：手机 → 电脑 | ✅ | 粘贴时才传输，下载完成前粘贴会等待 |
+| 📁 文件：电脑 → 手机 | 🧪 | 已实现，待验收 |
+| 🪟 超级屏（虚拟显示器） | ❌ | 依赖 Windows 内核驱动（IddCx），Wine 无法加载 |
+| 📺 1440p / 4K 60 Hz | ⚠️ | 受显示器（或诱骗器）提供的刷新率限制 |
+
+已验证 UU 4.42.0.2770，无需任何补丁（[审计记录](docs/releases/4.42.0.2770-native-review.md)）。UUWay 实现的是公开的 Windows 接口，而不是 UU 内部的偏移地址，所以 UU 升级基本不受影响。
+
+### 💻 亮点：UU 远程终端，直达 Linux shell
+
+UU 的「远程终端」在 Windows 上打开的是 PowerShell；在 UUWay 上，它打开的是**你的 Linux 登录 shell**。
+
+- 终端字节在 PTY 与 UU 之间**原样转发**，没有控制台转换层，vim、htop 这类全屏程序显示正常，中文不乱码；
+- 离开终端页面，**会话继续运行**，回来时自动重绘，还可以同时开多个；
+- 在 UU 里关闭终端，就结束对应的 shell，行为和 Windows 上完全一致。
+
+## 🔧 工作原理
 
 <p align="center">
-  <img src="docs/images/architecture.svg" alt="UUWay architecture" width="900">
+  <img src="docs/images/architecture.zh.svg" alt="架构：UU 官方被控端调用的每个 Windows 接口，都由 UUWay 交给 Linux 原生实现" width="100%">
 </p>
 
-## Highlights
-
-| | |
-| --- | --- |
-| 🎞️ **Zero-copy video** | Wayland screen cast → DMA-BUF → Vulkan → D3D11 texture → CUDA → NVENC. Pixels never return to system memory; 1080p runs at a steady 60 FPS. |
-| 🖱️ **Native pointer** | The pointer travels as DXGI pointer data, exactly as on Windows, so the controller draws your real cursor theme — arrow, I-beam, hand, resize — and zoomed views follow it. |
-| ⌨️ **Input & IME** | Mouse, wheel and keyboard (including the Super / ⌘ key) through libei/uinput; phone IME text is committed through Fcitx5 into the focused field, CJK included. |
-| 🖥️ **Display control** | Resolution, refresh rate and DPI changes from the controller map to Mutter, with automatic rollback if the new mode never reaches the stream. |
-| 💻 **Remote terminal** | UU's terminal opens your Linux login shell. Bytes flow raw between the PTY and UU; sessions persist when you leave, several can run at once, and closing one in UU ends its shell. |
-| 📋 **Clipboard** | Text in both directions between the controller and desktop apps; files and images copied on the controller transfer only when you paste them. |
-| 🧩 **Upgrade-tolerant** | UUWay implements public Windows interfaces, not offsets inside UU. UU 4.39 → 4.42 needed a single script tweak and no binary patch. |
-| 🛠️ **Control console** | A small GTK app shows service state, applies input speed settings and restarts UU. |
-
-## How it works
-
-UUWay is an **adaptation layer**: UU calls the Windows API it would call on any PC, and each call
-lands on a Linux implementation.
-
-| UU calls (Windows) | UUWay serves it with (Linux) |
-| --- | --- |
-| `IDXGIOutputDuplication` frames | PipeWire screen cast imported into a D3D11 texture via Vulkan/DXVK |
-| DXGI pointer position and `GetFramePointerShape` | Screen-cast cursor metadata (the video carries no pointer) |
-| `NvEncodeAPICreateInstance` / NVENC function table | Linux CUDA + NVENC on the same GPU |
-| `SendInput` | libei / uinput on the Wayland session |
-| `KEYEVENTF_UNICODE` text | Fcitx5 add-on commits text into the focused field |
-| `ChangeDisplaySettingsEx`, DPI queries | Mutter monitor configuration with a rollback guardian |
-| `conpty.dll` + `powershell.exe` for the terminal | A PTY broker with persistent named sessions |
-| Windows clipboard | Wine ⇄ Xwayland clipboard bridge; Mutter mirrors it to Wayland apps |
+UUWay 是一层**适配层**：UU 照常调用它在任何一台 Windows 电脑上都会调用的 API，每一次调用都落到对应的 Linux 实现上。账号、中继、编码与码率协商仍由 UU 自己负责。
 
 <p align="center">
-  <img src="docs/images/video-pipeline.svg" alt="Video pipeline" width="900">
+  <img src="docs/images/video-pipeline.zh.svg" alt="画面链路：像素从合成器到编码器始终留在显存里" width="100%">
 </p>
 
-More detail: [design notes](docs/design.md).
+更多细节见[设计说明](docs/design.md)（英文）。
 
-## Requirements
+## 🚀 一键安装
 
-- Ubuntu 24.04 with GNOME 46 on **Wayland**, a logged-in desktop session (a display dummy plug
-  works well for headless machines)
-- An **NVIDIA** GPU with NVENC and the proprietary driver (developed on an RTX 3090, driver 580)
-- WineHQ stable 11 in `/opt/wine-stable`
-- The official UU Remote Windows installer and a UU account
-- Build tools: gcc, mingw-w64, winegcc, meson/ninja (DXVK, Mutter), Rust (console)
+**准备：**
 
-## Getting started
-
-UUWay is a **developer preview**: it runs daily on the machine it was built on, but installation
-is a from-source procedure, not a one-click installer.
+- Ubuntu 24.04，GNOME 46 **Wayland** 会话，桌面保持登录（没有显示器的主机插一个显示器诱骗器）
+- 支持 NVENC 的 **NVIDIA** 显卡和官方驱动
+- UU 远程官方 **Windows 版**安装包，以及一个 UU 账号
 
 ```bash
 git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
+./install.sh --installer ~/Downloads/UURemote_Setup.exe
 ```
 
-Then follow the [build and install guide](docs/build.md). In short:
+脚本会依次检查环境、安装依赖和 WineHQ、把 UU 装进独立的 Wine 前缀、构建原生运行时、授权输入与屏幕共享，最后打包并启动服务。整个过程只有两件事需要你亲手完成：在弹出的 UU 窗口里**登录账号**，以及在屏幕共享对话框里**选择显示器并勾选「记住」**。完成后打开手机上的 UU 远程，设备列表里就会出现这台电脑。
 
-1. Install UU into its own Wine prefix and sign in once.
-2. Build the native runtime (DXVK capture, DXGI/NVENC/display/input backends, helpers).
-3. Grant screen-cast permission once and save the restore token.
-4. Package a runtime bundle and install the user services.
-5. Connect from your phone.
+- 中断后用 `./install.sh --from 步骤号` 继续；`./install.sh --dry-run` 只显示将要执行的命令。
+- 手动安装、可选的 60 帧帧节奏补丁和排错，见[构建与安装指南](docs/build.md)（英文）。
 
-## Status
+> UUWay 目前是**开发者预览版**：它在开发机上每天都在使用，但目前只在 Ubuntu 24.04 + RTX 3090 上验证过。
 
-| Area | State |
-| --- | --- |
-| Video, input, IME, pointer, resolution changes | ✅ in daily use |
-| Remote terminal (persistent sessions) | ✅ in daily use |
-| Clipboard: text | ✅ both directions |
-| Clipboard: files from the controller | ✅ fetched when you paste |
-| Clipboard: files to the controller | 🧪 implemented, awaiting controller acceptance |
-| UU 4.42.0.2770 | ✅ runs unpatched ([review](docs/releases/4.42.0.2770-native-review.md)) |
-| Super Screen (virtual displays) | ❌ relies on a Windows IddCx kernel driver that Wine cannot load |
-| 1440p/4K at 60 Hz | ⚠️ limited by the refresh rates your display (or dummy plug) advertises |
-
-## Repository layout
+## 📦 目录结构
 
 ```
-src/        native backends (Linux + Windows/Wine side) and helpers
-scripts/    service, packaging, build and review tooling
-patches/    DXVK capture, Mutter capture pacing, portal session lifetime
-config/     pinned build dependencies and udev rule
-systemd/    user service templates
-native/     control console (Rust + GTK)
-tests/      unit tests and probes
-docs/       design notes, build guide, release reviews
+install.sh  一键安装脚本
+src/        原生后端（Linux 侧与 Windows/Wine 侧）及辅助程序
+scripts/    服务、打包、构建与版本审计工具
+patches/    DXVK 采集、Mutter 帧节奏、Portal 会话生命周期补丁
+config/     固定版本的构建依赖与 udev 规则
+systemd/    用户服务模板
+native/     控制台（Rust + GTK）
+tests/      单元测试与探针
+docs/       设计说明、构建指南、版本审计
 ```
 
-## Disclaimer
+## ⚖️ 许可证
 
-UUWay is an independent, unofficial project and is not affiliated with or endorsed by NetEase.
-"UU" and "UU Remote" are trademarks of their owners. UUWay does not redistribute any UU binaries;
-you install the official client yourself.
+UUWay 以 **[GNU AGPL-3.0](LICENSE)**（或更高版本）发布。任何人分发 UUWay 或其修改版，或者通过网络向他人提供修改版的服务，都必须以同样的许可证公开完整源码 —— 想把它用进闭源或商业软件，就必须开源。源自上游项目的部分保留其原有的 MIT 许可，详见 [NOTICE](NOTICE)。
 
-## Acknowledgements
+## 免责声明
 
-UUWay grew out of [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)
-by Lachlan Chen (MIT), whose RDP-relay design it replaces with a native Wayland pipeline. It also
-builds on [DXVK](https://github.com/doitsujin/dxvk), [Wine](https://www.winehq.org/),
-PipeWire and Mutter.
+UUWay 是独立的非官方项目，与网易无关，也未获得网易的认可。"UU"、"UU 远程"为其各自所有者的商标。UUWay 不分发任何 UU 程序文件，客户端需由你自行从官方渠道安装。
 
-## License
+## 致谢
 
-[MIT](LICENSE)
+UUWay 源于 Lachlan Chen 的 [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)，并以原生 Wayland 链路取代了其中的 RDP 中继设计。项目同样建立在 [DXVK](https://github.com/doitsujin/dxvk)、[Wine](https://www.winehq.org/)、PipeWire 与 Mutter 之上。

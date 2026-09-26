@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-label="Video path compared: the old RDP relay encoded twice and re-captured on the CPU; in UUWay pixels stay in video memory from compositor to encoder" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC','Noto Sans SC','Source Han Sans SC',-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0f1f"/><stop offset="0.55" stop-color="#101a36"/><stop offset="1" stop-color="#0c1a2b"/>
+    </linearGradient>
+    <radialGradient id="glowGreen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#34d399" stop-opacity="0.2"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.035"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,1 L9,5 L0,9 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowGpu" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,1 L9,5 L0,9 z" fill="#34d399"/>
+    </marker>
+    <clipPath id="card"><rect width="1200" height="500" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1200" height="500" fill="url(#bg)"/>
+    <rect width="1200" height="500" fill="url(#grid)"/>
+    <circle cx="600" cy="386" r="520" fill="url(#glowGreen)"/>
+  </g>
+  <text x="48" y="60" font-size="27" font-weight="700" fill="#f1f5f9">Video path: pixels never leave video memory</text>
+  <text x="48" y="92" font-size="15" fill="#94a3b8">Against the RDP relay it replaces: one encode fewer, no decode, and no CPU re-capture.</text>
+  <text x="48" y="154" font-size="15" font-weight="700" fill="#94a3b8">Before · RDP relay</text>
+  <rect x="414" y="164" width="556" height="86" rx="16" fill="#f87171" fill-opacity="0.07" stroke="#f87171" stroke-opacity="0.35" stroke-dasharray="5 5"/>
+  <text x="958" y="158" font-size="12" text-anchor="end" fill="#fca5a5">CPU · system memory</text>
+  <rect x="48" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="128" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">Desktop</text>
+  <text x="128" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">GNOME</text>
+  <rect x="236" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="316" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">RDP encode</text>
+  <text x="316" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">gnome-remote-desktop</text>
+  <line x1="211" y1="207" x2="232" y2="207" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="424" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="504" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">RDP decode</text>
+  <text x="504" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">FreeRDP</text>
+  <line x1="399" y1="207" x2="420" y2="207" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="612" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="692" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">Xvfb redraw</text>
+  <text x="692" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">virtual display</text>
+  <line x1="587" y1="207" x2="608" y2="207" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="800" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="880" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">CPU re-capture</text>
+  <text x="880" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">UU screen grab</text>
+  <line x1="775" y1="207" x2="796" y2="207" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="988" y="176" width="160" height="62" rx="12" fill="#ffffff" fill-opacity="0.03" stroke="#64748b" stroke-dasharray="4 4"/>
+  <text x="1068" y="203" font-size="15" font-weight="700" text-anchor="middle" fill="#cbd5e1">Encode again</text>
+  <text x="1068" y="223" font-size="12.5" text-anchor="middle" fill="#64748b">UU → phone</text>
+  <line x1="963" y1="207" x2="984" y2="207" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="1148" y="274" font-size="14" text-anchor="end" fill="#fca5a5">2 encodes · 1 decode · CPU copies</text>
+  <text x="48" y="318" font-size="15" font-weight="700" fill="#67e8f9">UUWay</text>
+  <rect x="36" y="328" width="1124" height="108" rx="18" fill="#34d399" fill-opacity="0.08" stroke="#34d399" stroke-opacity="0.4"/>
+  <text x="1148" y="346" font-size="12" text-anchor="end" fill="#6ee7b7">GPU memory</text>
+  <rect x="48" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="128" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">Mutter</text>
+  <text x="128" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">screen cast · 60 Hz patch</text>
+  <rect x="236" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="316" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">PipeWire</text>
+  <text x="316" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">DMA-BUF frames</text>
+  <line x1="211" y1="387" x2="232" y2="387" stroke="#34d399" stroke-width="10" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="211" y1="387" x2="232" y2="387" stroke="#34d399" stroke-width="3" marker-end="url(#arrowGpu)"/>
+  <rect x="424" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="504" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">Vulkan import</text>
+  <text x="504" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">DXVK shared texture</text>
+  <line x1="399" y1="387" x2="420" y2="387" stroke="#34d399" stroke-width="10" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="399" y1="387" x2="420" y2="387" stroke="#34d399" stroke-width="3" marker-end="url(#arrowGpu)"/>
+  <rect x="612" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="692" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">D3D11 texture</text>
+  <text x="692" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">UU acquires via DXGI</text>
+  <line x1="587" y1="387" x2="608" y2="387" stroke="#34d399" stroke-width="10" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="587" y1="387" x2="608" y2="387" stroke="#34d399" stroke-width="3" marker-end="url(#arrowGpu)"/>
+  <rect x="800" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="880" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">CUDA</text>
+  <text x="880" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">same-GPU mapping</text>
+  <line x1="775" y1="387" x2="796" y2="387" stroke="#34d399" stroke-width="10" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="775" y1="387" x2="796" y2="387" stroke="#34d399" stroke-width="3" marker-end="url(#arrowGpu)"/>
+  <rect x="988" y="356" width="160" height="62" rx="12" fill="#0b1220" stroke="#34d399" stroke-opacity="0.55"/>
+  <text x="1068" y="383" font-size="15" font-weight="700" text-anchor="middle" fill="#ecfdf5">NVENC</text>
+  <text x="1068" y="403" font-size="12.5" text-anchor="middle" fill="#94a3b8">UU → phone</text>
+  <line x1="963" y1="387" x2="984" y2="387" stroke="#34d399" stroke-width="10" stroke-opacity="0.2" stroke-linecap="round"/>
+  <line x1="963" y1="387" x2="984" y2="387" stroke="#34d399" stroke-width="3" marker-end="url(#arrowGpu)"/>
+  <text x="1148" y="468" font-size="14" font-weight="600" text-anchor="end" fill="#6ee7b7">1 encode · pixels never return to RAM · steady 1080p60</text>
+</svg>
