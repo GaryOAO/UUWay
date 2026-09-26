@@ -1,0 +1,54 @@
+UUWay
+Copyright (C) 2026 GaryOAO
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
+
+In short: anyone who distributes UUWay or a modified version of it, or lets
+others use a modified version over a network, must make the complete
+corresponding source available under the same license. Using UUWay inside
+closed-source or commercial software is only possible on those terms.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+details.
+
+-------------------------------------------------------------------------------
+Upstream code
+
+UUWay derives from uu-remote-ubuntu-bridge by Lachlan Chen
+<https://github.com/lachlanchen/uu-remote-ubuntu-bridge>. The portions taken
+from that project remain available under its original license:
+
+    MIT License
+
+    Copyright (c) 2026 Lachlan Chen
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+-------------------------------------------------------------------------------
+Third-party software
+
+UU Remote, Wine, DXVK, Mutter, PipeWire, xdg-desktop-portal-gnome, Fcitx5 and
+other third-party software keep their own licenses and trademarks. UUWay does
+not distribute any UU Remote files. The files under patches/ are changes to
+those projects and are offered under the license of the project they patch.
