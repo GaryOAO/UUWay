@@ -4,7 +4,9 @@ import importlib.util
 import itertools
 from pathlib import Path
 import signal
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -99,6 +101,33 @@ class ServiceLifecycleTests(unittest.TestCase):
                         trial.run(root, root / 'bundle', root / 'restore.json', root, 10,
                                   stop_requested=(lambda: False) if managed else None)
                     self.assertEqual('STOPPING=1' in notify.call_args.args[0], not managed)
+
+    def test_managed_worker_failure_is_logged_and_slow_cleanup_keeps_watchdog_fed(self):
+        trial = service.trial
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / 'drive_c/Program Files/Netease/GameViewer'
+            (app / 'bin').mkdir(parents=True)
+            for name in ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe'):
+                (app / name).touch()
+            (root / 'system.reg').touch()
+            with patch.object(trial.bundle_tools, 'verify', return_value={'native_capture_producer_included': True}), \
+                    patch.object(trial.subprocess, 'run') as command, \
+                    patch.object(trial, 'prefix_processes', return_value=[]), \
+                    patch.object(trial.fcntl, 'flock', side_effect=subprocess.TimeoutExpired('fixture', 5)), \
+                    patch.object(trial, 'cleanup_trial', side_effect=lambda *a, **k: time.sleep(0.3) or []), \
+                    patch.object(trial, 'CLEANUP_HEARTBEAT_INTERVAL', 0.02), \
+                    patch.object(trial, 'event') as event, \
+                    patch.object(trial.state_tools, 'notify') as notify:
+                command.return_value.returncode = 1
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    trial.run(root, root / 'bundle', root / 'restore.json', root, None, input_access='user',
+                              stop_requested=lambda: False)
+                event.assert_called_once_with('native_worker_failed', error_type='TimeoutExpired')
+                beats = [call.args[0] for call in notify.call_args_list]
+                self.assertTrue(beats[0].startswith('WATCHDOG=1\nSTATUS=Cleaning up'))
+                self.assertGreaterEqual(beats[1:].count('WATCHDOG=1'), 3)
+                self.assertNotIn('STOPPING=1', ''.join(beats))
 
 
 if __name__ == '__main__':

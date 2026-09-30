@@ -6,6 +6,7 @@ are placed in Wine lookup locations; updater/user replacements are preserved.
 No RDP, account copying, service installation, GNOME restart or Portal restart.
 """
 import argparse
+import contextlib
 import fcntl
 import getpass
 import importlib.util
@@ -20,6 +21,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
@@ -39,6 +41,43 @@ spec.loader.exec_module(confirmation_tools)
 
 def event(name, **values):
     print(json.dumps(dict(event=name, **values)), flush=True)
+
+
+# Worst-case cleanup is a chain of Wine helper waits far longer than the unit's
+# WatchdogSec, so a supervised worker keeps the watchdog fed while it cleans up.
+# The beat is bounded (TimeoutStopSec): a truly wedged cleanup is still killed.
+CLEANUP_HEARTBEAT_INTERVAL = 5
+CLEANUP_HEARTBEAT_SECONDS = 150
+# Consecutive failed Mutter topology queries tolerated before the worker stops.
+TOPOLOGY_POLL_FAILURE_LIMIT = 3
+
+
+@contextlib.contextmanager
+def cleanup_heartbeat(managed):
+    """Send WATCHDOG=1 while the body runs, only for a supervised worker.
+
+    A standalone run announces STOPPING=1 instead, which systemd times itself.
+    """
+    if not managed:
+        yield
+        return
+    done = threading.Event()
+
+    def beat():
+        deadline = time.monotonic() + CLEANUP_HEARTBEAT_SECONDS
+        while not done.wait(CLEANUP_HEARTBEAT_INTERVAL) and time.monotonic() < deadline:
+            try:
+                state_tools.notify('WATCHDOG=1')
+            except OSError:
+                return
+
+    thread = threading.Thread(target=beat, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        done.set()
+        thread.join(timeout=1)
 
 
 def worker_environment():
@@ -297,6 +336,25 @@ print(json.dumps(dict(generation=int(s),connectors=[str(v[0][0]) for v in m],lay
         raise RuntimeError('Unsupported native input display layout')
     if any(not 2 <= value['modes'][0][key] <= 8192 for key in ('width', 'height')):
         raise RuntimeError('Native input display geometry exceeds bounds')
+    return value
+
+
+def poll_topology(failures):
+    """Current topology, or None when this poll failed transiently.
+
+    One slow or failed Mutter D-Bus query must not tear down a live session.
+    A persistent failure still stops the worker, and an unsupported layout
+    (RuntimeError) stays fail-closed on the first sighting.
+    """
+    try:
+        value = native_topology()
+    except (subprocess.SubprocessError, ValueError) as error:
+        failures[0] += 1
+        event('native_topology_poll_failed', error_type=type(error).__name__, consecutive=failures[0])
+        if failures[0] >= TOPOLOGY_POLL_FAILURE_LIMIT:
+            raise
+        return None
+    failures[0] = 0
     return value
 
 
@@ -597,6 +655,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             watchdog_at = 0
             failure = None
             cursor = [0]
+            topology_failures = [0]
             topology_check = time.monotonic()
             topology_observed_ns = time.monotonic_ns()
             display_confirmation = confirmation_tools.DisplayConfirmation(directory, prefix,
@@ -626,27 +685,32 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                         break
                     if time.monotonic() >= topology_check:
                         observation_ns = time.monotonic_ns()
-                        observed_topology = native_topology()
-                        if observed_topology != topology:
-                            if preserve_display_session and can_recreate_display_in_place(topology, observed_topology):
-                                # Target-aware bounded fallback: UU may already
-                                # have recreated video before this topology poll.
-                                if display_confirmation:
-                                    display_confirmation.reset_for_topology(observed_topology, topology_observed_ns)
-                                state_tools.write_private(directory / 'display-reset.json', dict(version=1,
-                                    **observed_topology['modes'][0], after_ns=topology_observed_ns,
-                                    requested_ns=time.monotonic_ns(), require_fresh=topology['modes'] == observed_topology['modes']))
-                                broker.send_signal(signal.SIGUSR1)
-                                topology = observed_topology
-                                event('display_mode_changed_recreating_video', generation=topology['generation'],
-                                      uu_process_retained=True, remote_recovery_verified=False,
-                                      remote_recovery_observation='unavailable_without_vendor_ack')
-                            else:
-                                event('display_layout_changed_stopping_for_input_remap')
-                                failure = 'Native display remap requires restart'
-                                break
-                        topology_observed_ns = observation_ns
-                        topology_check = time.monotonic() + 1
+                        observed_topology = poll_topology(topology_failures)
+                        if observed_topology is None:
+                            # Nothing was observed: leave topology_observed_ns
+                            # alone so a later ACK replay window stays honest.
+                            topology_check = time.monotonic() + 1
+                        else:
+                            if observed_topology != topology:
+                                if preserve_display_session and can_recreate_display_in_place(topology, observed_topology):
+                                    # Target-aware bounded fallback: UU may already
+                                    # have recreated video before this topology poll.
+                                    if display_confirmation:
+                                        display_confirmation.reset_for_topology(observed_topology, topology_observed_ns)
+                                    state_tools.write_private(directory / 'display-reset.json', dict(version=1,
+                                        **observed_topology['modes'][0], after_ns=topology_observed_ns,
+                                        requested_ns=time.monotonic_ns(), require_fresh=topology['modes'] == observed_topology['modes']))
+                                    broker.send_signal(signal.SIGUSR1)
+                                    topology = observed_topology
+                                    event('display_mode_changed_recreating_video', generation=topology['generation'],
+                                          uu_process_retained=True, remote_recovery_verified=False,
+                                          remote_recovery_observation='unavailable_without_vendor_ack')
+                                else:
+                                    event('display_layout_changed_stopping_for_input_remap')
+                                    failure = 'Native display remap requires restart'
+                                    break
+                            topology_observed_ns = observation_ns
+                            topology_check = time.monotonic() + 1
                 if any(not path.is_symlink() or os.readlink(path) != str(target) for path, target in aliases):
                     event('component_changed_stopping_for_upgrade_review')
                     failure = 'Native components changed; upgrade review required'
@@ -659,11 +723,17 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                 time.sleep(0.25)
             if failure is not None:
                 raise RuntimeError(failure)
+    except Exception as error:
+        # Cleanup can run for a long time; record what ended the worker first.
+        # Type only: exception text may carry private process arguments.
+        event('native_worker_failed', error_type=type(error).__name__)
+        raise
     finally:
         try:
             state_tools.notify(('STOPPING=1' if stop_requested is None else 'WATCHDOG=1') +
                                '\nSTATUS=Cleaning up owned UU runtime')
-            failures = cleanup_trial(launcher, broker, env, directory, arguments, token, created_aliases, native_input)
+            with cleanup_heartbeat(stop_requested is not None):
+                failures = cleanup_trial(launcher, broker, env, directory, arguments, token, created_aliases, native_input)
             if failures:
                 raise RuntimeError('Native trial cleanup incomplete; inspect its private cleanup.json')
         finally:

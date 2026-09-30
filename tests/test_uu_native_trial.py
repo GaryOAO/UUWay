@@ -2,8 +2,10 @@ import importlib.util
 import copy
 import os
 import socket
+import subprocess
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -167,6 +169,81 @@ class CleanupTests(unittest.TestCase):
                 stream.write('\n')
             self.assertEqual(trial.boot_events(log, cursor), [dict(event='gui_started', code=0)])
             self.assertEqual(trial.boot_events(log, cursor), [])
+
+
+class TopologyPollTests(unittest.TestCase):
+    def test_transient_query_failures_are_absorbed_and_reported(self):
+        failures = [0]
+        transient = [subprocess.TimeoutExpired('dbus', 5), subprocess.CalledProcessError(1, 'dbus'), ValueError('bad json')]
+        for error in transient[:trial.TOPOLOGY_POLL_FAILURE_LIMIT - 1]:
+            with patch.object(trial, 'native_topology', side_effect=error), patch.object(trial, 'event') as event:
+                self.assertIsNone(trial.poll_topology(failures))
+                event.assert_called_once_with('native_topology_poll_failed', error_type=type(error).__name__,
+                                              consecutive=failures[0])
+
+    def test_success_resets_the_consecutive_failure_count(self):
+        failures = [0]
+        good = dict(generation=1, connectors=['a'], layout=[], modes=[])
+        for _ in range(3):
+            with patch.object(trial, 'event'):
+                with patch.object(trial, 'native_topology', side_effect=subprocess.TimeoutExpired('dbus', 5)):
+                    self.assertIsNone(trial.poll_topology(failures))
+                with patch.object(trial, 'native_topology', return_value=good):
+                    self.assertEqual(trial.poll_topology(failures), good)
+            self.assertEqual(failures, [0])
+
+    def test_persistent_query_failure_still_stops_the_worker(self):
+        failures = [0]
+        with patch.object(trial, 'native_topology', side_effect=subprocess.TimeoutExpired('dbus', 5)), \
+                patch.object(trial, 'event'):
+            for _ in range(trial.TOPOLOGY_POLL_FAILURE_LIMIT - 1):
+                self.assertIsNone(trial.poll_topology(failures))
+            with self.assertRaises(subprocess.TimeoutExpired):
+                trial.poll_topology(failures)
+
+    def test_unsupported_layout_is_never_tolerated(self):
+        failures = [0]
+        with patch.object(trial, 'native_topology', side_effect=RuntimeError('Native input currently requires one physical output')), \
+                patch.object(trial, 'event') as event:
+            with self.assertRaises(RuntimeError):
+                trial.poll_topology(failures)
+            event.assert_not_called()
+            self.assertEqual(failures, [0])
+
+
+class CleanupHeartbeatTests(unittest.TestCase):
+    def beats(self, managed, hold, **limits):
+        sent = []
+        with patch.object(trial, 'CLEANUP_HEARTBEAT_INTERVAL', limits.get('interval', 0.02)), \
+                patch.object(trial, 'CLEANUP_HEARTBEAT_SECONDS', limits.get('seconds', 150)), \
+                patch.object(trial.state_tools, 'notify', side_effect=sent.append):
+            with trial.cleanup_heartbeat(managed):
+                time.sleep(hold)
+            during = len(sent)
+            time.sleep(0.1)
+        return sent, during
+
+    def test_managed_cleanup_keeps_feeding_the_watchdog_and_stops_when_done(self):
+        sent, during = self.beats(True, 0.25)
+        self.assertGreaterEqual(during, 3)
+        self.assertEqual(set(sent), {'WATCHDOG=1'})
+        self.assertEqual(len(sent), during)
+
+    def test_standalone_cleanup_sends_no_heartbeat(self):
+        sent, _ = self.beats(False, 0.1)
+        self.assertEqual(sent, [])
+
+    def test_a_wedged_cleanup_is_only_fed_for_a_bounded_time(self):
+        sent, _ = self.beats(True, 0.3, interval=0.01, seconds=0.05)
+        self.assertGreaterEqual(len(sent), 1)
+        self.assertLess(len(sent), 12)
+
+    def test_failing_notify_socket_ends_the_heartbeat_quietly(self):
+        with patch.object(trial, 'CLEANUP_HEARTBEAT_INTERVAL', 0.01), \
+                patch.object(trial.state_tools, 'notify', side_effect=OSError('gone')) as notify:
+            with trial.cleanup_heartbeat(True):
+                time.sleep(0.1)
+        self.assertEqual(notify.call_count, 1)
 
 
 if __name__ == '__main__':
