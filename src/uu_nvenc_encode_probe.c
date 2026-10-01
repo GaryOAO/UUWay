@@ -137,7 +137,11 @@ int main(int argc, char **argv)
         int supported = -1;
         CHECK(api.nvEncGetEncodeCaps(encoder, guid, &caps, &supported) == NV_ENC_SUCCESS && supported == 0);
         caps.capsToQuery = NV_ENC_CAPS_LEVEL_MAX; supported = -12345;
-        CHECK(api.nvEncGetEncodeCaps(encoder, guid, &caps, &supported) == NV_ENC_ERR_UNIMPLEMENTED && supported == -12345);
+        CHECK(api.nvEncGetEncodeCaps(encoder, guid, &caps, &supported) == NV_ENC_SUCCESS && supported > 0);
+        caps.capsToQuery = NV_ENC_CAPS_LEVEL_MIN; supported = -12345;
+        CHECK(api.nvEncGetEncodeCaps(encoder, guid, &caps, &supported) == NV_ENC_SUCCESS && supported >= 0);
+        caps.capsToQuery = NV_ENC_CAPS_DYNAMIC_QUERY_ENCODER_CAPACITY; supported = -12345;
+        CHECK(api.nvEncGetEncodeCaps(encoder, guid, &caps, &supported) == NV_ENC_SUCCESS && supported >= 0 && supported <= 100);
         NV_ENC_PRESET_CONFIG preset = {.version = NV_ENC_PRESET_CONFIG_VER};
         preset.presetCfg.version = NV_ENC_CONFIG_VER;
         NV_ENC_PRESET_CONFIG before_preset = preset;

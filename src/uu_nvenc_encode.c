@@ -597,6 +597,17 @@ static NVENCSTATUS NVENCAPI limited_caps(void *s, GUID codec, NV_ENC_CAPS_PARAM 
     NVENCSTATUS status = caps(s, codec, params, &value);
     if (status) return status;
     switch (params->capsToQuery) {
+    /* UU uses the codec level when it maps NVENC capability to a remote
+     * quality tier.  Returning UNIMPLEMENTED here makes the Windows client
+     * conservatively fall back to its HD tier even when the driver reports a
+     * 4K-capable encoder.  These are read-only values from the matched native
+     * session; forwarding them does not broaden the encoder configuration we
+     * accept below. */
+    case NV_ENC_CAPS_LEVEL_MAX: case NV_ENC_CAPS_LEVEL_MIN:
+    /* NVIDIA documents this query as 100 on bare-metal Linux.  Keep the
+     * driver result because a managed/vGPU device may report less capacity;
+     * the client should see that real limit rather than an unsupported query. */
+    case NV_ENC_CAPS_DYNAMIC_QUERY_ENCODER_CAPACITY: break;
     case NV_ENC_CAPS_WIDTH_MAX: case NV_ENC_CAPS_HEIGHT_MAX: value = value < 4096 ? value : 4096; break;
     case NV_ENC_CAPS_WIDTH_MIN: case NV_ENC_CAPS_HEIGHT_MIN: break;
     case NV_ENC_CAPS_SUPPORTED_RATECONTROL_MODES: value &= NV_ENC_PARAMS_RC_CBR | NV_ENC_PARAMS_RC_VBR; break;
