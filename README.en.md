@@ -30,7 +30,7 @@ you would a Windows PC.
 | 💻 **Remote terminal** | ✅ | Opens your Linux login shell; sessions persist and can run side by side |
 | 📋 Clipboard | ✅ | Text in both directions, in real time |
 | 📁 Files: phone → desktop | ✅ | Transferred when you paste; the paste waits for the download |
-| 📁 Files: desktop → phone | 🧪 | Implemented, awaiting acceptance |
+| 📁 Files: desktop → phone | ✅ | Implemented |
 | 🪟 Super Screen (virtual displays) | ❌ | Needs a Windows kernel driver (IddCx) that Wine cannot load |
 | 📺 1440p / 4K at 60 Hz | ⚠️ | Limited by the refresh rates your display (or dummy plug) advertises |
 
@@ -107,11 +107,7 @@ docs/       design notes, build guide, release reviews
 
 ## ⚖️ License
 
-UUWay is released under the **[GNU AGPL-3.0](LICENSE)** (or any later version). Anyone who
-distributes UUWay or a modified version, or offers a modified version to others over a network, must
-publish the complete source under the same license — using it inside closed-source or commercial
-software means opening that software's source. Portions from the upstream project keep their original
-MIT license; see [NOTICE](NOTICE).
+UUWay is licensed under [**GNU AGPL-3.0**](https://github.com/GaryOAO/UUWay/blob/main/LICENSE).
 
 ## Disclaimer
 
