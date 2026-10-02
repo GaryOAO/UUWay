@@ -7,6 +7,7 @@ uses the same stack.  It only edits the owner-only JSON files under
 reads UU credentials or vendor logs.
 """
 import json
+import html
 import os
 from pathlib import Path
 import socket
@@ -259,10 +260,13 @@ class Console:
         self.window = None
         self.status = None
         self.notice = None
+        self.header_status = None
         self.buttons = []
         self.relative = self.wheel = self.invert = self.cursor = None
         self.backend = None
         self.image_label = None
+        self.image_preview = None
+        self.mapping_label = None
         self.display_modes = self.display_scales = self.display_current = None
         self.display_state = None
         self.display_transaction = None
@@ -275,13 +279,48 @@ class Console:
         if not self.status:
             return
         self.status.set_text("正在读取 UUWay 状态…")
+        if self.header_status:
+            self.header_status.set_text("正在同步")
         def worker():
             try:
                 value = collect_status()
             except Exception as error:
                 value = f"状态读取失败：{error}"
-            self.GLib.idle_add(lambda: (self.status.set_text(value), False)[1])
+            services = _service_properties()
+            active = sum(fields.get("ActiveState") == "active" for fields in services.values())
+            label = f"{active}/3 服务运行中" if services else "服务状态未知"
+            def update():
+                if self.status:
+                    self.status.set_text(value)
+                if self.header_status:
+                    self.header_status.set_text(label)
+                self._update_mapping_label()
+                return False
+            self.GLib.idle_add(update)
         threading.Thread(target=worker, daemon=True).start()
+
+    def _update_mapping_label(self):
+        if not self.mapping_label:
+            return
+        source, destination, mapped = _mapping_state()
+        self.mapping_label.set_markup(
+            f"<b>Windows 接收目录</b>\n"
+            f"<span size=\"small\">{html.escape(str(source or '运行配置不可用'))}</span>\n\n"
+            f"<b>Linux 保存位置</b>\n"
+            f"<span size=\"small\">{html.escape(str(destination))}</span>\n\n"
+            f"<b>映射状态</b>　"
+            f"<span foreground=\"{'#0f8a72' if mapped else '#b26a00'}\">"
+            f"{'已连接' if mapped else '等待服务建立'}</span>")
+
+    def _set_image_preview(self, path):
+        if not self.image_preview:
+            return
+        try:
+            from gi.repository import GdkPixbuf
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 240, 150, True)
+            self.image_preview.set_from_pixbuf(pixbuf)
+        except Exception:
+            self.image_preview.set_from_file(str(path))
 
     def service_action(self, button, operation):
         if operation == "stop":
@@ -344,6 +383,7 @@ class Console:
                     raise ValueError("图片必须是非空普通文件且不超过 16 MiB")
                 _write_json(CONFIG_DIR / "desktop-image.json", {"version": 1, "path": str(path.resolve())})
                 self.image_label.set_text(f"当前自定义图片：{path}")
+                self._set_image_preview(path)
                 self.message("桌面图片已保存，请重启 UUWay 服务后生效。")
             except (OSError, ValueError) as error:
                 self.message(f"桌面图片保存失败：{error}")
@@ -355,6 +395,7 @@ class Console:
             if path.exists() or path.is_symlink():
                 path.unlink()
             self.image_label.set_text("当前使用默认 Linux 企鹅图片")
+            self._set_image_preview(DEFAULT_IMAGE)
             self.message("已恢复默认企鹅图片，请重启 UUWay 服务后生效。")
         except OSError as error:
             self.message(f"恢复默认图片失败：{error}")
@@ -371,6 +412,7 @@ class Console:
                     raise ValueError("接收目录必须是目录")
                 _write_json(CONFIG_DIR / "download-directory.json", {"version": 1, "path": str(path.resolve())})
                 self.message("文件接收目录已保存，请重启 UUWay 服务后生效。")
+                self._update_mapping_label()
                 self.refresh()
             except (OSError, ValueError) as error:
                 self.message(f"文件接收目录保存失败：{error}")
@@ -382,6 +424,7 @@ class Console:
             if path.exists() or path.is_symlink():
                 path.unlink()
             self.message("已恢复 XDG 下载目录，请重启 UUWay 服务后生效。")
+            self._update_mapping_label()
             self.refresh()
         except OSError as error:
             self.message(f"恢复 XDG 下载目录失败：{error}")
@@ -464,48 +507,295 @@ class Console:
             self.message(f"显示操作失败：{error}")
 
     def build(self, application):
+        """Build the console with a stable navigation shell and compact cards."""
         Gtk, GLib = self.Gtk, self.GLib
+        try:
+            from gi.repository import GdkPixbuf
+        except ImportError:
+            GdkPixbuf = None
+
         self.window = Gtk.ApplicationWindow(application=application, title="UUWay 控制台")
-        self.window.set_default_size(820, 820); self.window.set_border_width(20)
-        shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12); self.window.add(shell)
-        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.window.set_default_size(1120, 760)
+        self.window.set_size_request(860, 600)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(b"""
+            window { background: #f5f7fb; }
+            headerbar { background: #102a43; color: #ffffff; padding: 7px 14px; }
+            headerbar label { color: #ffffff; }
+            .brand-title { font-size: 17px; font-weight: 700; }
+            .brand-subtitle { color: #b8d8e8; font-size: 11px; }
+            .header-state { color: #b8e3d5; font-size: 12px; padding: 6px 10px; }
+            .sidebar { background: #edf2f7; border-right: 1px solid #d9e2ec; }
+            .sidebar-caption { color: #627d98; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
+            .nav-list { background: transparent; }
+            .nav-list row { border-radius: 8px; margin: 3px 10px; padding: 2px; }
+            .nav-list row:selected { background: #d8eef0; color: #0b7285; }
+            .nav-list row:hover { background: #e2edf3; }
+            .nav-label { font-size: 13px; font-weight: 600; }
+            .nav-hint { color: #627d98; font-size: 11px; }
+            .page-title { color: #102a43; font-size: 24px; font-weight: 700; }
+            .page-subtitle { color: #627d98; font-size: 13px; }
+            .card { background: #ffffff; border: 1px solid #d9e2ec; border-radius: 12px; padding: 18px; }
+            .card-title { color: #243b53; font-size: 15px; font-weight: 700; }
+            .card-subtitle { color: #627d98; font-size: 12px; }
+            .muted { color: #627d98; font-size: 12px; }
+            .value { color: #102a43; font-size: 14px; }
+            .primary-action { background: #0b7285; color: #ffffff; border: 0; }
+            .primary-action:hover { background: #095c6b; }
+            .secondary-action { color: #0b7285; }
+            .danger-action { color: #b42318; }
+            .notice { background: #e6f4f1; border-top: 1px solid #c5e5dc; padding: 9px 16px; color: #245b52; font-size: 12px; }
+            scale trough { min-height: 6px; }
+            scale highlight { background: #0b7285; }
+            combobox box { min-height: 34px; }
+            button { min-height: 34px; padding: 0 13px; }
+        """)
+        Gtk.StyleContext.add_provider_for_screen(
+            self.window.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        def add_class(widget, name):
+            widget.get_style_context().add_class(name)
+            return widget
+
+        def label(text, css_name=None, xalign=0):
+            widget = Gtk.Label(label=text, xalign=xalign)
+            widget.set_line_wrap(True)
+            if css_name:
+                add_class(widget, css_name)
+            return widget
+
+        def page_header(title, subtitle):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            box.pack_start(label(title, "page-title"), False, False, 0)
+            box.pack_start(label(subtitle, "page-subtitle"), False, False, 0)
+            return box
+
+        def card(title, subtitle=None):
+            box = add_class(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12), "card")
+            box.pack_start(label(title, "card-title"), False, False, 0)
+            if subtitle:
+                box.pack_start(label(subtitle, "card-subtitle"), False, False, 0)
+            return box
+
+        def page(title, subtitle):
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+            content.set_margin_top(26); content.set_margin_bottom(28)
+            content.set_margin_start(30); content.set_margin_end(30)
+            content.pack_start(page_header(title, subtitle), False, False, 0)
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroll.add(content)
+            return content, scroll
+
+        header = Gtk.HeaderBar()
+        header.set_show_close_button(True)
+        header.set_title("")
+        self.window.set_titlebar(header)
+        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         if DEFAULT_IMAGE.is_file():
-            brand.pack_start(Gtk.Image.new_from_file(str(DEFAULT_IMAGE)), False, False, 0)
-        title = Gtk.Label(); title.set_markup('<span size="xx-large" weight="bold">UUWay</span>\n<span size="large">Linux 原生远程控制台</span>'); title.set_xalign(0)
-        brand.pack_start(title, True, True, 0); shell.pack_start(brand, False, False, 0)
-        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        for text, operation in (("启动 UUWay", "start"), ("重连 UUWay", "restart"), ("停止 UUWay", "stop")):
-            button = Gtk.Button(label=text); button.connect("clicked", self.service_action, operation); toolbar.pack_start(button, False, False, 0); self.buttons.append(button)
-        shell.pack_start(toolbar, False, False, 0)
-        self.notice = _label("UUWay 控制台只管理本机 bridge；不会重启 RustDesk、GNOME 或 Portal。"); shell.pack_start(self.notice, False, False, 0)
-        notebook = Gtk.Notebook(); shell.pack_start(notebook, True, True, 0)
-        scroll = Gtk.ScrolledWindow(); scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.status = _label("正在读取 UUWay 状态…"); self.status.set_selectable(True); self.status.set_yalign(0); self.status.set_margin_top(16); self.status.set_margin_bottom(16); self.status.set_margin_start(16); self.status.set_margin_end(16); scroll.add(self.status); notebook.append_page(scroll, _label("状态与能力"))
-        settings = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); settings.set_margin_top(16); settings.set_margin_bottom(16); settings.set_margin_start(16); settings.set_margin_end(16); notebook.append_page(settings, _label("输入与文字"))
-        prefs = _optional_json(CONFIG_DIR / "input-settings.json") or {}; runtime = _runtime() or {}
-        settings.pack_start(_label("输入设置"), False, False, 0)
-        self.relative = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 25, 400, 5); self.relative.set_value(prefs.get("relative_percent", 100)); settings.pack_start(_label("相对鼠标速度（%）"), False, False, 0); settings.pack_start(self.relative, False, False, 0)
-        self.wheel = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 25, 400, 5); self.wheel.set_value(prefs.get("wheel_percent", 100)); settings.pack_start(_label("滚轮速度（%）"), False, False, 0); settings.pack_start(self.wheel, False, False, 0)
-        self.invert = Gtk.CheckButton(label="反转滚轮方向（横向和纵向）"); self.invert.set_active(bool(prefs.get("invert_wheel"))); settings.pack_start(self.invert, False, False, 0)
-        save = Gtk.Button(label="保存输入设置"); save.connect("clicked", self.save_input); settings.pack_start(save, False, False, 0)
-        settings.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 4)
-        settings.pack_start(_label("光标显示方式"), False, False, 0); self.cursor = Gtk.ComboBoxText()
+            logo = Gtk.Image()
+            try:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(DEFAULT_IMAGE), 40, 40, True)
+                logo.set_from_pixbuf(pixbuf)
+            except Exception:
+                logo.set_from_file(str(DEFAULT_IMAGE))
+            brand.pack_start(logo, False, False, 0)
+        brand_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        brand_text.pack_start(label("UUWay", "brand-title"), False, False, 0)
+        brand_text.pack_start(label("Linux 原生远程控制台", "brand-subtitle"), False, False, 0)
+        brand.pack_start(brand_text, False, False, 0)
+        header.set_custom_title(brand)
+        self.header_status = label("正在同步", "header-state")
+        header.pack_end(self.header_status)
+        header_refresh = Gtk.Button()
+        header_refresh.set_tooltip_text("刷新 UUWay 状态")
+        header_refresh.add(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
+        header_refresh.connect("clicked", lambda *_: self.refresh())
+        header.pack_end(header_refresh)
+
+        shell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        shell.pack_start(body, True, True, 0)
+        self.window.add(shell)
+
+        sidebar = add_class(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12), "sidebar")
+        sidebar.set_size_request(216, -1)
+        sidebar.set_margin_top(24); sidebar.set_margin_bottom(18)
+        sidebar.pack_start(label("工作台", "sidebar-caption"), False, False, 18)
+        nav = add_class(Gtk.ListBox(), "nav-list")
+        nav.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        sidebar.pack_start(nav, False, False, 0)
+        sidebar.pack_end(label("设置仅作用于本机\nUUWay 不读取账号或令牌", "nav-hint"), False, False, 18)
+        body.pack_start(sidebar, False, False, 0)
+
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        stack.set_hexpand(True); stack.set_vexpand(True)
+        body.pack_start(stack, True, True, 0)
+
+        def add_nav(title, hint, icon, name):
+            row = Gtk.ListBoxRow()
+            row.set_name(name)
+            item = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            item.set_margin_top(8); item.set_margin_bottom(8)
+            item.set_margin_start(8); item.set_margin_end(8)
+            item.pack_start(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU), False, False, 0)
+            text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            text.pack_start(label(title, "nav-label"), False, False, 0)
+            text.pack_start(label(hint, "nav-hint"), False, False, 0)
+            item.pack_start(text, True, True, 0)
+            row.add(item); nav.add(row)
+            return row
+
+        overview, overview_scroll = page("概览", "快速查看 UUWay 服务、连接能力和文件映射")
+        input_page, input_scroll = page("输入与文字", "把远程操作调成适合你的速度、光标和文字输入方式")
+        display_page, display_scroll = page("显示", "安全调整分辨率、刷新率和桌面缩放")
+        desktop_page, desktop_scroll = page("桌面与文件", "管理客户端显示图片和从其他设备接收文件的位置")
+        stack.add_named(overview_scroll, "overview")
+        stack.add_named(input_scroll, "input")
+        stack.add_named(display_scroll, "display")
+        stack.add_named(desktop_scroll, "desktop")
+        rows = [
+            add_nav("概览", "服务与能力", "view-dashboard-symbolic", "overview"),
+            add_nav("输入与文字", "鼠标、滚轮、文字", "input-mouse-symbolic", "input"),
+            add_nav("显示", "分辨率与缩放", "video-display-symbolic", "display"),
+            add_nav("桌面与文件", "图片与接收目录", "folder-download-symbolic", "desktop"),
+        ]
+        nav.connect("row-selected", lambda _nav, row: stack.set_visible_child_name(row.get_name()) if row else None)
+        nav.select_row(rows[0])
+
+        # Overview
+        status_card = card("服务状态", "三个用户级服务共同组成 UUWay 的本机运行面")
+        self.status = label("正在读取 UUWay 状态…", "value")
+        self.status.set_selectable(True); self.status.set_yalign(0)
+        status_scroll = Gtk.ScrolledWindow()
+        status_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        status_scroll.set_size_request(-1, 220)
+        status_scroll.add(self.status)
+        status_card.pack_start(status_scroll, True, True, 0)
+        service_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for text, operation, css_name in (
+                ("启动 UUWay", "start", "primary-action"),
+                ("重连 UUWay", "restart", "secondary-action"),
+                ("停止 UUWay", "stop", "danger-action")):
+            button = Gtk.Button(label=text)
+            add_class(button, css_name)
+            button.connect("clicked", self.service_action, operation)
+            service_actions.pack_start(button, False, False, 0)
+            self.buttons.append(button)
+        status_card.pack_start(service_actions, False, False, 0)
+        overview.pack_start(status_card, False, False, 0)
+
+        overview_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        overview.pack_start(overview_columns, False, False, 0)
+        mapping_card = card("文件接收映射", "从其他设备发送的文件会落到 Linux 下载目录")
+        self.mapping_label = label("正在读取映射…", "value")
+        mapping_card.pack_start(self.mapping_label, False, False, 0)
+        overview_columns.pack_start(mapping_card, True, True, 0)
+        capability_card = card("已接入能力", "所有配置均保存在本机用户目录")
+        capability_card.pack_start(label(
+            "鼠标与滚轮控制\n文字输入（Portal / Fcitx5）\n桌面照片与 Linux 企鹅默认图\n显示临时切换与自动回滚\n剪贴板、终端和文件桥接", "value"), False, False, 0)
+        overview_columns.pack_start(capability_card, True, True, 0)
+
+        # Input and text
+        prefs = _optional_json(CONFIG_DIR / "input-settings.json") or {}
+        runtime = _runtime() or {}
+        input_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        input_page.pack_start(input_columns, False, False, 0)
+        input_card = card("输入速度", "范围 25%–400%，保存后由本机 bridge 使用")
+        input_grid = Gtk.Grid(column_spacing=16, row_spacing=12)
+        input_card.pack_start(input_grid, False, False, 0)
+        self.relative = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 25, 400, 5)
+        self.relative.set_value(prefs.get("relative_percent", 100)); self.relative.set_digits(0)
+        self.relative.set_draw_value(True); self.relative.set_hexpand(True)
+        input_grid.attach(label("相对鼠标速度", "value"), 0, 0, 1, 1); input_grid.attach(self.relative, 1, 0, 1, 1)
+        self.wheel = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 25, 400, 5)
+        self.wheel.set_value(prefs.get("wheel_percent", 100)); self.wheel.set_digits(0)
+        self.wheel.set_draw_value(True); self.wheel.set_hexpand(True)
+        input_grid.attach(label("滚轮速度", "value"), 0, 1, 1, 1); input_grid.attach(self.wheel, 1, 1, 1, 1)
+        self.invert = Gtk.CheckButton(label="反转横向和纵向滚轮")
+        self.invert.set_active(bool(prefs.get("invert_wheel")))
+        input_grid.attach(self.invert, 0, 2, 2, 1)
+        save = Gtk.Button(label="保存输入设置"); add_class(save, "primary-action")
+        save.connect("clicked", self.save_input); input_grid.attach(save, 0, 3, 2, 1)
+        input_columns.pack_start(input_card, True, True, 0)
+
+        compat_card = card("光标与文字", "选择远程画面和手机文字输入的兼容方式")
+        compat_grid = Gtk.Grid(column_spacing=14, row_spacing=12)
+        compat_card.pack_start(compat_grid, False, False, 0)
+        self.cursor = Gtk.ComboBoxText()
         for text in ("视频内真实光标", "独立光标元数据", "GPU 合成真实光标"):
             self.cursor.append_text(text)
-        self.cursor.set_active({"embedded": 0, "metadata": 1, "composited": 2}.get(runtime.get("cursor_mode"), 1)); settings.pack_start(self.cursor, False, False, 0)
-        cursor_save = Gtk.Button(label="保存光标设置"); cursor_save.connect("clicked", self.save_cursor); settings.pack_start(cursor_save, False, False, 0)
-        settings.pack_start(_label("手机文字后端"), False, False, 0); self.backend = Gtk.ComboBoxText(); self.backend.append_text("Portal（兼容模式）"); self.backend.append_text("原生 Fcitx5");
-        backend = _optional_json(CONFIG_DIR / "text-backend.json") or {}; self.backend.set_active(1 if backend.get("backend") == "fcitx" else 0); settings.pack_start(self.backend, False, False, 0); backend_save = Gtk.Button(label="保存文字后端"); backend_save.connect("clicked", self.save_backend); settings.pack_start(backend_save, False, False, 0)
-        image_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); image_page.set_margin_top(16); image_page.set_margin_start(16); image_page.set_margin_end(16); image_page.set_margin_bottom(16); notebook.append_page(image_page, _label("桌面照片与文件"))
-        image, default = _desktop_image(); self.image_label = _label(("当前使用默认 Linux 企鹅图片" if default else f"当前自定义图片：{image}")); image_page.pack_start(self.image_label, False, False, 0)
-        image_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); choose = Gtk.Button(label="选择自定义图片"); choose.connect("clicked", self.choose_image); image_buttons.pack_start(choose, False, False, 0); reset = Gtk.Button(label="恢复 Linux 企鹅"); reset.connect("clicked", self.reset_image); image_buttons.pack_start(reset, False, False, 0); image_page.pack_start(image_buttons, False, False, 0)
-        source, destination, mapped = _mapping_state(); image_page.pack_start(_label(f"文件接收目录：{source or '运行配置不可用'}\nLinux 映射目标：{destination}\n当前状态：{'已建立映射' if mapped else '服务启动时建立映射'}"), False, False, 0)
-        download_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); choose_download = Gtk.Button(label="选择接收目录"); choose_download.connect("clicked", self.choose_download_directory); download_buttons.pack_start(choose_download, False, False, 0); reset_download = Gtk.Button(label="恢复 XDG 下载目录"); reset_download.connect("clicked", self.reset_download_directory); download_buttons.pack_start(reset_download, False, False, 0); image_page.pack_start(download_buttons, False, False, 0)
-        display = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10); display.set_margin_top(16); display.set_margin_start(16); display.set_margin_end(16); display.set_margin_bottom(16); notebook.append_page(display, _label("显示设置"))
-        self.display_current = _label("正在读取显示服务…"); display.pack_start(self.display_current, False, False, 0); self.display_modes = Gtk.ComboBoxText(); self.display_modes.connect("changed", self.display_scale_options); display.pack_start(_label("分辨率与刷新率"), False, False, 0); display.pack_start(self.display_modes, False, False, 0); self.display_scales = Gtk.ComboBoxText(); display.pack_start(_label("Linux 桌面缩放"), False, False, 0); display.pack_start(self.display_scales, False, False, 0)
-        display_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); refresh = Gtk.Button(label="刷新模式"); refresh.connect("clicked", self.display_inspect); apply = Gtk.Button(label="临时应用（30 秒保护）"); apply.connect("clicked", self.display_apply); keep = Gtk.Button(label="保留此设置"); keep.connect("clicked", self.display_finish, "confirm"); revert = Gtk.Button(label="立即恢复"); revert.connect("clicked", self.display_finish, "rollback");
-        for button in (refresh, apply, keep, revert): display_buttons.pack_start(button, False, False, 0)
-        display.pack_start(display_buttons, False, False, 0); self.window.connect("destroy", lambda *_: application.quit()); self.window.show_all(); self.refresh(); self.display_inspect(); GLib.timeout_add_seconds(5, lambda: (self.refresh(), True)[1])
+        self.cursor.set_active({"embedded": 0, "metadata": 1, "composited": 2}.get(runtime.get("cursor_mode"), 1))
+        compat_grid.attach(label("光标显示", "value"), 0, 0, 1, 1); compat_grid.attach(self.cursor, 1, 0, 1, 1)
+        cursor_save = Gtk.Button(label="保存光标设置"); add_class(cursor_save, "secondary-action")
+        cursor_save.connect("clicked", self.save_cursor); compat_grid.attach(cursor_save, 1, 1, 1, 1)
+        self.backend = Gtk.ComboBoxText(); self.backend.append_text("Portal（兼容模式）"); self.backend.append_text("原生 Fcitx5")
+        backend = _optional_json(CONFIG_DIR / "text-backend.json") or {}
+        self.backend.set_active(1 if backend.get("backend") == "fcitx" else 0)
+        compat_grid.attach(label("手机文字", "value"), 0, 2, 1, 1); compat_grid.attach(self.backend, 1, 2, 1, 1)
+        backend_save = Gtk.Button(label="保存文字后端"); add_class(backend_save, "secondary-action")
+        backend_save.connect("clicked", self.save_backend); compat_grid.attach(backend_save, 1, 3, 1, 1)
+        input_columns.pack_start(compat_card, True, True, 0)
+
+        # Display
+        display_status_card = card("当前显示状态", "应用新模式时会保留 30 秒保护窗口，未确认将自动回滚")
+        self.display_current = label("正在读取显示服务…", "value")
+        display_status_card.pack_start(self.display_current, False, False, 0)
+        display_page.pack_start(display_status_card, False, False, 0)
+        display_controls = card("显示模式", "只会列出当前桌面支持的分辨率、刷新率和缩放组合")
+        display_grid = Gtk.Grid(column_spacing=16, row_spacing=12)
+        display_controls.pack_start(display_grid, False, False, 0)
+        self.display_modes = Gtk.ComboBoxText(); self.display_modes.connect("changed", self.display_scale_options)
+        self.display_scales = Gtk.ComboBoxText()
+        display_grid.attach(label("分辨率与刷新率", "value"), 0, 0, 1, 1); display_grid.attach(self.display_modes, 1, 0, 1, 1)
+        display_grid.attach(label("Linux 桌面缩放", "value"), 0, 1, 1, 1); display_grid.attach(self.display_scales, 1, 1, 1, 1)
+        display_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        refresh_modes = Gtk.Button(label="刷新模式"); add_class(refresh_modes, "secondary-action"); refresh_modes.connect("clicked", self.display_inspect)
+        apply = Gtk.Button(label="临时应用（30 秒保护）"); add_class(apply, "primary-action"); apply.connect("clicked", self.display_apply)
+        keep = Gtk.Button(label="保留此设置"); add_class(keep, "secondary-action"); keep.connect("clicked", self.display_finish, "confirm")
+        revert = Gtk.Button(label="立即恢复"); add_class(revert, "danger-action"); revert.connect("clicked", self.display_finish, "rollback")
+        for button in (refresh_modes, apply, keep, revert): display_buttons.pack_start(button, False, False, 0)
+        display_controls.pack_start(display_buttons, False, False, 4)
+        display_page.pack_start(display_controls, False, False, 0)
+
+        # Desktop and files
+        image_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        desktop_page.pack_start(image_columns, False, False, 0)
+        image, default = _desktop_image()
+        image_card = card("桌面照片", "客户端显示的桌面缩略图，默认使用 UUWay Linux 企鹅")
+        self.image_preview = Gtk.Image()
+        self._set_image_preview(image)
+        self.image_preview.set_halign(Gtk.Align.START)
+        image_card.pack_start(self.image_preview, False, False, 0)
+        self.image_label = label(("当前使用默认 Linux 企鹅图片" if default else f"当前自定义图片：{image}"), "muted")
+        image_card.pack_start(self.image_label, False, False, 0)
+        image_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        choose = Gtk.Button(label="选择自定义图片"); add_class(choose, "primary-action"); choose.connect("clicked", self.choose_image)
+        reset = Gtk.Button(label="恢复 Linux 企鹅"); add_class(reset, "secondary-action"); reset.connect("clicked", self.reset_image)
+        image_buttons.pack_start(choose, False, False, 0); image_buttons.pack_start(reset, False, False, 0)
+        image_card.pack_start(image_buttons, False, False, 0)
+        image_columns.pack_start(image_card, True, True, 0)
+
+        file_card = card("文件接收目录", "Windows 端接收目录已经映射到 Linux，默认使用 XDG 下载目录")
+        self.mapping_label = label("正在读取映射…", "value")
+        file_card.pack_start(self.mapping_label, False, False, 0)
+        download_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        choose_download = Gtk.Button(label="选择接收目录"); add_class(choose_download, "primary-action"); choose_download.connect("clicked", self.choose_download_directory)
+        reset_download = Gtk.Button(label="恢复 XDG 下载目录"); add_class(reset_download, "secondary-action"); reset_download.connect("clicked", self.reset_download_directory)
+        download_buttons.pack_start(choose_download, False, False, 0); download_buttons.pack_start(reset_download, False, False, 0)
+        file_card.pack_start(download_buttons, False, False, 0)
+        image_columns.pack_start(file_card, True, True, 0)
+
+        self.notice = add_class(label("UUWay 控制台只管理本机 bridge；不会重启 RustDesk、GNOME 或 Portal。"), "notice")
+        shell.pack_end(self.notice, False, False, 0)
+        self.window.connect("destroy", lambda *_: application.quit())
+        self.window.show_all()
+        self._update_mapping_label()
+        self.refresh()
+        self.display_inspect()
+        GLib.timeout_add_seconds(5, lambda: (self.refresh(), True)[1])
 
 
 def main(argv=None):
