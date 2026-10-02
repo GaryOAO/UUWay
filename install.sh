@@ -280,6 +280,18 @@ if should_run 6; then
         --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
         --state-parent "$state_dir" --text-socket "$state_dir/text.sock" --cursor-mode metadata
 
+    # Apply Wine's Linux path view while the bridge is stopped.  Keeping this
+    # out of the long-lived service avoids racing Wine initialization on boot.
+    if systemctl --user is-active --quiet uu-native-bridge 2>/dev/null; then
+        run systemctl --user stop uu-native-bridge
+    fi
+    run "$python" scripts/configure-uu-wine-mappings.py \
+        --prefix "$prefix" --config-directory "$config_dir"
+    # The registry command starts a short-lived Wine server.  Reap it fully
+    # before the bridge's Wine runtime is allowed to initialize.
+    run env "WINEPREFIX=$prefix" WINEDEBUG=-all "$wine_dir/wineserver" -k
+    run env "WINEPREFIX=$prefix" WINEDEBUG=-all "$wine_dir/wineserver" -w
+
     # Phone IME text goes through Fcitx5 when it runs, otherwise through the portal.
     if [[ ! -f "$config_dir/text-backend.json" ]]; then
         backend=portal

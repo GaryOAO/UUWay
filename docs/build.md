@@ -164,6 +164,17 @@ python3 scripts/install-uu-native-service.py \
     --text-socket ~/.local/state/uurb/text.sock \
     --cursor-mode metadata
 
+# Stop the bridge before changing Wine's path view, then reap the short-lived
+# Wine server started by the desktop registry update.
+systemctl --user stop uu-native-bridge 2>/dev/null || true
+python3 scripts/configure-uu-wine-mappings.py \
+    --prefix ~/.local/share/wineprefixes/uu-remote \
+    --config-directory ~/.config/uurb
+WINEPREFIX="$HOME/.local/share/wineprefixes/uu-remote" \
+    /opt/wine-stable/bin/wineserver -k
+WINEPREFIX="$HOME/.local/share/wineprefixes/uu-remote" \
+    /opt/wine-stable/bin/wineserver -w
+
 printf '{"version":1,"backend":"fcitx"}' > ~/.config/uurb/text-backend.json   # or "portal"
 systemctl --user daemon-reload
 systemctl --user enable --now uu-native-display uu-native-text uu-native-bridge

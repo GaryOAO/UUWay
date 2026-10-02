@@ -172,6 +172,19 @@ class CleanupTests(unittest.TestCase):
 
 
 class TopologyPollTests(unittest.TestCase):
+    def test_topology_changes_are_debounced_until_stable(self):
+        initial = dict(generation=1, connectors=['a'], layout=[], modes=[dict(width=1024, height=768)])
+        next_mode = dict(generation=1, connectors=['a'], layout=[], modes=[dict(width=1920, height=1080)])
+        other_mode = dict(generation=1, connectors=['a'], layout=[], modes=[dict(width=1280, height=720)])
+        stabilizer = trial.TopologyStabilizer(initial, required=3)
+        self.assertIsNone(stabilizer.observe(next_mode))
+        self.assertIsNone(stabilizer.observe(other_mode))
+        self.assertIsNone(stabilizer.observe(next_mode))
+        self.assertIsNone(stabilizer.observe(next_mode))
+        self.assertEqual(stabilizer.observe(next_mode), next_mode)
+        self.assertIsNone(stabilizer.observe(initial))
+        self.assertIsNone(stabilizer.observe(next_mode))
+
     def test_transient_query_failures_are_absorbed_and_reported(self):
         failures = [0]
         transient = [subprocess.TimeoutExpired('dbus', 5), subprocess.CalledProcessError(1, 'dbus'), ValueError('bad json')]
@@ -209,6 +222,31 @@ class TopologyPollTests(unittest.TestCase):
                 trial.poll_topology(failures)
             event.assert_not_called()
             self.assertEqual(failures, [0])
+
+    def test_startup_topology_retry_absorbs_transient_dbus_disconnect(self):
+        good = dict(generation=1, connectors=['a'], layout=[], modes=[])
+        failures = [subprocess.CalledProcessError(1, 'dbus'), ValueError('bad json')]
+        with patch.object(trial, 'native_topology', side_effect=[*failures, good]), \
+                patch.object(trial, 'event') as event, \
+                patch.object(trial.time, 'sleep') as sleep:
+            self.assertEqual(trial.topology_with_retry(), good)
+        self.assertEqual(event.call_count, 2)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_startup_topology_retry_stops_without_another_dbus_call(self):
+        with patch.object(trial, 'native_topology') as topology, \
+                patch.object(trial, 'event') as event:
+            self.assertIsNone(trial.topology_with_retry(lambda: True))
+        topology.assert_not_called()
+        event.assert_not_called()
+
+    def test_startup_topology_retry_keeps_a_persistent_failure_bounded(self):
+        with patch.object(trial, 'native_topology', side_effect=subprocess.TimeoutExpired('dbus', 5)), \
+                patch.object(trial, 'event'), \
+                patch.object(trial.time, 'sleep') as sleep:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                trial.topology_with_retry()
+        self.assertEqual(sleep.call_count, trial.TOPOLOGY_RETRY_LIMIT - 1)
 
 
 class CleanupHeartbeatTests(unittest.TestCase):

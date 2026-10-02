@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#102a43"/>
+      <stop offset="1" stop-color="#0b7285"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <circle cx="96" cy="30" r="13" fill="#ffd166" opacity=".95"/>
+  <ellipse cx="64" cy="67" rx="34" ry="42" fill="#101820" stroke="#07131f" stroke-width="3"/>
+  <ellipse cx="64" cy="73" rx="22" ry="28" fill="#f5f7fb"/>
+  <ellipse cx="64" cy="47" rx="26" ry="22" fill="#101820"/>
+  <circle cx="54" cy="45" r="7" fill="#f5f7fb"/>
+  <circle cx="74" cy="45" r="7" fill="#f5f7fb"/>
+  <circle cx="54" cy="45" r="3" fill="#102a43"/>
+  <circle cx="74" cy="45" r="3" fill="#102a43"/>
+  <path d="M58 51h12l-6 10z" fill="#f59f00"/>
+  <ellipse cx="43" cy="103" rx="17" ry="7" fill="#f59f00" stroke="#c87900" stroke-width="2"/>
+  <ellipse cx="85" cy="103" rx="17" ry="7" fill="#f59f00" stroke="#c87900" stroke-width="2"/>
+  <path d="M25 113h78" stroke="#70d6c7" stroke-width="3" stroke-linecap="round" opacity=".9"/>
+  <text x="64" y="119" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" letter-spacing="2" fill="#ffffff">UUWAY</text>
+</svg>

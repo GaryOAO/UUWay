@@ -23,6 +23,9 @@ ROOT = (RELEASE_ROOT.parent if (RELEASE_ROOT.parent / "assets").is_dir()
 DEFAULT_IMAGE = (RELEASE_ROOT / "assets/uuway-penguin.bmp"
                  if (RELEASE_ROOT / "assets/uuway-penguin.bmp").is_file()
                  else ROOT / "assets/uuway-penguin.bmp")
+BRAND_ICON = (RELEASE_ROOT / "assets/uuway-icon.svg"
+              if (RELEASE_ROOT / "assets/uuway-icon.svg").is_file()
+              else ROOT / "assets/uuway-icon.svg")
 CONFIG_DIR = Path.home() / ".config/uurb"
 DOWNLOAD_RELATIVE = Path("drive_c/Program Files/Netease/GameViewer/Download")
 MAX_JSON = 65536
@@ -151,6 +154,85 @@ def _mapping_state():
         return source, destination, False
 
 
+def _xdg_user_directory(kind, home=None, config_home=None):
+    home = Path.home() if home is None else Path(home)
+    root = Path(config_home) if config_home else Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+    defaults = {
+        "DESKTOP": "Desktop", "DOCUMENTS": "Documents", "DOWNLOAD": "Downloads",
+        "MUSIC": "Music", "PICTURES": "Pictures", "VIDEOS": "Videos",
+        "PUBLICSHARE": "Public", "TEMPLATES": "Templates",
+    }
+    key = f"XDG_{kind}_DIR="
+    try:
+        for line in (root / "user-dirs.dirs").read_text().splitlines():
+            if not line.startswith(key):
+                continue
+            value = line.split("=", 1)[1].strip().strip('"')
+            if value == "$HOME":
+                return home
+            if value.startswith("$HOME/"):
+                return home / value[6:]
+            if value.startswith("/"):
+                return Path(value)
+            break
+    except (OSError, UnicodeError):
+        pass
+    return home / defaults.get(kind, kind.title())
+
+
+def _mapping_rows(runtime):
+    """Return drive, profile and receive mappings for the console."""
+    if not runtime:
+        return []
+    prefix = Path(runtime["prefix"])
+    rows = []
+    dosdevices = prefix / "dosdevices"
+    try:
+        entries = sorted(dosdevices.iterdir(), key=lambda item: item.name.lower())
+    except OSError:
+        entries = []
+    for entry in entries:
+        is_drive = len(entry.name) == 2 and entry.name[1] == ":"
+        is_device = len(entry.name) == 3 and entry.name[1:] == "::"
+        if (is_drive or is_device) and entry.is_symlink():
+            try:
+                target = entry.resolve(strict=False)
+            except OSError:
+                target = Path(os.readlink(entry))
+            name = entry.name[:2].upper() if is_device else entry.name.upper()
+            rows.append((f"{name} 设备" if is_device else name, str(target), True))
+
+    users = prefix / "drive_c/users"
+    preferred = Path.home().name
+    user_root = users / preferred
+    if not user_root.is_dir():
+        try:
+            candidates = [item for item in users.iterdir() if item.is_dir() and
+                          item.name.lower() not in {"public", "default", "default user", "all users"}]
+        except OSError:
+            candidates = []
+        if len(candidates) == 1:
+            user_root = candidates[0]
+    xdg_names = (
+        ("Desktop", "DESKTOP"), ("Documents", "DOCUMENTS"), ("Downloads", "DOWNLOAD"),
+        ("Music", "MUSIC"), ("Pictures", "PICTURES"), ("Videos", "VIDEOS"),
+        ("Public", "PUBLICSHARE"), ("Templates", "TEMPLATES"),
+    )
+    for windows_name, xdg_name in xdg_names:
+        source = user_root / windows_name
+        target = _configured_download_directory() if xdg_name == "DOWNLOAD" else _xdg_user_directory(xdg_name)
+        try:
+            mapped = source.is_symlink() and source.resolve() == target.resolve()
+            exists = source.exists() or source.is_symlink()
+        except OSError:
+            mapped, exists = False, False
+        rows.append((f"用户/{windows_name}", str(target), mapped if exists else None))
+    source, destination, mapped = _mapping_state()
+    if source:
+        rows.append(("UU 接收/Download", str(destination), mapped))
+    return rows
+
+
 def _service_properties():
     units = ("uu-native-bridge.service", "uu-native-text.service", "uu-native-display.service")
     try:
@@ -217,6 +299,15 @@ def collect_status():
     else:
         lines.append("  目录映射：运行配置不可用")
     lines.append("")
+    lines.append("Linux 原生路径映射")
+    mapping_rows = _mapping_rows(runtime)
+    if mapping_rows:
+        for name, target, mapped in mapping_rows:
+            state = "已连接" if mapped else ("待建立" if mapped is None else "需修复")
+            lines.append(f"  {name} → {target} · {state}")
+    else:
+        lines.append("  运行配置不可用")
+    lines.append("")
     lines.append("桌面照片")
     image, is_default = _desktop_image()
     lines.append(f"  {'默认 Linux 企鹅' if is_default else '自定义图片'}：{image}")
@@ -267,6 +358,7 @@ class Console:
         self.image_label = None
         self.image_preview = None
         self.mapping_label = None
+        self.mapping_labels = []
         self.display_modes = self.display_scales = self.display_current = None
         self.display_state = None
         self.display_transaction = None
@@ -300,17 +392,26 @@ class Console:
         threading.Thread(target=worker, daemon=True).start()
 
     def _update_mapping_label(self):
-        if not self.mapping_label:
+        labels = [item for item in self.mapping_labels if item]
+        if self.mapping_label and self.mapping_label not in labels:
+            labels.append(self.mapping_label)
+        if not labels:
             return
-        source, destination, mapped = _mapping_state()
-        self.mapping_label.set_markup(
-            f"<b>Windows 接收目录</b>\n"
-            f"<span size=\"small\">{html.escape(str(source or '运行配置不可用'))}</span>\n\n"
-            f"<b>Linux 保存位置</b>\n"
-            f"<span size=\"small\">{html.escape(str(destination))}</span>\n\n"
-            f"<b>映射状态</b>　"
-            f"<span foreground=\"{'#0f8a72' if mapped else '#b26a00'}\">"
-            f"{'已连接' if mapped else '等待服务建立'}</span>")
+        rows = _mapping_rows(_runtime())
+        if not rows:
+            markup = "<b>Linux 原生路径映射</b>\n运行配置不可用"
+        else:
+            parts = ["<b>Linux 原生路径映射</b>"]
+            for name, target, mapped in rows:
+                state = "已连接" if mapped else ("待建立" if mapped is None else "需修复")
+                color = "#0f8a72" if mapped else "#b26a00"
+                parts.append(
+                    f"<b>{html.escape(name)}</b> → "
+                    f"<span size=\"small\">{html.escape(target)}</span>　"
+                    f"<span foreground=\"{color}\">{state}</span>")
+            markup = "\n".join(parts)
+        for item in labels:
+            item.set_markup(markup)
 
     def _set_image_preview(self, path):
         if not self.image_preview:
@@ -516,14 +617,15 @@ class Console:
 
         self.window = Gtk.ApplicationWindow(application=application, title="UUWay 控制台")
         self.window.set_default_size(1120, 760)
-        self.window.set_size_request(860, 600)
+        self.window.set_size_request(720, 520)
 
         css = Gtk.CssProvider()
         css.load_from_data(b"""
             window { background: #f5f7fb; }
+            label { color: #243b53; }
             headerbar { background: #102a43; color: #ffffff; padding: 7px 14px; }
             headerbar label { color: #ffffff; }
-            .brand-title { font-size: 17px; font-weight: 700; }
+            .brand-title { font-size: 22px; font-weight: 800; letter-spacing: 1px; }
             .brand-subtitle { color: #b8d8e8; font-size: 11px; }
             .header-state { color: #b8e3d5; font-size: 12px; padding: 6px 10px; }
             .sidebar { background: #edf2f7; border-right: 1px solid #d9e2ec; }
@@ -531,6 +633,7 @@ class Console:
             .nav-list { background: transparent; }
             .nav-list row { border-radius: 8px; margin: 3px 10px; padding: 2px; }
             .nav-list row:selected { background: #d8eef0; color: #0b7285; }
+            .nav-list row:selected .nav-label { color: #0b7285; }
             .nav-list row:hover { background: #e2edf3; }
             .nav-label { font-size: 13px; font-weight: 600; }
             .nav-hint { color: #627d98; font-size: 11px; }
@@ -541,15 +644,22 @@ class Console:
             .card-subtitle { color: #627d98; font-size: 12px; }
             .muted { color: #627d98; font-size: 12px; }
             .value { color: #102a43; font-size: 14px; }
-            .primary-action { background: #0b7285; color: #ffffff; border: 0; }
-            .primary-action:hover { background: #095c6b; }
-            .secondary-action { color: #0b7285; }
-            .danger-action { color: #b42318; }
+            button { min-height: 34px; padding: 0 13px; color: #243b53; background: #ffffff; border: 1px solid #bcccdc; }
+            button label { color: #243b53; }
+            button.primary-action, button.primary-action label { background: #0b7285; color: #ffffff; border-color: #0b7285; }
+            button.primary-action:hover { background: #095c6b; }
+            button.secondary-action, button.secondary-action label { color: #0b7285; background: #ffffff; border-color: #9fb3c8; }
+            button.danger-action, button.danger-action label { color: #b42318; background: #ffffff; border-color: #d9a6a1; }
+            headerbar button.titlebutton { color: #ffffff; background: transparent; border-color: transparent; padding: 0; }
+            headerbar button.titlebutton:hover { background: #234765; }
+            headerbar button.header-refresh { color: #243b53; background: #ffffff; border-color: #bcccdc; padding: 0 10px; }
+            checkbutton label { color: #243b53; }
+            combobox, combobox button, combobox entry, combobox cellview,
+            combobox cellview label, entry { color: #243b53; }
             .notice { background: #e6f4f1; border-top: 1px solid #c5e5dc; padding: 9px 16px; color: #245b52; font-size: 12px; }
             scale trough { min-height: 6px; }
             scale highlight { background: #0b7285; }
             combobox box { min-height: 34px; }
-            button { min-height: 34px; padding: 0 13px; }
         """)
         Gtk.StyleContext.add_provider_for_screen(
             self.window.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -573,6 +683,7 @@ class Console:
 
         def card(title, subtitle=None):
             box = add_class(Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12), "card")
+            box.set_hexpand(True)
             box.pack_start(label(title, "card-title"), False, False, 0)
             if subtitle:
                 box.pack_start(label(subtitle, "card-subtitle"), False, False, 0)
@@ -588,18 +699,36 @@ class Console:
             scroll.add(content)
             return content, scroll
 
+        def responsive_cards():
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_homogeneous(True)
+            flow.set_min_children_per_line(1)
+            flow.set_max_children_per_line(2)
+            flow.set_row_spacing(16)
+            flow.set_column_spacing(16)
+            flow.set_hexpand(True)
+            return flow
+
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
         header.set_title("")
         self.window.set_titlebar(header)
         brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        if DEFAULT_IMAGE.is_file():
+        theme = Gtk.IconTheme.get_default()
+        native_penguin = next((name for name in ("penguin-symbolic", "penguin", "tux-symbolic", "tux")
+                               if theme.has_icon(name)), None)
+        if native_penguin:
+            logo = Gtk.Image.new_from_icon_name(native_penguin, Gtk.IconSize.DIALOG)
+            logo.set_pixel_size(40)
+            brand.pack_start(logo, False, False, 0)
+        elif BRAND_ICON.is_file():
             logo = Gtk.Image()
             try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(DEFAULT_IMAGE), 40, 40, True)
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(BRAND_ICON), 40, 40, True)
                 logo.set_from_pixbuf(pixbuf)
             except Exception:
-                logo.set_from_file(str(DEFAULT_IMAGE))
+                logo.set_from_file(str(BRAND_ICON))
             brand.pack_start(logo, False, False, 0)
         brand_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         brand_text.pack_start(label("UUWay", "brand-title"), False, False, 0)
@@ -609,6 +738,7 @@ class Console:
         self.header_status = label("正在同步", "header-state")
         header.pack_end(self.header_status)
         header_refresh = Gtk.Button()
+        add_class(header_refresh, "header-refresh")
         header_refresh.set_tooltip_text("刷新 UUWay 状态")
         header_refresh.add(Gtk.Image.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON))
         header_refresh.connect("clicked", lambda *_: self.refresh())
@@ -687,21 +817,22 @@ class Console:
         status_card.pack_start(service_actions, False, False, 0)
         overview.pack_start(status_card, False, False, 0)
 
-        overview_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        overview_columns = responsive_cards()
         overview.pack_start(overview_columns, False, False, 0)
         mapping_card = card("文件接收映射", "从其他设备发送的文件会落到 Linux 下载目录")
-        self.mapping_label = label("正在读取映射…", "value")
-        mapping_card.pack_start(self.mapping_label, False, False, 0)
-        overview_columns.pack_start(mapping_card, True, True, 0)
+        overview_mapping_label = label("正在读取映射…", "value")
+        self.mapping_labels.append(overview_mapping_label)
+        mapping_card.pack_start(overview_mapping_label, False, False, 0)
+        overview_columns.add(mapping_card)
         capability_card = card("已接入能力", "所有配置均保存在本机用户目录")
         capability_card.pack_start(label(
             "鼠标与滚轮控制\n文字输入（Portal / Fcitx5）\n桌面照片与 Linux 企鹅默认图\n显示临时切换与自动回滚\n剪贴板、终端和文件桥接", "value"), False, False, 0)
-        overview_columns.pack_start(capability_card, True, True, 0)
+        overview_columns.add(capability_card)
 
         # Input and text
         prefs = _optional_json(CONFIG_DIR / "input-settings.json") or {}
         runtime = _runtime() or {}
-        input_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        input_columns = responsive_cards()
         input_page.pack_start(input_columns, False, False, 0)
         input_card = card("输入速度", "范围 25%–400%，保存后由本机 bridge 使用")
         input_grid = Gtk.Grid(column_spacing=16, row_spacing=12)
@@ -719,7 +850,7 @@ class Console:
         input_grid.attach(self.invert, 0, 2, 2, 1)
         save = Gtk.Button(label="保存输入设置"); add_class(save, "primary-action")
         save.connect("clicked", self.save_input); input_grid.attach(save, 0, 3, 2, 1)
-        input_columns.pack_start(input_card, True, True, 0)
+        input_columns.add(input_card)
 
         compat_card = card("光标与文字", "选择远程画面和手机文字输入的兼容方式")
         compat_grid = Gtk.Grid(column_spacing=14, row_spacing=12)
@@ -737,7 +868,7 @@ class Console:
         compat_grid.attach(label("手机文字", "value"), 0, 2, 1, 1); compat_grid.attach(self.backend, 1, 2, 1, 1)
         backend_save = Gtk.Button(label="保存文字后端"); add_class(backend_save, "secondary-action")
         backend_save.connect("clicked", self.save_backend); compat_grid.attach(backend_save, 1, 3, 1, 1)
-        input_columns.pack_start(compat_card, True, True, 0)
+        input_columns.add(compat_card)
 
         # Display
         display_status_card = card("当前显示状态", "应用新模式时会保留 30 秒保护窗口，未确认将自动回滚")
@@ -761,7 +892,7 @@ class Console:
         display_page.pack_start(display_controls, False, False, 0)
 
         # Desktop and files
-        image_columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        image_columns = responsive_cards()
         desktop_page.pack_start(image_columns, False, False, 0)
         image, default = _desktop_image()
         image_card = card("桌面照片", "客户端显示的桌面缩略图，默认使用 UUWay Linux 企鹅")
@@ -776,17 +907,18 @@ class Console:
         reset = Gtk.Button(label="恢复 Linux 企鹅"); add_class(reset, "secondary-action"); reset.connect("clicked", self.reset_image)
         image_buttons.pack_start(choose, False, False, 0); image_buttons.pack_start(reset, False, False, 0)
         image_card.pack_start(image_buttons, False, False, 0)
-        image_columns.pack_start(image_card, True, True, 0)
+        image_columns.add(image_card)
 
         file_card = card("文件接收目录", "Windows 端接收目录已经映射到 Linux，默认使用 XDG 下载目录")
         self.mapping_label = label("正在读取映射…", "value")
+        self.mapping_labels.append(self.mapping_label)
         file_card.pack_start(self.mapping_label, False, False, 0)
         download_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         choose_download = Gtk.Button(label="选择接收目录"); add_class(choose_download, "primary-action"); choose_download.connect("clicked", self.choose_download_directory)
         reset_download = Gtk.Button(label="恢复 XDG 下载目录"); add_class(reset_download, "secondary-action"); reset_download.connect("clicked", self.reset_download_directory)
         download_buttons.pack_start(choose_download, False, False, 0); download_buttons.pack_start(reset_download, False, False, 0)
         file_card.pack_start(download_buttons, False, False, 0)
-        image_columns.pack_start(file_card, True, True, 0)
+        image_columns.add(file_card)
 
         self.notice = add_class(label("UUWay 控制台只管理本机 bridge；不会重启 RustDesk、GNOME 或 Portal。"), "notice")
         shell.pack_end(self.notice, False, False, 0)

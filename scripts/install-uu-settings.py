@@ -12,6 +12,7 @@ from native_launcher_migration import retire_legacy_launchers
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "scripts/uuway_console.py"
 PENGUIN = ROOT / "assets/uuway-penguin.bmp"
+ICON = ROOT / "assets/uuway-icon.svg"
 MARKER = "# Managed by UUWay console installer\n"
 OLD_MARKER = "# Managed by UURB native settings installer\n"
 
@@ -29,6 +30,8 @@ def run():
         raise ValueError("Build the UUWay console first")
     if not PENGUIN.is_file() or PENGUIN.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("Missing UUWay penguin brand image")
+    if not ICON.is_file() or ICON.stat().st_size > 256 * 1024:
+        raise ValueError("Missing UUWay application icon")
     digest = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     parent = Path.home() / ".local/lib/uuway-console"
     menu = Path.home() / ".local/share/applications"
@@ -41,6 +44,7 @@ def run():
             target = staged / "uuway-console"
             shutil.copyfile(SOURCE, target); target.chmod(0o700)
             shutil.copyfile(PENGUIN, staged / "assets/uuway-penguin.bmp")
+            shutil.copyfile(ICON, staged / "assets/uuway-icon.svg")
             if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
                 raise ValueError("UUWay console changed during installation")
             staged.rename(release)
@@ -48,7 +52,8 @@ def run():
     if (release.is_symlink() or target.is_symlink() or
             hashlib.sha256(target.read_bytes()).hexdigest() != digest):
         raise ValueError("Changed UUWay console release; refusing replacement")
-    if any(c in str(target) for c in ("\n", "\r", '"', "\\", "%", "`", "$")):
+    icon = release / "assets/uuway-icon.svg"
+    if any(c in str(target) + str(icon) for c in ("\n", "\r", '"', "\\", "%", "`", "$")):
         raise ValueError("Unsupported desktop command path")
     desktop = menu / "uuway.desktop"
     if desktop.exists() or desktop.is_symlink():
@@ -65,7 +70,7 @@ def run():
         "[Desktop Entry]\nType=Application\nName=UUWay 控制台\n"
         "Keywords=UU;UUWay;Bridge;设置;控制台;\n"
         "Comment=UUWay Linux 原生 bridge：服务、输入、显示和文件接收\n"
-        f"Exec=\"{target}\"\nIcon=preferences-desktop-peripherals\n"
+        f"Exec=\"{target}\"\nIcon={icon}\n"
         "Terminal=false\nCategories=Settings;Utility;\nStartupNotify=true\n")
     fd, name = tempfile.mkstemp(prefix=".uuway-console-", dir=menu)
     try:

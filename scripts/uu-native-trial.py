@@ -49,7 +49,20 @@ def event(name, **values):
 CLEANUP_HEARTBEAT_INTERVAL = 5
 CLEANUP_HEARTBEAT_SECONDS = 150
 # Consecutive failed Mutter topology queries tolerated before the worker stops.
-TOPOLOGY_POLL_FAILURE_LIMIT = 3
+# Mutter may briefly drop DisplayConfig while the compositor applies a mode
+# transaction or a user service is being restarted.  Three seconds was short
+# enough to turn that normal transition into a bridge crash.
+TOPOLOGY_POLL_FAILURE_LIMIT = 10
+# Startup and post-input topology reads use a bounded retry as well.  These
+# reads happen outside the one-second polling loop and must absorb the same
+# short-lived D-Bus disconnect without tearing down the whole service.
+TOPOLOGY_RETRY_LIMIT = 12
+TOPOLOGY_RETRY_DELAY_SECONDS = 0.5
+# Mutter can publish a transient mode while a display transaction is settling.
+# Require the same complete topology on three one-second polls before retiring
+# a live capture generation. This coalesces a short mode negotiation into one
+# GPU allocation restart instead of making the remote desktop visibly jump.
+TOPOLOGY_STABILITY_POLLS = 3
 
 
 @contextlib.contextmanager
@@ -358,6 +371,51 @@ def poll_topology(failures):
     return value
 
 
+def topology_with_retry(stop_requested=None):
+    """Read Mutter topology while absorbing a bounded D-Bus restart window."""
+    failures = 0
+    while True:
+        if stop_requested is not None and stop_requested():
+            return None
+        try:
+            return native_topology()
+        except (subprocess.SubprocessError, ValueError) as error:
+            failures += 1
+            event('native_topology_retry', error_type=type(error).__name__, consecutive=failures)
+            if failures >= TOPOLOGY_RETRY_LIMIT:
+                raise
+            time.sleep(TOPOLOGY_RETRY_DELAY_SECONDS)
+
+
+class TopologyStabilizer:
+    """Accept a changed topology only after repeated identical observations."""
+
+    def __init__(self, current, required=TOPOLOGY_STABILITY_POLLS):
+        if required < 1:
+            raise ValueError('Topology stability requires a positive poll count')
+        self.current = current
+        self.required = required
+        self.candidate = None
+        self.count = 0
+
+    def observe(self, value):
+        if value == self.current:
+            self.candidate = None
+            self.count = 0
+            return None
+        if value != self.candidate:
+            self.candidate = value
+            self.count = 1
+        else:
+            self.count += 1
+        if self.count < self.required:
+            return None
+        self.current = self.candidate
+        self.candidate = None
+        self.count = 0
+        return self.current
+
+
 def can_recreate_display_in_place(before, after):
     """Conservative first rollout: same output/layout/scale, pixel-mode only.
 
@@ -462,7 +520,9 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         raise ValueError('GPU-composited cursor mode requires a verified composition-aware runtime bundle')
     if text_socket is not None and not verified.get('native_text_included'):
         raise ValueError('Native text requires a text-aware verified bundle')
-    topology = native_topology() if with_input else None
+    topology = topology_with_retry(stop_requested) if with_input else None
+    if with_input and topology is None:
+        return
     if duration is not None and not 10 <= duration <= 3600:
         raise ValueError('Trial duration must be from 10 to 3600 seconds')
     for unit in ('uu-remote-bridge.service', 'gnome-remote-desktop.service'):
@@ -619,7 +679,10 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                          if verified.get('native_text_revisions_included')
                          else 'single_output_physical_and_pure_unicode_commits')
             event('native_input_ready', input_scope=scope)
-            if native_topology() != topology:
+            current_topology = topology_with_retry(is_stopping)
+            if current_topology is None:
+                return
+            if current_topology != topology:
                 raise RuntimeError('Display layout changed during native input startup')
         if is_stopping():
             return
@@ -658,6 +721,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             topology_failures = [0]
             topology_check = time.monotonic()
             topology_observed_ns = time.monotonic_ns()
+            topology_stabilizer = TopologyStabilizer(topology)
             display_confirmation = confirmation_tools.DisplayConfirmation(directory, prefix,
                 app / 'bin/GameViewerServer.exe', bundle, topology, state_tools.read_private) if display_socket else None
             while not is_stopping() and time.monotonic() < deadline:
@@ -691,17 +755,18 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                             # alone so a later ACK replay window stays honest.
                             topology_check = time.monotonic() + 1
                         else:
-                            if observed_topology != topology:
-                                if preserve_display_session and can_recreate_display_in_place(topology, observed_topology):
+                            accepted_topology = topology_stabilizer.observe(observed_topology)
+                            if accepted_topology is not None:
+                                if preserve_display_session and can_recreate_display_in_place(topology, accepted_topology):
                                     # Target-aware bounded fallback: UU may already
                                     # have recreated video before this topology poll.
                                     if display_confirmation:
-                                        display_confirmation.reset_for_topology(observed_topology, topology_observed_ns)
+                                        display_confirmation.reset_for_topology(accepted_topology, observation_ns)
                                     state_tools.write_private(directory / 'display-reset.json', dict(version=1,
-                                        **observed_topology['modes'][0], after_ns=topology_observed_ns,
-                                        requested_ns=time.monotonic_ns(), require_fresh=topology['modes'] == observed_topology['modes']))
+                                        **accepted_topology['modes'][0], after_ns=observation_ns,
+                                        requested_ns=time.monotonic_ns(), require_fresh=topology['modes'] == accepted_topology['modes']))
                                     broker.send_signal(signal.SIGUSR1)
-                                    topology = observed_topology
+                                    topology = accepted_topology
                                     event('display_mode_changed_recreating_video', generation=topology['generation'],
                                           uu_process_retained=True, remote_recovery_verified=False,
                                           remote_recovery_observation='unavailable_without_vendor_ack')

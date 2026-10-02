@@ -231,14 +231,20 @@ class ClipboardBridge:
 
 def xdg_download_directory(home=None, config_home=None):
     """Return the user's XDG download directory without evaluating shell code."""
+    return xdg_user_directory('DOWNLOAD', home, config_home)
+
+
+def xdg_user_directory(kind, home=None, config_home=None):
+    """Resolve one XDG user directory using only literal ``$HOME`` values."""
     home = Path.home() if home is None else Path(home)
     config_root = config_home or os.environ.get('XDG_CONFIG_HOME')
     config_root = Path(config_root) if config_root else home / '.config'
     user_dirs = config_root / 'user-dirs.dirs'
+    key = f'XDG_{kind}_DIR='
     value = None
     try:
         for line in user_dirs.read_text().splitlines():
-            if not line.startswith('XDG_DOWNLOAD_DIR='):
+            if not line.startswith(key):
                 continue
             try:
                 values = shlex.split(line.split('=', 1)[1], comments=False, posix=True)
@@ -255,7 +261,17 @@ def xdg_download_directory(home=None, config_home=None):
         return home / value[6:]
     if value and value.startswith('/'):
         return Path(value)
-    return home / 'Downloads'
+    defaults = {
+        'DESKTOP': 'Desktop',
+        'DOCUMENTS': 'Documents',
+        'DOWNLOAD': 'Downloads',
+        'MUSIC': 'Music',
+        'PICTURES': 'Pictures',
+        'VIDEOS': 'Videos',
+        'PUBLICSHARE': 'Public',
+        'TEMPLATES': 'Templates',
+    }
+    return home / defaults.get(kind, kind.title())
 
 
 def configured_download_directory(config_directory=None):
@@ -303,7 +319,9 @@ class DownloadPathMapping:
             if self.destination == source_parent or source_parent in self.destination.parents:
                 return False
             if self.source.is_symlink():
-                return self.source.resolve(strict=False) == self.destination
+                if self.source.resolve(strict=False) == self.destination:
+                    return True
+                self.source.unlink()
             if self.source.exists():
                 if not self.source.is_dir():
                     return False
@@ -312,6 +330,114 @@ class DownloadPathMapping:
             return True
         except OSError:
             return False
+
+
+class WinePathMapping:
+    """Safely map a Wine directory to a native Linux directory."""
+
+    def __init__(self, source, destination):
+        self.source = Path(source)
+        self.destination = Path(destination).resolve()
+
+    def _backup_path(self):
+        candidate = self.source.with_name(self.source.name + '.uurb-wine')
+        suffix = 1
+        while candidate.exists() or candidate.is_symlink():
+            candidate = self.source.with_name(self.source.name + f'.uurb-wine-{suffix}')
+            suffix += 1
+        return candidate
+
+    def apply(self):
+        if not self.source.parent.is_dir():
+            return False
+        try:
+            self.destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+            source_parent = self.source.parent.resolve()
+            if self.destination == source_parent or source_parent in self.destination.parents:
+                return False
+            if self.source.is_symlink():
+                if self.source.resolve(strict=False) == self.destination:
+                    return True
+                self.source.unlink()
+            if self.source.exists():
+                if not self.source.is_dir():
+                    return False
+                self.source.rename(self._backup_path())
+            self.source.symlink_to(self.destination, target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+
+class WineUserDirectoryMappings:
+    """Expose the Linux XDG directories through Wine's user profile."""
+
+    DIRECTORIES = (
+        ('Desktop', 'DESKTOP'),
+        ('Documents', 'DOCUMENTS'),
+        ('Downloads', 'DOWNLOAD'),
+        ('Music', 'MUSIC'),
+        ('Pictures', 'PICTURES'),
+        ('Videos', 'VIDEOS'),
+        ('Public', 'PUBLICSHARE'),
+        ('Templates', 'TEMPLATES'),
+    )
+
+    def __init__(self, prefix, home=None, config_home=None, user_name=None):
+        self.prefix = Path(prefix)
+        self.home = Path.home() if home is None else Path(home)
+        self.config_home = config_home
+        users = self.prefix / 'drive_c/users'
+        preferred = user_name or self.home.name
+        self.user_root = users / preferred
+        if not self.user_root.is_dir():
+            candidates = [item for item in users.iterdir() if item.is_dir() and
+                          item.name.lower() not in {'public', 'default', 'default user', 'all users'}] \
+                if users.is_dir() else []
+            self.user_root = candidates[0] if len(candidates) == 1 else users / preferred
+        self.mappings = []
+        if self.user_root.is_dir():
+            for windows_name, xdg_name in self.DIRECTORIES:
+                destination = xdg_user_directory(xdg_name, self.home, self.config_home)
+                self.mappings.append(WinePathMapping(self.user_root / windows_name, destination))
+
+    def apply(self):
+        return {mapping.source.name: mapping.apply() for mapping in self.mappings}
+
+
+class WineDriveMappings:
+    """Keep Wine's C: sandbox and Z: Linux root drive aligned with the host."""
+
+    def __init__(self, prefix):
+        dosdevices = Path(prefix) / 'dosdevices'
+        self.mappings = {
+            'c:': WinePathMapping(dosdevices / 'c:', Path(prefix) / 'drive_c'),
+            'z:': WinePathMapping(dosdevices / 'z:', Path('/')),
+        }
+
+    def apply(self):
+        return {name: mapping.apply() for name, mapping in self.mappings.items()}
+
+
+class LinuxWineMappings:
+    """Apply all non-destructive Wine-to-Linux path mappings in one explicit step."""
+
+    def __init__(self, prefix, config_directory=None, home=None, config_home=None):
+        self.prefix = Path(prefix)
+        self.config_directory = (Path.home() / '.config/uurb' if config_directory is None
+                                 else Path(config_directory))
+        self.home = Path.home() if home is None else Path(home)
+        self.config_home = config_home
+        self.download = DownloadPathMapping(
+            self.prefix, config_directory=self.config_directory)
+        self.user = WineUserDirectoryMappings(
+            self.prefix, self.home, self.config_home)
+        self.drives = WineDriveMappings(self.prefix)
+
+    def apply(self):
+        result = {'drive': self.drives.apply(), 'user': self.user.apply(),
+                  'download': self.download.apply()}
+        return result
 
 
 class DesktopImageMapping:

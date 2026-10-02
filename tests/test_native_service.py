@@ -283,6 +283,58 @@ class DownloadPathMappingTests(unittest.TestCase):
             self.assertEqual(mapping.source.resolve(), custom.resolve())
 
 
+class LinuxWineMappingTests(unittest.TestCase):
+    def test_xdg_profile_directories_follow_linux_user_dirs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / 'home/alice'
+            config_home = root / 'config'
+            config_home.mkdir(parents=True)
+            (config_home / 'user-dirs.dirs').write_text(
+                'XDG_DESKTOP_DIR="$HOME/工作区"\n'
+                'XDG_DOCUMENTS_DIR="$HOME/文档"\n'
+                'XDG_DOWNLOAD_DIR="$HOME/收件箱"\n')
+            prefix = root / 'prefix'
+            user = prefix / 'drive_c/users/alice'
+            user.mkdir(parents=True)
+            result = service.WineUserDirectoryMappings(
+                prefix, home=home, config_home=config_home).apply()
+            self.assertTrue(all(result.values()))
+            self.assertEqual((user / 'Desktop').resolve(), (home / '工作区').resolve())
+            self.assertEqual((user / 'Documents').resolve(), (home / '文档').resolve())
+            self.assertEqual((user / 'Downloads').resolve(), (home / '收件箱').resolve())
+            self.assertTrue((home / 'Music').is_dir())
+            self.assertTrue((user / 'Pictures').is_symlink())
+
+    def test_existing_profile_directory_is_preserved_before_mapping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / 'home/alice'
+            prefix = root / 'prefix'
+            user = prefix / 'drive_c/users/alice'
+            desktop = user / 'Desktop'
+            desktop.mkdir(parents=True)
+            (desktop / 'old.txt').write_text('keep')
+            result = service.WineUserDirectoryMappings(prefix, home=home).apply()
+            self.assertTrue(result['Desktop'])
+            self.assertEqual((desktop.parent / 'Desktop.uurb-wine/old.txt').read_text(), 'keep')
+            self.assertEqual(desktop.resolve(), (home / 'Desktop').resolve())
+
+    def test_drive_mappings_keep_c_sandbox_and_z_linux_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / 'prefix'
+            (prefix / 'drive_c').mkdir(parents=True)
+            dosdevices = prefix / 'dosdevices'
+            dosdevices.mkdir()
+            (dosdevices / 'c:').symlink_to('../drive_c')
+            (dosdevices / 'z:').symlink_to('/')
+            result = service.WineDriveMappings(prefix).apply()
+            self.assertEqual(result, {'c:': True, 'z:': True})
+            self.assertEqual((dosdevices / 'c:').resolve(), (prefix / 'drive_c').resolve())
+            self.assertEqual((dosdevices / 'z:').resolve(), Path('/'))
+
+
 class DesktopImageMappingTests(unittest.TestCase):
     def test_default_penguin_is_written_to_wine_desktop_registry(self):
         with tempfile.TemporaryDirectory() as temporary:
