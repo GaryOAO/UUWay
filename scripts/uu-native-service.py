@@ -11,7 +11,6 @@ import signal
 import shutil
 import subprocess
 import time
-import time
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_service_trial', ROOT / 'scripts/uu-native-trial.py')
@@ -406,8 +405,6 @@ def run(config_path, preserve_display_session=False):
     previous = {s: signal.signal(s, request_stop) for s in (signal.SIGTERM, signal.SIGINT)}
     terminal_bridge = TerminalBridge(Path(config['prefix']), Path(config['state_parent']))
     clipboard_bridge = ClipboardBridge(Path(config['prefix']), Path(config['state_parent']))
-    DesktopImageMapping(Path(config['prefix']), config_path.parent).apply()
-    DownloadPathMapping(Path(config['prefix']), config_directory=config_path.parent).apply()
     try:
         if terminal_bridge.start():
             trial.event('native_terminal_bridge_ready')

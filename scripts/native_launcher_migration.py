@@ -9,6 +9,11 @@ MARKER = '# Managed by UURB native launcher migration\n'
 GUARD = MARKER + '[Unit]\nConditionPathExists=!%h/.config/uurb/native-runtime.json\n'
 RETIRED = (MARKER + '[Desktop Entry]\nType=Application\nName=UU 远程（旧入口，已停用）\n'
            'Exec=/usr/bin/gtk-launch uuway\nHidden=true\nNoDisplay=true\nTerminal=false\n')
+LEGACY_RETIRED = (
+    '# Managed by UURB native launcher migration\n[Desktop Entry]\n'
+    'Type=Application\nName=UU 远程（旧入口，已停用）\n'
+    'Exec=/usr/bin/gtk-launch uurb-settings\nHidden=true\nNoDisplay=true\nTerminal=false\n',
+)
 UNITS = ('uu-remote-bridge', 'uu-remote-console', 'uu-shared-physical-vnc')
 
 
@@ -42,7 +47,7 @@ def owned_text(path):
 
 
 def recognized_menu(text, home, wine):
-    if text == RETIRED or text.startswith(('# Retired UURB launcher:', '# Retired direct Wine launcher;')):
+    if text == RETIRED or text in LEGACY_RETIRED or text.startswith(('# Retired UURB launcher:', '# Retired direct Wine launcher;')):
         return True
     ini = configparser.ConfigParser(interpolation=None)
     try:
