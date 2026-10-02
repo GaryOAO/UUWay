@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import secrets
+import shlex
 import signal
 import shutil
 import subprocess
@@ -229,6 +230,140 @@ class ClipboardBridge:
             self._log = None
 
 
+def xdg_download_directory(home=None, config_home=None):
+    """Return the user's XDG download directory without evaluating shell code."""
+    home = Path.home() if home is None else Path(home)
+    config_root = config_home or os.environ.get('XDG_CONFIG_HOME')
+    config_root = Path(config_root) if config_root else home / '.config'
+    user_dirs = config_root / 'user-dirs.dirs'
+    value = None
+    try:
+        for line in user_dirs.read_text().splitlines():
+            if not line.startswith('XDG_DOWNLOAD_DIR='):
+                continue
+            try:
+                values = shlex.split(line.split('=', 1)[1], comments=False, posix=True)
+            except ValueError:
+                values = []
+            if len(values) == 1:
+                value = values[0]
+            break
+    except (OSError, UnicodeError):
+        pass
+    if value == '$HOME':
+        return home
+    if value and value.startswith('$HOME/'):
+        return home / value[6:]
+    if value and value.startswith('/'):
+        return Path(value)
+    return home / 'Downloads'
+
+
+def configured_download_directory(config_directory=None):
+    """Use an explicit private directory when configured, otherwise XDG."""
+    config_directory = (Path.home() / '.config/uurb' if config_directory is None
+                        else Path(config_directory))
+    try:
+        value = trial.state_tools.read_private(config_directory / 'download-directory.json')
+        if (isinstance(value, dict) and set(value) == {'version', 'path'} and
+                value['version'] == 1 and isinstance(value['path'], str) and
+                value['path'].startswith('/') and '\0' not in value['path']):
+            return Path(value['path']).resolve()
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        pass
+    return xdg_download_directory()
+
+
+class DownloadPathMapping:
+    """Expose UU's Windows receive directory in the Linux download folder."""
+
+    relative_source = Path('drive_c/Program Files/Netease/GameViewer/Download')
+
+    def __init__(self, prefix, destination=None, config_directory=None):
+        self.prefix = Path(prefix)
+        self.source = self.prefix / self.relative_source
+        self.destination = (configured_download_directory(config_directory) if destination is None
+                            else Path(destination)).resolve()
+
+    def _backup_path(self):
+        candidate = self.source.with_name(self.source.name + '.uurb-wine')
+        suffix = 1
+        while candidate.exists() or candidate.is_symlink():
+            candidate = self.source.with_name(self.source.name + f'.uurb-wine-{suffix}')
+            suffix += 1
+        return candidate
+
+    def apply(self):
+        """Create the mapping, preserving an existing Wine directory if needed."""
+        # Do not create a prefix or a host directory for an uninstalled setup.
+        if not self.source.parent.is_dir():
+            return False
+        try:
+            self.destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+            source_parent = self.source.parent.resolve()
+            if self.destination == source_parent or source_parent in self.destination.parents:
+                return False
+            if self.source.is_symlink():
+                return self.source.resolve(strict=False) == self.destination
+            if self.source.exists():
+                if not self.source.is_dir():
+                    return False
+                self.source.rename(self._backup_path())
+            self.source.symlink_to(self.destination, target_is_directory=True)
+            return True
+        except OSError:
+            return False
+
+
+class DesktopImageMapping:
+    """Set the Windows desktop picture UU reports to controllers."""
+
+    def __init__(self, prefix, config_directory=None, default_image=None, runner=None):
+        self.prefix = Path(prefix)
+        self.config_directory = (Path.home() / '.config/uurb' if config_directory is None
+                                 else Path(config_directory))
+        self.default_image = ROOT / 'assets/uuway-penguin.bmp' if default_image is None else Path(default_image)
+        self.runner = subprocess.run if runner is None else runner
+
+    def image(self):
+        path = self.default_image
+        try:
+            value = trial.state_tools.read_private(self.config_directory / 'desktop-image.json')
+            if (isinstance(value, dict) and set(value) == {'version', 'path'} and
+                    value['version'] == 1 and isinstance(value['path'], str) and
+                    value['path'].startswith('/')):
+                path = Path(value['path'])
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            pass
+        try:
+            if not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
+                return None
+        except OSError:
+            return None
+        return path
+
+    def apply(self):
+        if not (self.prefix / 'system.reg').is_file():
+            return False
+        image = self.image()
+        if image is None:
+            return False
+        environment = dict(os.environ, WINEPREFIX=str(self.prefix), WINEDEBUG='-all')
+        key = r'HKCU\Control Panel\Desktop'
+        try:
+            for name, value in (('Wallpaper', trial.winpath(image)),
+                                ('WallpaperStyle', '10'), ('TileWallpaper', '0')):
+                result = self.runner(
+                    [trial.WINE, 'reg', 'add', key, '/v', name, '/t', 'REG_SZ', '/d', value, '/f'],
+                    env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, timeout=10, check=False)
+                if result.returncode != 0:
+                    return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return True
+
+
 def text_configuration(config, config_directory):
     """Explicit backend choice; never fall back after a native IME failure."""
     try:
@@ -271,6 +406,8 @@ def run(config_path, preserve_display_session=False):
     previous = {s: signal.signal(s, request_stop) for s in (signal.SIGTERM, signal.SIGINT)}
     terminal_bridge = TerminalBridge(Path(config['prefix']), Path(config['state_parent']))
     clipboard_bridge = ClipboardBridge(Path(config['prefix']), Path(config['state_parent']))
+    DesktopImageMapping(Path(config['prefix']), config_path.parent).apply()
+    DownloadPathMapping(Path(config['prefix']), config_directory=config_path.parent).apply()
     try:
         if terminal_bridge.start():
             trial.event('native_terminal_bridge_ready')

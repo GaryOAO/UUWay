@@ -1,5 +1,5 @@
 [package]
-name = "uurb-settings"
+name = "uuway-console"
 version = "0.1.0"
 edition = "2021"
 publish = false

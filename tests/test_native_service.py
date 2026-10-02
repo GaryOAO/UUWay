@@ -223,3 +223,104 @@ class ClipboardBridgeTests(unittest.TestCase):
             bridge.stop()
             self.assertIsNotNone(process.poll())
             self.assertIsNone(bridge.process)
+
+
+class DownloadPathMappingTests(unittest.TestCase):
+    def prefix(self, root):
+        app = root / 'prefix/drive_c/Program Files/Netease/GameViewer'
+        app.mkdir(parents=True)
+        return root / 'prefix', app
+
+    def test_maps_gameviewer_receive_directory_to_linux_downloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix, app = self.prefix(root)
+            destination = root / 'Downloads'
+            mapping = service.DownloadPathMapping(prefix, destination)
+
+            self.assertTrue(mapping.apply())
+            self.assertTrue(destination.is_dir())
+            self.assertTrue(mapping.source.is_symlink())
+            self.assertEqual(mapping.source.resolve(), destination.resolve())
+
+    def test_existing_wine_directory_is_preserved_before_mapping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix, app = self.prefix(root)
+            source = app / 'Download'
+            source.mkdir()
+            (source / 'old.bin').write_bytes(b'old')
+            destination = root / 'Downloads'
+
+            self.assertTrue(service.DownloadPathMapping(prefix, destination).apply())
+            self.assertEqual((source.parent / 'Download.uurb-wine' / 'old.bin').read_bytes(), b'old')
+            self.assertTrue(source.is_symlink())
+            self.assertEqual(source.resolve(), destination.resolve())
+
+    def test_conflicting_file_is_left_untouched(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix, app = self.prefix(root)
+            source = app / 'Download'
+            source.write_bytes(b'custom')
+
+            self.assertFalse(service.DownloadPathMapping(prefix, root / 'Downloads').apply())
+            self.assertEqual(source.read_bytes(), b'custom')
+
+    def test_private_custom_download_directory_is_used(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix, app = self.prefix(root)
+            config = root / 'config'
+            config.mkdir(mode=0o700)
+            custom = root / 'received'
+            custom.mkdir()
+            service.trial.state_tools.write_private(config / 'download-directory.json',
+                                                    {'version': 1, 'path': str(custom)})
+            mapping = service.DownloadPathMapping(prefix, config_directory=config)
+            self.assertEqual(mapping.destination, custom.resolve())
+            self.assertTrue(mapping.apply())
+            self.assertEqual(mapping.source.resolve(), custom.resolve())
+
+
+class DesktopImageMappingTests(unittest.TestCase):
+    def test_default_penguin_is_written_to_wine_desktop_registry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / 'prefix'
+            prefix.mkdir()
+            (prefix / 'system.reg').write_text('fixture')
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append((command, kwargs))
+                return type('Result', (), {'returncode': 0})()
+
+            self.assertTrue(service.DesktopImageMapping(
+                prefix, root / 'config', runner=run).apply())
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(calls[0][0][1:4], ['reg', 'add', r'HKCU\Control Panel\Desktop'])
+            self.assertTrue(any('uuway-penguin.bmp' in value for value in calls[0][0]))
+            self.assertEqual(calls[0][1]['env']['WINEPREFIX'], str(prefix))
+
+    def test_custom_image_overrides_the_penguin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / 'prefix'
+            prefix.mkdir()
+            (prefix / 'system.reg').write_text('fixture')
+            config = root / 'config'
+            config.mkdir(mode=0o700)
+            image = root / 'custom.png'
+            image.write_bytes(b'fixture image')
+            image.chmod(0o600)
+            service.trial.state_tools.write_private(config / 'desktop-image.json',
+                                                    {'version': 1, 'path': str(image)})
+            commands = []
+
+            def run(command, **kwargs):
+                commands.append(command)
+                return type('Result', (), {'returncode': 0})()
+
+            self.assertTrue(service.DesktopImageMapping(prefix, config, runner=run).apply())
+            self.assertTrue(any('custom.png' in value for value in commands[0]))

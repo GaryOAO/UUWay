@@ -130,6 +130,15 @@ starts.
 When phone text falls back to the portal, it is pasted through the desktop clipboard; that
 selection is marked `application/x-uurb-transient`, and the bridge does not carry it to the phone.
 
+## File transfer
+
+UU's file-transfer receiver defaults to `C:\\Program Files\\Netease\\GameViewer\\Download`.
+On Linux the native service maps that Wine path to the user's XDG download directory before UU
+starts, so files sent from another device arrive in `~/Downloads` (or the directory configured by
+`~/.config/user-dirs.dirs`). The UUWay console can save an explicit destination in
+`~/.config/uurb/download-directory.json`. An existing Wine receive directory is kept as a
+`.uurb-wine` backup before the mapping is created.
+
 Wine's ANSI code page follows the locale, and UU reads outgoing text in that code page, so the
 service runs Wine with the session `LANG` rather than a desktop-wide `LC_ALL` override — otherwise
 CJK text would arrive on the phone as `?`.

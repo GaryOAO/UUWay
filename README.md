@@ -27,9 +27,12 @@
 | 💻 **远程终端** | ✅ | 打开的是 Linux 登录 shell，会话常驻、可以多开 |
 | 📋 剪贴板 | ✅ | 文本双向实时同步 |
 | 📁 文件：手机 → 电脑 | ✅ | 粘贴时才传输，下载完成前粘贴会等待 |
+| 📁 文件：其他设备 → Linux 电脑 | ✅ | 接收目录映射到 Linux 的 XDG 下载目录 |
 | 📁 文件：电脑 → 手机 | ✅ | 已实现 |
 | 🪟 超级屏（虚拟显示器） | ❌ | 依赖 Windows 内核驱动（IddCx），Wine 无法加载 |
 | 📺 1440p / 4K 60 Hz | ⚠️ | 受显示器（或诱骗器）提供的刷新率限制 |
+
+安装完成后，从应用菜单打开 **UUWay 控制台**。它使用项目已有的 Python + GTK 桥接栈，集中显示服务能力，并可配置输入、文字后端、显示模式、桌面企鹅图片和文件接收目录映射（默认使用 XDG 下载目录）。
 
 已验证 UU 4.42.0.2770，无需任何补丁（[审计记录](docs/releases/4.42.0.2770-native-review.md)）。UUWay 实现的是公开的 Windows 接口，而不是 UU 内部的偏移地址，所以 UU 升级基本不受影响。
 
@@ -80,11 +83,11 @@ git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
 ```
 install.sh  一键安装脚本
 src/        原生后端（Linux 侧与 Windows/Wine 侧）及辅助程序
-scripts/    服务、打包、构建与版本审计工具
+scripts/    服务、打包、构建、版本审计工具及 Python/GTK 控制台
 patches/    DXVK 采集、Mutter 帧节奏、Portal 会话生命周期补丁
 config/     固定版本的构建依赖与 udev 规则
 systemd/    用户服务模板
-native/     控制台（Rust + GTK）
+native/     原生运行时组件
 tests/      单元测试与探针
 docs/       设计说明、构建指南、版本审计
 ```

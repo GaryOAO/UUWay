@@ -30,6 +30,7 @@ you would a Windows PC.
 | 💻 **Remote terminal** | ✅ | Opens your Linux login shell; sessions persist and can run side by side |
 | 📋 Clipboard | ✅ | Text in both directions, in real time |
 | 📁 Files: phone → desktop | ✅ | Transferred when you paste; the paste waits for the download |
+| 📁 Files: other device → Linux desktop | ✅ | The receive directory maps to the Linux XDG downloads directory |
 | 📁 Files: desktop → phone | ✅ | Implemented |
 | 🪟 Super Screen (virtual displays) | ❌ | Needs a Windows kernel driver (IddCx) that Wine cannot load |
 | 📺 1440p / 4K at 60 Hz | ⚠️ | Limited by the refresh rates your display (or dummy plug) advertises |
@@ -91,16 +92,20 @@ in your device list. The installer's messages are in Chinese.
 > UUWay is a **developer preview**: it is in daily use on its development machine, but so far only
 > verified on Ubuntu 24.04 with an RTX 3090.
 
+After installation, open **UUWay Console** from the application menu. It uses the bridge's existing
+Python + GTK stack and exposes service capabilities, input, text backend, display modes, the Linux
+penguin desktop image, and the file receive mapping (XDG Downloads by default).
+
 ## 📦 Repository layout
 
 ```
 install.sh  one-step installer
 src/        native backends (Linux and Windows/Wine sides) and helpers
-scripts/    service, packaging, build and release-audit tooling
+scripts/    service, packaging, build, release-audit tooling and Python/GTK console
 patches/    DXVK capture, Mutter pacing, portal session-lifetime patches
 config/     pinned build inputs and the udev rule
 systemd/    user service templates
-native/     control console (Rust + GTK)
+native/     native runtime components
 tests/      unit tests and probes
 docs/       design notes, build guide, release reviews
 ```

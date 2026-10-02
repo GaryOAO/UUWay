@@ -24,7 +24,7 @@ Paths below use the defaults the tooling expects:
 ```bash
 sudo apt install build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl \
     libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libvulkan-dev glslang-tools \
-    libei-dev fcitx5-modules-dev xvfb xclip python3-gi cargo libgtk-3-dev
+    libei-dev fcitx5-modules-dev xvfb xclip python3-gi gir1.2-gtk-3.0
 ```
 
 Install **WineHQ stable 11** so that `/opt/wine-stable/bin/wine` exists
@@ -74,7 +74,7 @@ scripts/build-uu-native-input.sh       # input bridge, broker and uinput worker
 scripts/build-uu-native-display.sh     # display-mode and DPI backend
 scripts/build-native-ime.sh            # Fcitx5 text-commit add-on
 scripts/build-helpers.sh               # terminal broker/proxy, conpty.dll, clipboard bridge and files helper
-scripts/build-uu-settings.sh           # control console
+scripts/build-uu-settings.sh           # Python/GTK UUWay control console (syntax check)
 scripts/build-pipewire-probe.sh        # capture check used to grant screen-cast permission
 ```
 
@@ -171,7 +171,12 @@ systemctl --user enable --now uu-native-display uu-native-text uu-native-bridge
 
 `--cursor-mode metadata` keeps the pointer out of the video and hands it to UU as DXGI pointer
 data, which is what makes the controller draw your real cursor. Install the console with
-`python3 scripts/install-uu-settings.py`.
+`python3 scripts/install-uu-settings.py` installs the `uuway-console` Python/GTK application and
+the `UUWay 控制台` menu entry. It does not compile Rust or restart a service.
+
+The console is intentionally installed as Python source instead of a GitHub Actions-produced
+single binary: GTK and PyGObject are supplied by the distribution, so this keeps the download
+portable across Ubuntu updates and avoids bundling a second native runtime.
 
 ## 6. Connect
 

@@ -25,7 +25,7 @@ with_console=1
 
 packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libvulkan-dev glslang-tools
-          libei-dev fcitx5-modules-dev xvfb xclip python3-gi cargo libgtk-3-dev)
+          libei-dev fcitx5-modules-dev xvfb xclip python3-gi gir1.2-gtk-3.0)
 
 usage() {
     cat <<'EOF'

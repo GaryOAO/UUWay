@@ -198,10 +198,10 @@ int uurb_settings_gui(int smoke)
 {
     /* Smoke tests never activate or close a user's existing console. Normal
        launches use one session-bus application ID across binary upgrades. */
-    GtkApplication *application = gtk_application_new("io.uurb.Console",
+    GtkApplication *application = gtk_application_new("io.uuway.Console",
         smoke ? G_APPLICATION_NON_UNIQUE : G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(application, "activate", G_CALLBACK(activate), GINT_TO_POINTER(smoke));
-    char *arguments[] = {"uurb-settings", NULL};
+    char *arguments[] = {"uuway-console", NULL};
     int result = g_application_run(G_APPLICATION(application), 1, arguments);
     g_object_unref(application);
     return result;

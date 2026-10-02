@@ -314,7 +314,7 @@ fn main() {
         }
         [arg] if arg == "--help" => {
             println!(
-                "uurb-settings [--smoke-test|--display-check|--status] — UUWay 控制台"
+                "uuway-console [--smoke-test|--display-check|--status] — UUWay 控制台"
             );
             return;
         }
@@ -362,7 +362,7 @@ mod tests {
             .read_exact(&mut random)
             .unwrap();
         let parent = std::env::temp_dir().join(format!(
-            "uurb-settings-test-{:016x}",
+            "uuway-console-test-{:016x}",
             u64::from_ne_bytes(random)
         ));
         fs::create_dir(&parent).unwrap();
