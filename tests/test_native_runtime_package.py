@@ -106,12 +106,23 @@ class PackageIsolationTests(unittest.TestCase):
                         patch.object(service.trial.bundle_tools, 'verify', return_value={
                             'native_ime_deferred_start_included': capable}), \
                         patch.object(service.trial, 'run') as launch:
-                    service.run(root / 'native-runtime.json', preserve_display_session=True)
+                    service.run(root / 'native-runtime.json', preserve_display_session=True,
+                                allow_display_reconfigure=True)
                     args, keywords = launch.call_args
                     self.assertEqual(args[6], 'composited')
                     self.assertEqual(args[7], root / 'state' / ('ime.sock' if backend == 'fcitx' else 'text.sock'))
                     self.assertTrue(args[10])
                     self.assertEqual(keywords['pending_native_ime'], backend == 'fcitx' and capable)
+
+            # A remote UU negotiation must not be allowed to mutate Mutter by
+            # merely passing the legacy preserve-display policy.
+            with patch.object(service.trial.bundle_tools, 'verify', return_value={
+                    'native_ime_deferred_start_included': True}), \
+                    patch.object(service.trial, 'run') as launch:
+                service.run(root / 'native-runtime.json', preserve_display_session=True)
+                args, _ = launch.call_args
+                self.assertIsNone(args[9])
+                self.assertFalse(args[10])
 
     def test_expected_display_remap_reconnects_in_process(self):
         spec = importlib.util.spec_from_file_location('remap_service', ROOT / 'scripts/uu-native-service.py')

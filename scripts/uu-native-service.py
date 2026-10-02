@@ -507,7 +507,7 @@ def text_endpoint(config, config_directory):
     return text_configuration(config, config_directory)[1]
 
 
-def run(config_path, preserve_display_session=False):
+def run(config_path, preserve_display_session=False, allow_display_reconfigure=False):
     trial.private_directory(config_path.parent)
     config = trial.state_tools.read_private(config_path)
     names = {'schema', 'prefix', 'bundle', 'restore_state', 'state_parent', 'text_socket', 'cursor_mode'}
@@ -518,7 +518,12 @@ def run(config_path, preserve_display_session=False):
             raise ValueError('Native service requires absolute configured paths')
     bundle = Path(config['bundle'])
     verified = trial.bundle_tools.verify(bundle)
-    display_socket = Path(config['state_parent']) / 'display.sock' if verified.get('native_display_included') else None
+    # Keep remote UU display requests inside its private Wine/Xvfb session.
+    # Changing the Linux/Mutter mode is an explicit UUWay console action and
+    # must never be a side effect of a phone reconnect or client negotiation.
+    display_socket = (Path(config['state_parent']) / 'display.sock'
+                      if allow_display_reconfigure and verified.get('native_display_included') else None)
+    preserve_display_session = bool(preserve_display_session and allow_display_reconfigure)
     backend, endpoint = text_configuration(config, config_path.parent)
     stopping = False
 
@@ -579,9 +584,11 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--preserve-display-session', action='store_true',
                         help='Opt-in same-output video recreation candidate; requires a geometry-aware bundle')
+    parser.add_argument('--allow-display-reconfigure', action='store_true',
+                        help='Allow remote UU display calls to change the Linux/Mutter mode; disabled by default')
     args = parser.parse_args()
     try:
-        run(args.config, args.preserve_display_session)
+        run(args.config, args.preserve_display_session, args.allow_display_reconfigure)
     except Exception as error:
         # No tracebacks: subprocess exceptions could contain private argv.
         trial.event('native_service_failed', error_type=type(error).__name__)
