@@ -51,6 +51,25 @@ class DisplayGuardian:
             raise ValueError('Unreviewed UU display default')
         return dict(value)
 
+    @staticmethod
+    def target_matches_request(target, request):
+        """Recognize a repeated client request for the already-pending mode.
+
+        UU asks for a read-only verification around an apply and can repeat the
+        apply after it receives WM_DISPLAYCHANGE. Treating that exact request
+        as idempotent avoids a second click being required while still
+        rejecting a different mode during the protected transaction.
+        """
+        if not isinstance(target, dict) or not isinstance(request, dict):
+            return False
+        if target.get('width') != request.get('width') or target.get('height') != request.get('height'):
+            return False
+        scale = request.get('scale')
+        if scale is not None and abs(float(target.get('scale', -1)) - float(scale)) > 0.00001:
+            return False
+        refresh = request.get('refresh', 0)
+        return refresh in (0, 1) or abs(float(target.get('refresh', -1)) - float(refresh)) < 0.75
+
     def save(self, pending):
         # Mode lists are only needed for fresh selection, not recovery. Keep
         # the durable record small and omit monitor names/EDID/serials.
@@ -93,6 +112,16 @@ class DisplayGuardian:
                 raise ValueError('Invalid forced display reset')
             if 'confirmation' in request and (op != 'apply' or request['confirmation'] != 'gpu_frame'):
                 raise ValueError('Unsupported display confirmation policy')
+            if self.transaction.pending is not None:
+                pending_target = self.transaction.pending.get('target')
+                if self.target_matches_request(pending_target, request):
+                    current = self.backend.current()
+                    if op == 'verify':
+                        return dict(verified=True, desktop_changed=True)
+                    remaining = max(0, int(self.deadline - time.monotonic()))
+                    observed = self.transaction.pending.get('observed') or current
+                    return dict(changed=True, serial=observed.get('serial', current.get('serial')),
+                                transaction=self.identifier, confirmation_seconds=remaining)
             if self.backend.identity() != self.identity:
                 raise RuntimeError('Compositor identity changed')
             plan = self.transaction.prepare(request['serial'], request['width'], request['height'],
@@ -103,8 +132,19 @@ class DisplayGuardian:
             self.confirmation_policy = request.get('confirmation', 'manual')
             self.deadline = time.monotonic() + self.timeout
             plan['force_reset'] = request.get('force_reset', False)
+            # A normal UU resolution change must survive the client's later
+            # ChangeDisplaySettings(NULL, NULL, 0) refresh.  That call reads
+            # the owned registry default, so leaving it at the installation
+            # mode causes an apparently random jump back after WM_DISPLAYCHANGE.
+            # Explicit user/global requests keep their scope; ordinary mode
+            # changes inherit the existing scope and use ``user`` on a fresh
+            # journal.  The candidate is still staged and is committed only
+            # by confirmation, so rollback never rewrites the old default.
+            default_scope = request.get('default_scope')
+            if default_scope is None:
+                default_scope = ((self.registry_default or {}).get('scope') or 'user')
             self.registry_candidate = ({k: plan['target'][k] for k in ('width', 'height', 'refresh', 'scale')} |
-                                      {'scope': request['default_scope']}) if 'default_scope' in request else None
+                                      {'scope': default_scope})
             try:
                 result = self.transaction.apply(plan)
                 if not result['changed'] and self.registry_candidate is not None:

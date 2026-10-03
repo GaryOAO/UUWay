@@ -124,6 +124,7 @@ static LONG native_display_set_config(UINT32 paths, DISPLAYCONFIG_PATH_INFO *pat
     struct uurb_display_request request;
     result=native_display_plan_set(paths,&copied,count,copied_modes,flags,&current,&request);
     if (result) return result;
+    if ((flags&SDC_APPLY) && !native_display_reconfigure_enabled) return ERROR_NOT_SUPPORTED;
     BOOL notify=FALSE;
     AcquireSRWLockExclusive(&native_display_cache_lock);
     if (!native_display_refresh(TRUE)) { result=ERROR_GEN_FAILURE;goto done; }

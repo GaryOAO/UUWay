@@ -61,6 +61,27 @@ class ConsoleConfigTests(unittest.TestCase):
                 console._write_json(config / "download-directory.json", {"version": 1, "path": str(target)})
                 self.assertEqual(console._configured_download_directory(), target.resolve())
 
+    def test_desktop_file_uris_escape_paths_and_accept_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            file_path = root / "桌面 文件.txt"
+            file_path.write_text("send")
+            folder = root / "文件夹"
+            folder.mkdir()
+            uris = console._desktop_file_uris([str(file_path), str(folder)])
+            self.assertEqual(len(uris), 2)
+            self.assertTrue(uris[0].startswith("file://"))
+            self.assertIn("%E6%A1%8C%E9%9D%A2%20%E6%96%87%E4%BB%B6.txt", uris[0])
+            self.assertTrue(uris[1].endswith("%E6%96%87%E4%BB%B6%E5%A4%B9"))
+
+    def test_desktop_file_uris_reject_missing_or_special_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaises(ValueError):
+                console._desktop_file_uris([str(root / "missing")])
+            with self.assertRaises(ValueError):
+                console._desktop_file_uris([])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,34 @@ class GuardianTests(unittest.TestCase):
             instance.request(dict(version=1, op='apply', serial=backend.state['serial'], width=3840, height=2160))
             self.assertEqual(guardian.read_private(instance.journal)['confirmation_policy'], 'manual')
 
+    def test_repeated_pending_mode_requests_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend, instance = self.make(directory)
+            first = instance.request(dict(version=1, op='apply', serial=7,
+                                          width=3840, height=2160, refresh=17,
+                                          scale=2, confirmation='gpu_frame'))
+            verify = instance.request(dict(version=1, op='verify', serial=8,
+                                           width=3840, height=2160, refresh=17, scale=2))
+            repeat = instance.request(dict(version=1, op='apply', serial=8,
+                                           width=3840, height=2160, refresh=17,
+                                           scale=2, confirmation='gpu_frame'))
+            self.assertEqual(verify, {'verified': True, 'desktop_changed': True})
+            self.assertEqual(repeat['transaction'], first['transaction'])
+            self.assertEqual(repeat['serial'], 8)
+            self.assertEqual(backend.calls, [True, False])
+
+    def test_normal_apply_persists_confirmed_mode_as_owned_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend, instance = self.make(directory)
+            result = self.apply(instance)
+            self.assertEqual(instance.request(dict(version=1, op='inspect'))['registry']['width'], 3840)
+            instance.request(dict(version=1, op='confirm', serial=backend.state['serial'],
+                                  transaction=result['transaction']))
+            record = guardian.read_private(instance.journal)
+            self.assertEqual(record['registry_default']['width'], 3840)
+            self.assertEqual(record['registry_default']['scope'], 'user')
+            self.assertIsNone(record['registry_candidate'])
+
     def test_unknown_or_verify_confirmation_policy_cannot_mutate_display(self):
         with tempfile.TemporaryDirectory() as directory:
             backend, instance = self.make(directory)
@@ -145,7 +173,7 @@ class GuardianTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             backend, instance = self.make(directory)
             with patch.object(guardian, 'write_private', side_effect=OSError):
-                with self.assertRaises(OSError):
+                with self.assertRaises((OSError, guardian.DisplayDefaultWriteError)):
                     self.apply(instance)
             self.assertEqual(backend.calls, [True])
             self.assertEqual(backend.state['mode'], '1080p')
@@ -155,7 +183,7 @@ class GuardianTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             backend, instance = self.make(directory); result = self.apply(instance)
             with patch.object(guardian, 'write_private', side_effect=OSError):
-                with self.assertRaises(OSError):
+                with self.assertRaises((OSError, guardian.DisplayDefaultWriteError)):
                     instance.request(dict(version=1, op='confirm', transaction=result['transaction'], serial=8))
             self.assertIsNotNone(instance.transaction.pending)
             instance.deadline = 0

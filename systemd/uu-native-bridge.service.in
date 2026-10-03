@@ -13,7 +13,7 @@ StartLimitBurst=5
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-service.py" --config "%h/.config/uurb/native-runtime.json"@DISPLAY_POLICY@
+ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-service.py" --config "%h/.config/uurb/native-runtime.json"@DISPLAY_POLICY@ --allow-display-reconfigure
 Restart=on-failure
 RestartSec=10
 WatchdogSec=30

@@ -49,6 +49,7 @@ static LONG WINAPI native_geometry_device_info_common(DISPLAYCONFIG_DEVICE_INFO_
     int32_t type=(int32_t)header.type;
     if (type!=-3 && type!=-4) return original ? original(packet) : ERROR_NOT_SUPPORTED;
     if (is_set ? type != -4 : type != -3) return ERROR_NOT_SUPPORTED;
+    if (is_set && !native_display_reconfigure_enabled) return ERROR_NOT_SUPPORTED;
     const SIZE_T expected=type==-3 ? sizeof(struct uurb_source_dpi_get) : sizeof(struct uurb_source_dpi_set);
     if (header.size!=expected || !uurb_dpi_source_is_primary(&header)) return ERROR_NOT_SUPPORTED;
     AcquireSRWLockExclusive(&native_display_cache_lock);

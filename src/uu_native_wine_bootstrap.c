@@ -8,7 +8,7 @@
 #include <tlhelp32.h>
 
 struct setting { HKEY hive; const WCHAR *key, *name, *value; };
-static struct setting settings[16];
+static struct setting settings[20];
 static unsigned count;
 static const WCHAR env_key[] = L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
 static const WCHAR *override_keys[] = {
@@ -145,6 +145,21 @@ int wmain(int argc, WCHAR **argv)
     if (display_length >= ARRAYSIZE(display_socket) || (display_length && display_socket[0] != L'/')) return 2;
     if (display_length)
         settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UURB_DISPLAY_SOCKET", display_socket};
+    WCHAR display_allow[8];
+    DWORD display_allow_length = GetEnvironmentVariableW(L"UURB_DISPLAY_ALLOW_CHANGES", display_allow, ARRAYSIZE(display_allow));
+    if (display_allow_length >= ARRAYSIZE(display_allow) ||
+        (display_allow_length && wcscmp(display_allow, L"1"))) return 2;
+    if (display_allow_length)
+        settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UURB_DISPLAY_ALLOW_CHANGES", display_allow};
+    /* The native input injector starts the bridge in a fresh Wine process
+     * environment. Carry the owner-only diagnostics sink through the same
+     * absent-only registry transport so display API calls remain attributable
+     * to this trial instead of disappearing into a shared /tmp file. */
+    WCHAR bridge_log[32768];
+    DWORD bridge_log_length = GetEnvironmentVariableW(L"UU_INPUT_BRIDGE_LOG", bridge_log, ARRAYSIZE(bridge_log));
+    if (bridge_log_length >= ARRAYSIZE(bridge_log)) return 2;
+    if (bridge_log_length)
+        settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UU_INPUT_BRIDGE_LOG", bridge_log};
     for (unsigned i = 0; i < 3; ++i) {
         settings[count++] = (struct setting){HKEY_CURRENT_USER, override_keys[i], L"dxgi", L"native"};
         settings[count++] = (struct setting){HKEY_CURRENT_USER, override_keys[i], L"d3d11", L"native"};

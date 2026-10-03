@@ -316,10 +316,13 @@ def recover_interrupted(prefix, state_parent):
     wine_locale(env)
     env.pop('UURB_CURSOR_STATE_PATH', None)
     env.pop('UURB_DISPLAY_SOCKET', None)
+    env.pop('UURB_DISPLAY_ALLOW_CHANGES', None)
     if journal.get('display_socket') is not None:
         if journal['display_socket'] != str(state_parent / 'display.sock'):
             raise ValueError('Unreviewed display recovery endpoint')
         env['UURB_DISPLAY_SOCKET'] = journal['display_socket']
+    if journal.get('allow_display_reconfigure') is True:
+        env['UURB_DISPLAY_ALLOW_CHANGES'] = '1'
     if journal.get('capture_cursor_mode') in ('metadata', 'composited') or journal.get('embedded_cursor_adapter'):
         env['UURB_CURSOR_STATE_PATH'] = winpath(directory / 'cursor.state')
     if prefix_processes(prefix):
@@ -397,8 +400,10 @@ class TopologyStabilizer:
         self.required = required
         self.candidate = None
         self.count = 0
+        self.candidate_after_ns = 0
+        self.accepted_after_ns = 0
 
-    def observe(self, value):
+    def observe(self, value, after_ns=0):
         if value == self.current:
             self.candidate = None
             self.count = 0
@@ -406,11 +411,13 @@ class TopologyStabilizer:
         if value != self.candidate:
             self.candidate = value
             self.count = 1
+            self.candidate_after_ns = after_ns
         else:
             self.count += 1
         if self.count < self.required:
             return None
         self.current = self.candidate
+        self.accepted_after_ns = self.candidate_after_ns
         self.candidate = None
         self.count = 0
         return self.current
@@ -482,7 +489,7 @@ def validate_text_endpoint(text_socket, state_parent, with_input, pending_native
 
 def run(prefix, bundle, restore_state, state_parent, duration, with_input=False, cursor_mode='embedded', text_socket=None,
         input_access='sudo', display_socket=None, preserve_display_session=False, pending_native_ime=False,
-        stop_requested=None):
+        stop_requested=None, allow_display_reconfigure=False):
     if stop_requested is not None and stop_requested():
         return
     continuous = duration is None
@@ -596,6 +603,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                        capture_cursor_mode=cursor_mode, native_text_requested=text_socket is not None)
         journal['display_socket'] = str(display_socket) if display_socket is not None else None
         journal['preserve_display_session'] = preserve_display_session
+        journal['allow_display_reconfigure'] = allow_display_reconfigure
         journal['pending_native_ime'] = pending_native_ime
         journal['embedded_cursor_adapter'] = bool(with_input and cursor_mode == 'embedded' and verified.get('native_embedded_cursor_included'))
         state_tools.write_private(directory / 'journal.json', journal)
@@ -618,10 +626,12 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         for name in ('WINEDLLPATH', 'UURB_DXGI_CAPTURE_FD', 'UURB_DXGI_CAPTURE_SOCKET', 'UURB_DXGI_CAPTURE_OUTPUT',
                      'UURB_NVENC_SYNTHETIC_OUTPUT', 'VK_INSTANCE_LAYERS', 'DXVK_CONFIG', 'UURB_NATIVE_INPUT_ENABLED',
                      'UURB_X11_INPUT_PORT', 'UURB_X11_INPUT_TOKEN', 'UURB_X11_INPUT_SEMANTIC_ONLY',
-                     'UURB_CURSOR_STATE_PATH', 'UURB_DISPLAY_SOCKET'):
+                     'UURB_CURSOR_STATE_PATH', 'UURB_DISPLAY_SOCKET', 'UURB_DISPLAY_ALLOW_CHANGES'):
             env.pop(name, None)
         if display_socket is not None:
             env['UURB_DISPLAY_SOCKET'] = str(display_socket)
+        if allow_display_reconfigure:
+            env['UURB_DISPLAY_ALLOW_CHANGES'] = '1'
         cursor_args = []
         if cursor_mode in ('metadata', 'composited') or journal['embedded_cursor_adapter']:
             cursor_path = directory / 'cursor.state'
@@ -684,6 +694,13 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                 return
             if current_topology != topology:
                 raise RuntimeError('Display layout changed during native input startup')
+        # Keep the bounded display API trace beside the trial journal.  The
+        # native display adapter and input bridge share this sink; it is owner
+        # only and contains dimensions/flags only, never credentials or
+        # device identifiers.  Without an explicit path the DLL falls back to
+        # a process-global /tmp file, which makes concurrent trials impossible
+        # to attribute and hides feedback loops between UU and the bridge.
+        env['UU_INPUT_BRIDGE_LOG'] = winpath(directory / 'display-trace.log')
         if is_stopping():
             return
         with (directory / 'capture.log').open('w') as capture_log, (directory / 'wine.log').open('w') as wine_log:
@@ -755,13 +772,18 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                             # alone so a later ACK replay window stays honest.
                             topology_check = time.monotonic() + 1
                         else:
-                            accepted_topology = topology_stabilizer.observe(observed_topology)
+                            accepted_topology = topology_stabilizer.observe(observed_topology, observation_ns)
                             if accepted_topology is not None:
                                 if preserve_display_session and can_recreate_display_in_place(topology, accepted_topology):
                                     # Target-aware bounded fallback: UU may already
                                     # have recreated video before this topology poll.
                                     if display_confirmation:
-                                        display_confirmation.reset_for_topology(accepted_topology, observation_ns)
+                                        # A new-size frame can arrive before the
+                                        # three-poll debounce completes. Fence at
+                                        # the last observation before the candidate,
+                                        # not at the third poll (which loses its ACK).
+                                        display_confirmation.reset_for_topology(
+                                            accepted_topology, topology_stabilizer.accepted_after_ns)
                                     state_tools.write_private(directory / 'display-reset.json', dict(version=1,
                                         **accepted_topology['modes'][0], after_ns=observation_ns,
                                         requested_ns=time.monotonic_ns(), require_fresh=topology['modes'] == accepted_topology['modes']))

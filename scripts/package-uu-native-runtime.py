@@ -497,7 +497,16 @@ def verify(directory):
 
 CAPTURE_BACKEND_COMPONENT = 'app/bin/uurb-dxgi-capture.dll.so'
 # Components a source-only repack may swap one by one: same ABI and contract.
-REPLACEABLE_COMPONENTS = (CAPTURE_BACKEND_COMPONENT, 'runtime/uu-native-input')
+# The bootstrap is included here because display reconfiguration policy is
+# carried through Wine registry values during process startup.  Reusing an
+# older bootstrap with a newer input bridge silently leaves the bridge in
+# read-only mode, so the two artifacts must be replaceable in one atomic
+# content-addressed repack.
+REPLACEABLE_COMPONENTS = (
+    CAPTURE_BACKEND_COMPONENT,
+    'runtime/uu-native-input',
+    'runtime/bootstrap.exe',
+)
 
 
 def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bridge=None,
@@ -558,10 +567,22 @@ def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bri
             else:
                 contract = NATIVE_IME_INPUT_CONTRACT
             if replace_input_bridge is not None:
-                if base_contract not in (DEFERRED_IME_INPUT_CONTRACT, INPUT_CONTRACT):
-                    raise ValueError('Input bridge replacement requires a verified schema33 or schema35 runtime')
+                if base_contract not in (DEFERRED_IME_INPUT_CONTRACT, INPUT_CONTRACT,
+                                         DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT):
+                    raise ValueError('Input bridge replacement requires a verified schema33/35/36/37 runtime')
                 sources[INPUT_BRIDGE_COMPONENT] = replace_input_bridge
-                contract = INPUT_CONTRACT
+                # Preserve the display ABI of the reused runtime.  A v2
+                # bridge cannot be paired with a v1 loader, and downgrading a
+                # v2 bundle would silently remove the complete mode list.
+                if base_contract == DPI_V2_INPUT_CONTRACT:
+                    verify_pe_export(sources[INPUT_BRIDGE_COMPONENT], DISPLAY_DPI_V2_EXPORT,
+                                     'Input bridge')
+                    contract = DPI_V2_INPUT_CONTRACT
+                else:
+                    if has_export(verify_pe_export, sources[INPUT_BRIDGE_COMPONENT], DISPLAY_DPI_V2_EXPORT):
+                        raise ValueError('Input bridge replacement requires matching DPI v2 display runtime')
+                    verify_display_set_bridge(sources[INPUT_BRIDGE_COMPONENT])
+                    contract = DPI_INPUT_CONTRACT if base_contract == DPI_INPUT_CONTRACT else INPUT_CONTRACT
             if replace_display_runtime is not None:
                 if base_contract not in (INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT):
                     raise ValueError('Display runtime replacement requires a verified schema35/36/37 runtime')
@@ -619,7 +640,7 @@ if __name__ == '__main__':
     create.add_argument('--reuse-runtime-from', type=Path,
                         help='Copy unchanged native components from a verified compatible bundle, updating only main scripts')
     create.add_argument('--replace-input-bridge', type=Path,
-                        help='With a verified schema33/35 runtime, replace only this explicit capability-checked x64 input DLL')
+                        help='With a verified schema33/35/36/37 runtime, replace only this explicit capability-checked x64 input DLL')
     create.add_argument('--replace-display-runtime', type=Path,
                         help='With a verified schema35/36 runtime, replace the input bridge and native display loader/.so together to publish DPI support')
     create.add_argument('--replace-capture-backend', type=Path,

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360" role="img" aria-labelledby="title desc">
+  <title id="title">UUWay Linux desktop</title>
+  <desc id="desc">A polished Linux penguin with a quiet UUWay bridge mark</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="640" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0d2238"/>
+      <stop offset="0.55" stop-color="#113e54"/>
+      <stop offset="1" stop-color="#0a6264"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(184 162) rotate(90) scale(165 174)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4ed8cf" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#4ed8cf" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="belly" x1="188" y1="142" x2="188" y2="304" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8e8ee"/>
+    </linearGradient>
+    <linearGradient id="beak" x1="177" y1="123" x2="199" y2="143" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffd45a"/>
+      <stop offset="1" stop-color="#ee9b17"/>
+    </linearGradient>
+    <linearGradient id="foot" x1="155" y1="296" x2="218" y2="325" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffd047"/>
+      <stop offset="1" stop-color="#e99613"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <circle cx="184" cy="166" r="168" fill="url(#halo)"/>
+  <path d="M35 310H605" stroke="#91e7df" stroke-opacity=".13"/>
+  <path d="M48 77C117 17 225 13 299 57" fill="none" stroke="#9fe9e2" stroke-opacity=".2" stroke-width="2"/>
+  <path d="M46 309C115 347 209 343 276 303C325 273 340 229 375 181C402 145 444 129 495 142" fill="none" stroke="#72e4d5" stroke-opacity=".78" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="47" cy="309" r="5" fill="#62e0d1"/>
+  <circle cx="495" cy="142" r="5" fill="#8ad7ff"/>
+
+  <ellipse cx="188" cy="324" rx="91" ry="13" fill="#061521" opacity=".42" filter="url(#shadow)"/>
+  <!-- Tux-inspired silhouette: smooth shapes, restrained outlines, generous margin. -->
+  <path d="M188 43c-43 0-67 35-66 83l3 126c1 39 23 61 63 61s62-22 63-61l3-126c1-48-23-83-66-83z" fill="#111d2a"/>
+  <path d="M131 151c-25 10-46 37-48 61-2 15 6 23 18 18 19-8 36-32 43-62z" fill="#172c3c" stroke="#0a1724" stroke-width="3"/>
+  <path d="M245 151c25 10 46 37 48 61 2 15-6 23-18 18-19-8-36-32-43-62z" fill="#172c3c" stroke="#0a1724" stroke-width="3"/>
+  <ellipse cx="160" cy="86" rx="32" ry="29" fill="#111d2a"/>
+  <ellipse cx="216" cy="86" rx="32" ry="29" fill="#111d2a"/>
+  <ellipse cx="164" cy="91" rx="14" ry="15" fill="#f7fbfd"/>
+  <ellipse cx="212" cy="91" rx="14" ry="15" fill="#f7fbfd"/>
+  <circle cx="167" cy="94" r="5" fill="#1d496b"/>
+  <circle cx="209" cy="94" r="5" fill="#1d496b"/>
+  <path d="M169 116h38l-19 24z" fill="url(#beak)"/>
+  <path d="M188 125l-5 8h10z" fill="#fff0a8" opacity=".8"/>
+  <path d="M188 134c-38 0-54 31-51 83 2 47 18 70 51 70s49-23 51-70c3-52-13-83-51-83z" fill="url(#belly)" stroke="#c8dce5" stroke-width="2"/>
+  <path d="M156 303c-19 0-34 8-34 18 0 9 14 14 36 14 19 0 33-5 33-13 0-10-16-19-35-19z" fill="url(#foot)" stroke="#c77f12" stroke-width="2"/>
+  <path d="M220 303c19 0 34 8 34 18 0 9-14 14-36 14-19 0-33-5-33-13 0-10 16-19 35-19z" fill="url(#foot)" stroke="#c77f12" stroke-width="2"/>
+  <path d="M139 143c5-7 10-11 17-14M237 129c7 3 12 7 17 14" fill="none" stroke="#38566a" stroke-width="3" stroke-linecap="round" opacity=".65"/>
+
+  <g transform="translate(394 203)">
+    <path d="M0 0h58" stroke="#8df2df" stroke-width="3" stroke-linecap="round"/>
+    <path d="M29-29v58" stroke="#8df2df" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="7" fill="#5de0d0"/>
+    <circle cx="58" cy="0" r="7" fill="#89d8ff"/>
+    <circle cx="29" cy="-29" r="5" fill="#89d8ff"/>
+    <circle cx="29" cy="29" r="5" fill="#5de0d0"/>
+  </g>
+  <text x="386" y="267" fill="#f4fbfd" font-family="Inter, Noto Sans, sans-serif" font-size="44" font-weight="700" letter-spacing="1">UUWay</text>
+  <text x="390" y="291" fill="#b8dfe3" font-family="Inter, Noto Sans, sans-serif" font-size="12" font-weight="600" letter-spacing="3">LINUX BRIDGE</text>
+  <path d="M390 308h179" stroke="#7ee8d8" stroke-width="2" stroke-linecap="round" opacity=".8"/>
+  <text x="390" y="330" fill="#d4eff0" font-family="Inter, Noto Sans, sans-serif" font-size="13">Remote desktop · native to Linux</text>
+</svg>

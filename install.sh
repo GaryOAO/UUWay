@@ -278,7 +278,8 @@ if should_run 6; then
     ok "运行时：$bundle"
     run "$python" scripts/install-uu-native-service.py \
         --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
-        --state-parent "$state_dir" --text-socket "$state_dir/text.sock" --cursor-mode metadata
+        --state-parent "$state_dir" --text-socket "$state_dir/text.sock" --cursor-mode metadata \
+        --preserve-display-session
 
     # Apply Wine's Linux path view while the bridge is stopped.  Keeping this
     # out of the long-lived service avoids racing Wine initialization on boot.

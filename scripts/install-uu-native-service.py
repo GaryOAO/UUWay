@@ -38,12 +38,14 @@ def existing_display_policy(content):
     if len(commands) != 1:
         raise ValueError('Unrecognized managed main service command')
     command = commands[0]
-    if (len(command) not in (4, 5) or command[0] != '/usr/bin/python3' or
+    if (len(command) not in (4, 5, 6) or command[0] != '/usr/bin/python3' or
             not command[1].endswith('/scripts/uu-native-service.py') or
             command[2:4] != ['--config', '%h/.config/uurb/native-runtime.json'] or
-            (len(command) == 5 and command[4] != '--preserve-display-session')):
+            any(option not in ('--preserve-display-session', '--allow-display-reconfigure')
+                for option in command[4:]) or
+            len(command[4:]) != len(set(command[4:]))):
         raise ValueError('Unrecognized managed main service options; preserving existing file')
-    return len(command) == 5
+    return '--preserve-display-session' in command[4:]
 
 
 def install(bundle, prefix, restore_state, state_parent, text_socket, cursor_mode=None, preserve_display_session=None):

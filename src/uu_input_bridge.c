@@ -566,8 +566,9 @@ static DWORD WINAPI initialize_bridge(void *unused)
         char message[128];
         snprintf(message, sizeof(message), "UURB_NATIVE_IMPORTS {\"additional_sendinput_slots\":%u}\r\n", additional);
         write_log(message);
-        snprintf(message, sizeof(message), "UURB_NATIVE_DISPLAY {\"import_slots\":%ld,\"passthrough_only\":%s}\r\n",
-                 native_display_import_slots, display_status ? "false" : "true");
+        snprintf(message, sizeof(message), "UURB_NATIVE_DISPLAY {\"import_slots\":%ld,\"passthrough_only\":%s,\"reconfigure_enabled\":%s}\r\n",
+                 native_display_import_slots, display_status ? "false" : "true",
+                 native_display_reconfigure_enabled ? "true" : "false");
         write_log(message);
         snprintf(message, sizeof(message), "UURB_NATIVE_TERMINAL {\"event\":\"hooks_ready\",\"import_slots\":%ld}\r\n",
                  native_terminal_import_slots);

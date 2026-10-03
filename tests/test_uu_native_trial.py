@@ -172,6 +172,20 @@ class CleanupTests(unittest.TestCase):
 
 
 class TopologyPollTests(unittest.TestCase):
+    def test_debounce_retains_first_candidate_frame_fence(self):
+        stabilizer = trial.TopologyStabilizer({'width': 1920}, required=3)
+        target = {'width': 1280}
+        self.assertIsNone(stabilizer.observe(target, 100))
+        self.assertIsNone(stabilizer.observe(target, 200))
+        self.assertEqual(stabilizer.observe(target, 300), target)
+        self.assertEqual(stabilizer.accepted_after_ns, 100)
+        # A different candidate starts its own fence.
+        self.assertIsNone(stabilizer.observe({'width': 1600}, 400))
+        self.assertIsNone(stabilizer.observe({'width': 1920}, 500))
+        self.assertIsNone(stabilizer.observe({'width': 1920}, 600))
+        self.assertEqual(stabilizer.observe({'width': 1920}, 700), {'width': 1920})
+        self.assertEqual(stabilizer.accepted_after_ns, 500)
+
     def test_topology_changes_are_debounced_until_stable(self):
         initial = dict(generation=1, connectors=['a'], layout=[], modes=[dict(width=1024, height=768)])
         next_mode = dict(generation=1, connectors=['a'], layout=[], modes=[dict(width=1920, height=1080)])

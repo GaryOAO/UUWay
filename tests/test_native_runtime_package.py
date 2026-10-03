@@ -104,7 +104,8 @@ class PackageIsolationTests(unittest.TestCase):
                 service.trial.state_tools.write_private(root / 'text-backend.json', dict(version=1, backend=backend))
                 with self.subTest(backend=backend, capable=capable), \
                         patch.object(service.trial.bundle_tools, 'verify', return_value={
-                            'native_ime_deferred_start_included': capable}), \
+                            'native_ime_deferred_start_included': capable,
+                            'native_display_included': True}), \
                         patch.object(service.trial, 'run') as launch:
                     service.run(root / 'native-runtime.json', preserve_display_session=True,
                                 allow_display_reconfigure=True)
@@ -113,16 +114,19 @@ class PackageIsolationTests(unittest.TestCase):
                     self.assertEqual(args[7], root / 'state' / ('ime.sock' if backend == 'fcitx' else 'text.sock'))
                     self.assertTrue(args[10])
                     self.assertEqual(keywords['pending_native_ime'], backend == 'fcitx' and capable)
+                    self.assertEqual(args[9], root / 'state' / 'display.sock')
 
             # A remote UU negotiation must not be allowed to mutate Mutter by
             # merely passing the legacy preserve-display policy.
             with patch.object(service.trial.bundle_tools, 'verify', return_value={
-                    'native_ime_deferred_start_included': True}), \
+                'native_ime_deferred_start_included': True,
+                'native_display_included': True}), \
                     patch.object(service.trial, 'run') as launch:
                 service.run(root / 'native-runtime.json', preserve_display_session=True)
                 args, _ = launch.call_args
-                self.assertIsNone(args[9])
+                self.assertEqual(args[9], root / 'state' / 'display.sock')
                 self.assertFalse(args[10])
+                self.assertFalse(launch.call_args.kwargs['allow_display_reconfigure'])
 
     def test_expected_display_remap_reconnects_in_process(self):
         spec = importlib.util.spec_from_file_location('remap_service', ROOT / 'scripts/uu-native-service.py')
@@ -214,6 +218,50 @@ class PackageIsolationTests(unittest.TestCase):
                     if name != package.INPUT_BRIDGE_COMPONENT:
                         self.assertEqual((updated / name).read_bytes(), (base / name).read_bytes(), name)
                 self.assertTrue(package.verify(updated)['native_display_set_config_included'])
+
+    def test_explicit_bridge_replacement_preserves_schema37_display_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); self.fixture(root)
+            with patch.object(package, 'ROOT', root):
+                runtime = root / 'display-runtime-v2'; runtime.mkdir()
+                for name, data in {
+                    'runtime/native-input-bridge.dll': self.pe_input_bridge(
+                        export='UurbInputBridgeDisplayDpiV2Version'),
+                    'runtime/uurb-native-display-loader.dll': self.pe_input_bridge(
+                        export='UurbDisplayQueryV2'),
+                    'runtime/uurb-native-display.dll.so': self.elf_query_v2(),
+                }.items():
+                    (runtime / package.DISPLAY_RUNTIME_SOURCE_NAMES[name]).write_bytes(data)
+                original = Path(package.package(root / 'releases', with_input=True)['bundle'])
+                base = Path(package.package(root / 'releases', with_input=True,
+                                            reuse_runtime_from=original,
+                                            replace_display_runtime=runtime)['bundle'])
+                replacement = root / 'replacement-v2.dll'
+                replacement.write_bytes(self.pe_input_bridge(
+                    export='UurbInputBridgeDisplayDpiV2Version'))
+                updated = Path(package.package(root / 'releases', with_input=True,
+                                               reuse_runtime_from=base,
+                                               replace_input_bridge=replacement)['bundle'])
+                manifest = json.loads((updated / 'manifest.json').read_text())
+                self.assertEqual(manifest['contract'], package.DPI_V2_INPUT_CONTRACT)
+                result = package.verify(updated)
+                self.assertEqual(result['native_display_abi_version'], 2)
+                self.assertTrue(result['native_display_dpi_v2_included'])
+                self.assertEqual((updated / package.INPUT_BRIDGE_COMPONENT).read_bytes(),
+                                 replacement.read_bytes())
+
+    def test_bridge_replacement_rejects_v2_bridge_on_v1_display_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); self.fixture(root)
+            with patch.object(package, 'ROOT', root):
+                base = Path(package.package(root / 'releases', with_input=True)['bundle'])
+                replacement = root / 'replacement-v2.dll'
+                replacement.write_bytes(self.pe_input_bridge(
+                    export='UurbInputBridgeDisplayDpiV2Version'))
+                with self.assertRaisesRegex(ValueError, 'matching DPI v2 display runtime'):
+                    package.package(root / 'releases', with_input=True,
+                                    reuse_runtime_from=base,
+                                    replace_input_bridge=replacement)
 
     def test_explicit_bridge_replacement_rejects_invalid_pe_or_missing_marker(self):
         with tempfile.TemporaryDirectory() as temporary:

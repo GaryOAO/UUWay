@@ -13,6 +13,7 @@ static struct uurb_display_mode native_display_initial;
 static SRWLOCK native_display_cache_lock = SRWLOCK_INIT;
 static ULONGLONG native_display_cache_time;
 static BOOL native_display_adapter_enabled;
+static BOOL native_display_reconfigure_enabled;
 
 static int native_display_adapter_initialize(void)
 {
@@ -22,6 +23,10 @@ static int native_display_adapter_initialize(void)
     if (size >= ARRAYSIZE(endpoint) || endpoint[0] != L'/' ||
         !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, endpoint, -1, native_display_endpoint,
                              sizeof(native_display_endpoint), NULL, NULL)) return -1;
+    WCHAR allow[8];
+    DWORD allow_size = GetEnvironmentVariableW(L"UURB_DISPLAY_ALLOW_CHANGES", allow, ARRAYSIZE(allow));
+    if (allow_size >= ARRAYSIZE(allow) || (allow_size && wcscmp(allow, L"1"))) return -1;
+    native_display_reconfigure_enabled = allow_size == 1;
     HMODULE self, loader;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         (LPCWSTR)(uintptr_t)&native_display_adapter_enabled, &self)) return -1;
@@ -92,6 +97,15 @@ static LONG native_display_change_mode(LPCWSTR device, DEVMODEW *mode, HWND wind
     if (flags & CDS_NORESET) return DISP_CHANGE_NOTUPDATED;
     if ((flags & CDS_GLOBAL) && !(flags & CDS_UPDATEREGISTRY)) return DISP_CHANGE_BADFLAGS;
     if (flags & ~(CDS_TEST | CDS_FULLSCREEN | CDS_RESET | CDS_UPDATEREGISTRY | CDS_GLOBAL)) return DISP_CHANGE_BADFLAGS;
+    /* Keep the full native mode catalogue visible, but make host mutation an
+     * explicit supervised policy.  CDS_TEST remains a read-only validation. */
+    if (!native_display_reconfigure_enabled && !(flags & CDS_TEST)) return DISP_CHANGE_NOTUPDATED;
+    /* UU calls ChangeDisplaySettingsEx(NULL, NULL, 0, ...) while refreshing
+     * its window state.  Wine interprets that as "apply the registry default";
+     * doing so here replays an old mode immediately after a confirmed native
+     * change and creates the observed 1024↔1280 oscillation.  An explicit
+     * CDS_RESET remains the opt-in path for restoring that default. */
+    if (!mode && !(flags & CDS_RESET) && !(flags & CDS_TEST)) return DISP_CHANGE_SUCCESSFUL;
     DEVMODEW copied;
     if (mode) {
         SIZE_T bytes;

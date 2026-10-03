@@ -1,23 +1,47 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">UUWay Linux bridge</title>
+  <desc id="desc">A restrained Linux penguin and a UUWay connection path</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#102a43"/>
-      <stop offset="1" stop-color="#0b7285"/>
+    <linearGradient id="surface" x1="18" y1="12" x2="238" y2="244" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12263b"/>
+      <stop offset="1" stop-color="#0b4a58"/>
+    </linearGradient>
+    <linearGradient id="line" x1="30" y1="215" x2="223" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="128" y1="96" x2="128" y2="224" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dce8f0"/>
     </linearGradient>
   </defs>
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
-  <circle cx="96" cy="30" r="13" fill="#ffd166" opacity=".95"/>
-  <ellipse cx="64" cy="67" rx="34" ry="42" fill="#101820" stroke="#07131f" stroke-width="3"/>
-  <ellipse cx="64" cy="73" rx="22" ry="28" fill="#f5f7fb"/>
-  <ellipse cx="64" cy="47" rx="26" ry="22" fill="#101820"/>
-  <circle cx="54" cy="45" r="7" fill="#f5f7fb"/>
-  <circle cx="74" cy="45" r="7" fill="#f5f7fb"/>
-  <circle cx="54" cy="45" r="3" fill="#102a43"/>
-  <circle cx="74" cy="45" r="3" fill="#102a43"/>
-  <path d="M58 51h12l-6 10z" fill="#f59f00"/>
-  <ellipse cx="43" cy="103" rx="17" ry="7" fill="#f59f00" stroke="#c87900" stroke-width="2"/>
-  <ellipse cx="85" cy="103" rx="17" ry="7" fill="#f59f00" stroke="#c87900" stroke-width="2"/>
-  <path d="M25 113h78" stroke="#70d6c7" stroke-width="3" stroke-linecap="round" opacity=".9"/>
-  <text x="64" y="119" text-anchor="middle" font-family="sans-serif" font-size="10" font-weight="700" letter-spacing="2" fill="#ffffff">UUWAY</text>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#surface)"/>
+  <path d="M30 205C62 236 116 241 161 220c29-14 49-39 64-73" fill="none" stroke="url(#line)" stroke-width="7" stroke-linecap="round" opacity=".9"/>
+  <circle cx="31" cy="205" r="6" fill="#5eead4"/>
+  <circle cx="225" cy="147" r="6" fill="#7dd3fc"/>
+  <path d="M39 72c41-37 100-42 150-11 18 11 32 24 43 40" fill="none" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round" opacity=".22"/>
+
+  <!-- Tux-inspired silhouette, kept inside the tile with generous breathing room. -->
+  <path d="M73 115c-1-40 20-73 55-73s56 33 55 73l-3 67c-2 38-20 58-52 58s-50-20-52-58z" fill="#111c2b" stroke="#07111d" stroke-width="4"/>
+  <path d="M77 111c-15 7-30 23-34 41-3 13 3 20 13 16 15-6 28-26 33-44z" fill="#192c3e" stroke="#07111d" stroke-width="4"/>
+  <path d="M179 111c15 7 30 23 34 41 3 13-3 20-13 16-15-6-28-26-33-44z" fill="#192c3e" stroke="#07111d" stroke-width="4"/>
+  <ellipse cx="108" cy="78" rx="25" ry="23" fill="#111c2b"/>
+  <ellipse cx="148" cy="78" rx="25" ry="23" fill="#111c2b"/>
+  <ellipse cx="110" cy="79" rx="10" ry="11" fill="#f8fbfd"/>
+  <ellipse cx="146" cy="79" rx="10" ry="11" fill="#f8fbfd"/>
+  <circle cx="112" cy="81" r="4" fill="#123b5d"/>
+  <circle cx="144" cy="81" r="4" fill="#123b5d"/>
+  <path d="M112 96h32l-16 20z" fill="#f5b51b" stroke="#c87e08" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M128 101l-4 7h8z" fill="#ffe08a" opacity=".85"/>
+  <path d="M128 103c-31 0-44 26-42 69 2 36 15 51 42 51s40-15 42-51c2-43-11-69-42-69z" fill="url(#belly)" stroke="#c7d7e2" stroke-width="2"/>
+  <path d="M96 224c-14 0-26 7-26 14 0 7 11 11 27 11 14 0 25-4 25-10 0-8-12-15-26-15z" fill="#f5b51b" stroke="#c87e08" stroke-width="3"/>
+  <path d="M160 224c14 0 26 7 26 14 0 7-11 11-27 11-14 0-25-4-25-10 0-8 12-15 26-15z" fill="#f5b51b" stroke="#c87e08" stroke-width="3"/>
+  <path d="M83 119c4-5 8-8 12-10M173 109c4 2 8 5 12 10" fill="none" stroke="#314a5d" stroke-width="3" stroke-linecap="round" opacity=".65"/>
+
+  <g transform="translate(128 232)">
+    <path d="M-24 0h48" stroke="#8af0df" stroke-width="2" stroke-linecap="round" opacity=".9"/>
+    <circle cx="-31" cy="0" r="3" fill="#5eead4"/>
+    <circle cx="31" cy="0" r="3" fill="#7dd3fc"/>
+  </g>
 </svg>

@@ -518,11 +518,11 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
             raise ValueError('Native service requires absolute configured paths')
     bundle = Path(config['bundle'])
     verified = trial.bundle_tools.verify(bundle)
-    # Keep remote UU display requests inside its private Wine/Xvfb session.
-    # Changing the Linux/Mutter mode is an explicit UUWay console action and
-    # must never be a side effect of a phone reconnect or client negotiation.
+    # Expose the native display catalogue to UU so its mode list stays
+    # complete.  The native bridge is read-only by default; only an explicit
+    # opt-in enables remote writes to Mutter.
     display_socket = (Path(config['state_parent']) / 'display.sock'
-                      if allow_display_reconfigure and verified.get('native_display_included') else None)
+                      if verified.get('native_display_included') else None)
     preserve_display_session = bool(preserve_display_session and allow_display_reconfigure)
     backend, endpoint = text_configuration(config, config_path.parent)
     stopping = False
@@ -549,6 +549,7 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
                           Path(config['state_parent']), None, True, config['cursor_mode'], endpoint, 'user', display_socket,
                           preserve_display_session,
                           pending_native_ime=backend == 'fcitx' and verified.get('native_ime_deferred_start_included', False),
+                          allow_display_reconfigure=allow_display_reconfigure,
                           stop_requested=lambda: stopping)
                 return
             except RuntimeError as error:
@@ -585,7 +586,7 @@ if __name__ == '__main__':
     parser.add_argument('--preserve-display-session', action='store_true',
                         help='Opt-in same-output video recreation candidate; requires a geometry-aware bundle')
     parser.add_argument('--allow-display-reconfigure', action='store_true',
-                        help='Allow remote UU display calls to change the Linux/Mutter mode; disabled by default')
+                        help='Allow remote UU display calls to change the Linux/Mutter mode; installed services enable this')
     args = parser.parse_args()
     try:
         run(args.config, args.preserve_display_session, args.allow_display_reconfigure)

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from urllib.parse import quote
 
 RELEASE_ROOT = Path(__file__).resolve().parent
 ROOT = (RELEASE_ROOT.parent if (RELEASE_ROOT.parent / "assets").is_dir()
@@ -30,6 +31,8 @@ CONFIG_DIR = Path.home() / ".config/uurb"
 DOWNLOAD_RELATIVE = Path("drive_c/Program Files/Netease/GameViewer/Download")
 MAX_JSON = 65536
 MAX_IMAGE = 16 * 1024 * 1024
+MAX_DESKTOP_SEND_FILES = 256
+MAX_DESKTOP_SEND_PATH = 4096
 
 
 def _private_dir(path):
@@ -140,6 +143,33 @@ def _desktop_image():
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         pass
     return DEFAULT_IMAGE, True
+
+
+def _desktop_file_uris(paths):
+    """Validate selected Linux files and return clipboard-ready file URIs."""
+    if not isinstance(paths, (list, tuple)) or not paths or len(paths) > MAX_DESKTOP_SEND_FILES:
+        raise ValueError("请选择 1–256 个文件或目录")
+    result = []
+    for raw in paths:
+        if not isinstance(raw, (str, os.PathLike)):
+            raise ValueError("桌面发送路径无效")
+        path = Path(raw)
+        if not path.is_absolute() or len(str(path)) > MAX_DESKTOP_SEND_PATH:
+            raise ValueError("桌面发送路径必须是短的绝对路径")
+        try:
+            resolved = path.resolve(strict=True)
+            info = resolved.stat()
+        except OSError as error:
+            raise ValueError("桌面发送路径不可读取") from error
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+            raise ValueError("只能发送普通文件或目录")
+        # Path.as_uri handles the file:// form but leaves no room for a
+        # malformed control character in a selected name.
+        uri = "file://" + quote(str(resolved), safe="/:@")
+        if len(uri) > MAX_DESKTOP_SEND_PATH * 3:
+            raise ValueError("桌面发送路径过长")
+        result.append(uri)
+    return result
 
 
 def _mapping_state():
@@ -501,6 +531,32 @@ class Console:
         except OSError as error:
             self.message(f"恢复默认图片失败：{error}")
 
+    def send_desktop_files(self, button):
+        """Publish selected Linux files to the UU clipboard bridge."""
+        dialog = self.Gtk.FileChooserDialog(
+            "选择要发送到手机的文件", self.window, self.Gtk.FileChooserAction.OPEN,
+            ("取消", self.Gtk.ResponseType.CANCEL, "发送", self.Gtk.ResponseType.OK))
+        dialog.set_select_multiple(True)
+        file_filter = self.Gtk.FileFilter()
+        file_filter.set_name("文件和目录")
+        file_filter.add_pattern("*")
+        dialog.add_filter(file_filter)
+        try:
+            if dialog.run() != self.Gtk.ResponseType.OK:
+                return
+            selected = dialog.get_filenames()
+            uris = _desktop_file_uris(selected)
+            from gi.repository import Gdk
+            clipboard = self.Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            clipboard.set_uris(uris)
+            clipboard.store()
+            count = len(uris)
+            self.message(f"已发送 {count} 个项目到 UUWay；手机端可继续发送。")
+        except (OSError, ValueError, TypeError) as error:
+            self.message(f"桌面发送失败：{error}")
+        finally:
+            dialog.destroy()
+
     def choose_download_directory(self, button):
         dialog = self.Gtk.FileChooserDialog("选择 UUWay 文件接收目录", self.window,
             self.Gtk.FileChooserAction.SELECT_FOLDER,
@@ -585,7 +641,11 @@ class Console:
             mode = self.display_state["modes"][mode_index]
             scale = mode["scales"][scale_index]
             result = _display_request(_runtime(), {"version": 1, "op": "apply", "serial": self.display_state["serial"],
-                "width": mode["width"], "height": mode["height"], "refresh": mode["refresh"], "scale": scale})
+                "width": mode["width"], "height": mode["height"], "refresh": mode["refresh"], "scale": scale,
+                # Let the native capture supervisor confirm a healthy frame as
+                # soon as the new mode is visible. The manual keep button
+                # remains available when a frame is not yet available.
+                "confirmation": "gpu_frame"})
             self.display_transaction = result.get("transaction")
             self.message("已申请临时切换，请确认画面与点击位置正常后保留；否则会自动回滚。")
             self.display_inspect()
@@ -621,42 +681,57 @@ class Console:
 
         css = Gtk.CssProvider()
         css.load_from_data(b"""
-            window { background: #f5f7fb; }
-            label { color: #243b53; }
-            headerbar { background: #102a43; color: #ffffff; padding: 7px 14px; }
-            headerbar label { color: #ffffff; }
+            /* Keep the GTK theme from mixing its foreground with the light
+             * surface. Every control gets one readable ink color first, then
+             * the intentionally small set of semantic accents below. */
+            * { color: #1f2937; }
+            window, box, stack, scrolledwindow, viewport, flowbox, list,
+            listbox, grid { background-color: #f6f8fb; }
+            label { color: #1f2937; }
+            headerbar { background-color: #102a43; color: #ffffff; padding: 7px 14px; }
+            headerbar *, headerbar label { color: #ffffff; }
             .brand-title { font-size: 22px; font-weight: 800; letter-spacing: 1px; }
             .brand-subtitle { color: #b8d8e8; font-size: 11px; }
             .header-state { color: #b8e3d5; font-size: 12px; padding: 6px 10px; }
-            .sidebar { background: #edf2f7; border-right: 1px solid #d9e2ec; }
+            .sidebar { background-color: #eef3f8; border-right: 1px solid #d9e2ec; }
             .sidebar-caption { color: #627d98; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; }
             .nav-list { background: transparent; }
             .nav-list row { border-radius: 8px; margin: 3px 10px; padding: 2px; }
-            .nav-list row:selected { background: #d8eef0; color: #0b7285; }
+            .nav-list row:selected { background: #d8eef0; }
             .nav-list row:selected .nav-label { color: #0b7285; }
             .nav-list row:hover { background: #e2edf3; }
             .nav-label { font-size: 13px; font-weight: 600; }
             .nav-hint { color: #627d98; font-size: 11px; }
             .page-title { color: #102a43; font-size: 24px; font-weight: 700; }
             .page-subtitle { color: #627d98; font-size: 13px; }
-            .card { background: #ffffff; border: 1px solid #d9e2ec; border-radius: 12px; padding: 18px; }
+            .card { background-color: #ffffff; border: 1px solid #d9e2ec; border-radius: 12px; padding: 18px; }
+            .card > * { background-color: transparent; }
             .card-title { color: #243b53; font-size: 15px; font-weight: 700; }
             .card-subtitle { color: #627d98; font-size: 12px; }
             .muted { color: #627d98; font-size: 12px; }
             .value { color: #102a43; font-size: 14px; }
-            button { min-height: 34px; padding: 0 13px; color: #243b53; background: #ffffff; border: 1px solid #bcccdc; }
+            button { min-height: 34px; padding: 0 13px; color: #243b53; background-color: #ffffff; background-image: none; border: 1px solid #bcccdc; border-radius: 7px; }
             button label { color: #243b53; }
-            button.primary-action, button.primary-action label { background: #0b7285; color: #ffffff; border-color: #0b7285; }
-            button.primary-action:hover { background: #095c6b; }
-            button.secondary-action, button.secondary-action label { color: #0b7285; background: #ffffff; border-color: #9fb3c8; }
-            button.danger-action, button.danger-action label { color: #b42318; background: #ffffff; border-color: #d9a6a1; }
+            button.primary-action { background-color: #0b7285; background-image: none; color: #ffffff; border-color: #0b7285; }
+            button.primary-action label { color: #ffffff; }
+            button.primary-action:hover { background-color: #095c6b; }
+            button.secondary-action { color: #0b7285; background-color: #ffffff; background-image: none; border-color: #9fb3c8; }
+            button.secondary-action label { color: #0b7285; }
+            button.danger-action { color: #b42318; background-color: #ffffff; background-image: none; border-color: #d9a6a1; }
+            button.danger-action label { color: #b42318; }
             headerbar button.titlebutton { color: #ffffff; background: transparent; border-color: transparent; padding: 0; }
             headerbar button.titlebutton:hover { background: #234765; }
-            headerbar button.header-refresh { color: #243b53; background: #ffffff; border-color: #bcccdc; padding: 0 10px; }
+            headerbar button.header-refresh { color: #243b53; background-color: #ffffff; background-image: none; border-color: #bcccdc; padding: 0 10px; }
+            checkbutton { color: #243b53; }
             checkbutton label { color: #243b53; }
             combobox, combobox button, combobox entry, combobox cellview,
-            combobox cellview label, entry { color: #243b53; }
-            .notice { background: #e6f4f1; border-top: 1px solid #c5e5dc; padding: 9px 16px; color: #245b52; font-size: 12px; }
+            combobox cellview label, entry { color: #243b53; background-color: #ffffff; }
+            combobox button label, combobox entry, combobox cellview label { color: #243b53; }
+            scale { color: #243b53; }
+            scale value { color: #243b53; }
+            scrolledwindow > viewport, scrolledwindow > viewport > box { background-color: transparent; }
+            .notice { background-color: #e6f4f1; border-top: 1px solid #c5e5dc; padding: 9px 16px; color: #245b52; font-size: 12px; }
+            .notice label { color: #245b52; }
             scale trough { min-height: 6px; }
             scale highlight { background: #0b7285; }
             combobox box { min-height: 34px; }
@@ -707,6 +782,17 @@ class Console:
             flow.set_max_children_per_line(2)
             flow.set_row_spacing(16)
             flow.set_column_spacing(16)
+            flow.set_hexpand(True)
+            return flow
+
+        def responsive_buttons():
+            flow = Gtk.FlowBox()
+            flow.set_selection_mode(Gtk.SelectionMode.NONE)
+            flow.set_homogeneous(False)
+            flow.set_min_children_per_line(1)
+            flow.set_max_children_per_line(4)
+            flow.set_row_spacing(8)
+            flow.set_column_spacing(8)
             flow.set_hexpand(True)
             return flow
 
@@ -804,7 +890,7 @@ class Console:
         status_scroll.set_size_request(-1, 220)
         status_scroll.add(self.status)
         status_card.pack_start(status_scroll, True, True, 0)
-        service_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        service_actions = responsive_buttons()
         for text, operation, css_name in (
                 ("启动 UUWay", "start", "primary-action"),
                 ("重连 UUWay", "restart", "secondary-action"),
@@ -812,7 +898,7 @@ class Console:
             button = Gtk.Button(label=text)
             add_class(button, css_name)
             button.connect("clicked", self.service_action, operation)
-            service_actions.pack_start(button, False, False, 0)
+            service_actions.add(button)
             self.buttons.append(button)
         status_card.pack_start(service_actions, False, False, 0)
         overview.pack_start(status_card, False, False, 0)
@@ -871,7 +957,7 @@ class Console:
         input_columns.add(compat_card)
 
         # Display
-        display_status_card = card("当前显示状态", "应用新模式时会保留 30 秒保护窗口，未确认将自动回滚")
+        display_status_card = card("当前显示状态", "UU APP 与 UUWay 控制台共用 Linux 原生模式目录，切换失败会自动回滚")
         self.display_current = label("正在读取显示服务…", "value")
         display_status_card.pack_start(self.display_current, False, False, 0)
         display_page.pack_start(display_status_card, False, False, 0)
@@ -882,12 +968,12 @@ class Console:
         self.display_scales = Gtk.ComboBoxText()
         display_grid.attach(label("分辨率与刷新率", "value"), 0, 0, 1, 1); display_grid.attach(self.display_modes, 1, 0, 1, 1)
         display_grid.attach(label("Linux 桌面缩放", "value"), 0, 1, 1, 1); display_grid.attach(self.display_scales, 1, 1, 1, 1)
-        display_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        display_buttons = responsive_buttons()
         refresh_modes = Gtk.Button(label="刷新模式"); add_class(refresh_modes, "secondary-action"); refresh_modes.connect("clicked", self.display_inspect)
         apply = Gtk.Button(label="临时应用（30 秒保护）"); add_class(apply, "primary-action"); apply.connect("clicked", self.display_apply)
         keep = Gtk.Button(label="保留此设置"); add_class(keep, "secondary-action"); keep.connect("clicked", self.display_finish, "confirm")
         revert = Gtk.Button(label="立即恢复"); add_class(revert, "danger-action"); revert.connect("clicked", self.display_finish, "rollback")
-        for button in (refresh_modes, apply, keep, revert): display_buttons.pack_start(button, False, False, 0)
+        for button in (refresh_modes, apply, keep, revert): display_buttons.add(button)
         display_controls.pack_start(display_buttons, False, False, 4)
         display_page.pack_start(display_controls, False, False, 0)
 
@@ -902,21 +988,31 @@ class Console:
         image_card.pack_start(self.image_preview, False, False, 0)
         self.image_label = label(("当前使用默认 Linux 企鹅图片" if default else f"当前自定义图片：{image}"), "muted")
         image_card.pack_start(self.image_label, False, False, 0)
-        image_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        image_buttons = responsive_buttons()
         choose = Gtk.Button(label="选择自定义图片"); add_class(choose, "primary-action"); choose.connect("clicked", self.choose_image)
         reset = Gtk.Button(label="恢复 Linux 企鹅"); add_class(reset, "secondary-action"); reset.connect("clicked", self.reset_image)
-        image_buttons.pack_start(choose, False, False, 0); image_buttons.pack_start(reset, False, False, 0)
+        image_buttons.add(choose); image_buttons.add(reset)
         image_card.pack_start(image_buttons, False, False, 0)
         image_columns.add(image_card)
+
+        send_card = card("桌面发送", "选择 Linux 文件或目录，交给 UUWay 剪贴板桥发送到手机")
+        send_card.pack_start(label(
+            "发送后，UU 会在手机端显示可发送项目。文件内容由现有 UUWay 文件桥按需传输。", "muted"),
+            False, False, 0)
+        send_button = Gtk.Button(label="选择文件并发送")
+        add_class(send_button, "primary-action")
+        send_button.connect("clicked", self.send_desktop_files)
+        send_card.pack_start(send_button, False, False, 0)
+        image_columns.add(send_card)
 
         file_card = card("文件接收目录", "Windows 端接收目录已经映射到 Linux，默认使用 XDG 下载目录")
         self.mapping_label = label("正在读取映射…", "value")
         self.mapping_labels.append(self.mapping_label)
         file_card.pack_start(self.mapping_label, False, False, 0)
-        download_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        download_buttons = responsive_buttons()
         choose_download = Gtk.Button(label="选择接收目录"); add_class(choose_download, "primary-action"); choose_download.connect("clicked", self.choose_download_directory)
         reset_download = Gtk.Button(label="恢复 XDG 下载目录"); add_class(reset_download, "secondary-action"); reset_download.connect("clicked", self.reset_download_directory)
-        download_buttons.pack_start(choose_download, False, False, 0); download_buttons.pack_start(reset_download, False, False, 0)
+        download_buttons.add(choose_download); download_buttons.add(reset_download)
         file_card.pack_start(download_buttons, False, False, 0)
         image_columns.add(file_card)
 
