@@ -32,7 +32,12 @@ def run():
         raise ValueError("Missing UUWay penguin brand image")
     if not ICON.is_file() or ICON.stat().st_size > 256 * 1024:
         raise ValueError("Missing UUWay application icon")
-    digest = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+    inputs = {"uuway-console": SOURCE, "assets/uuway-penguin.bmp": PENGUIN,
+              "assets/uuway-icon.svg": ICON}
+    hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in inputs.items()}
+    # Artwork is part of an immutable release, even if the Python source has
+    # not changed. Otherwise reinstalling a new cover silently keeps the old one.
+    digest = hashlib.sha256("\n".join(f"{name}:{value}" for name, value in sorted(hashes.items())).encode()).hexdigest()
     parent = Path.home() / ".local/lib/uuway-console"
     menu = Path.home() / ".local/share/applications"
     _safe_directory(parent); _safe_directory(menu)
@@ -42,15 +47,17 @@ def run():
             staged = Path(name) / "release"
             (staged / "assets").mkdir(mode=0o700, parents=True)
             target = staged / "uuway-console"
-            shutil.copyfile(SOURCE, target); target.chmod(0o700)
-            shutil.copyfile(PENGUIN, staged / "assets/uuway-penguin.bmp")
-            shutil.copyfile(ICON, staged / "assets/uuway-icon.svg")
-            if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
-                raise ValueError("UUWay console changed during installation")
+            for name, source in inputs.items():
+                shutil.copyfile(source, staged / name)
+                if hashlib.sha256((staged / name).read_bytes()).hexdigest() != hashes[name]:
+                    raise ValueError("UUWay console changed during installation")
+            target.chmod(0o700)
             staged.rename(release)
     target = release / "uuway-console"
-    if (release.is_symlink() or target.is_symlink() or
-            hashlib.sha256(target.read_bytes()).hexdigest() != digest):
+    if (release.is_symlink() or (release / "assets").is_symlink() or
+            any((release / name).is_symlink() or not (release / name).is_file() or
+                hashlib.sha256((release / name).read_bytes()).hexdigest() != value
+                for name, value in hashes.items())):
         raise ValueError("Changed UUWay console release; refusing replacement")
     icon = release / "assets/uuway-icon.svg"
     if any(c in str(target) + str(icon) for c in ("\n", "\r", '"', "\\", "%", "`", "$")):

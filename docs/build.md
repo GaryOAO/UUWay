@@ -187,7 +187,26 @@ the `UUWay 控制台` menu entry. It does not compile Rust or restart a service.
 
 The console is intentionally installed as Python source instead of a GitHub Actions-produced
 single binary: GTK and PyGObject are supplied by the distribution, so this keeps the download
-portable across Ubuntu updates and avoids bundling a second native runtime.
+portable across Ubuntu updates and avoids bundling a second native runtime. Reinstall after
+updating the console or its artwork; the release identity includes the Python source, icon
+and desktop image.
+
+The console separates overview, display/appearance, input, file transfer and diagnostics.
+Mouse speed settings require an explicit save and apply without restarting. Cursor, text,
+cover and receive-directory changes show a persistent restart notice. Display changes from
+the console use manual confirmation with the guardian's 30-second rollback deadline.
+File selection offers a `text/uri-list` through the installed `xclip` helper; finish receiving
+on the phone before replacing the clipboard.
+
+To check the console without changing a live desktop or restarting services:
+
+```bash
+xvfb-run -a /usr/bin/python3 scripts/uuway_console.py --smoke-test
+xvfb-run -a env UUWAY_UI_TESTS=1 /usr/bin/python3 -m unittest \
+  tests.test_uuway_console tests.test_uuway_console_ui tests.test_uuway_console_install
+```
+
+The interaction tests use temporary settings and simulated service/display responses.
 
 ## 6. Connect
 

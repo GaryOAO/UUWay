@@ -5,7 +5,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("uuway_console", ROOT / "scripts/uuway_console.py")
@@ -81,6 +81,30 @@ class ConsoleConfigTests(unittest.TestCase):
                 console._desktop_file_uris([str(root / "missing")])
             with self.assertRaises(ValueError):
                 console._desktop_file_uris([])
+
+    def test_main_service_controls_overview_not_optional_service_count(self):
+        runtime = {"schema": 1}
+        services = {"uu-native-bridge.service": {"ActiveState": "active"},
+                    "uu-native-text.service": {"ActiveState": "inactive"}}
+        title, hint, tone, action = console._connection_state(runtime, services)
+        self.assertEqual(tone, "success")
+        self.assertEqual(action, "restart")
+        self.assertNotIn("已连接", title)
+        self.assertEqual(console._connection_state(runtime, {})[3], None)
+        self.assertEqual(console._connection_state(None, services)[2], "warning")
+
+    def test_file_offer_is_a_uri_list_not_plain_text_or_shell_command(self):
+        uris = ["file:///tmp/a%20b.txt", "file:///tmp/folder"]
+        with patch.object(console.subprocess, "run", return_value=Mock(returncode=0)) as run:
+            console._publish_file_uris(uris)
+        self.assertIn("text/uri-list", run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs["input"], b"file:///tmp/a%20b.txt\r\nfile:///tmp/folder\r\n")
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_file_offer_failure_is_reported(self):
+        with patch.object(console.subprocess, "run", return_value=Mock(returncode=1)):
+            with self.assertRaises(ValueError):
+                console._publish_file_uris(["file:///tmp/file"])
 
 
 if __name__ == "__main__":

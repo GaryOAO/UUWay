@@ -1,127 +1,137 @@
 <div align="center">
 
-<img src="docs/images/hero.en.svg" alt="UUWay: a native Linux host for NetEase UU Remote" width="100%">
+<img src="docs/images/hero.en.svg" alt="UUWay — Your Linux. Anywhere. Your desktop, terminal and files, all within reach." width="100%">
 
 [简体中文](README.md) · [English](README.en.md)
 
-![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)
-![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
-![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
-![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
-![Status](https://img.shields.io/badge/status-developer_preview-f59e0b)
-![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
+**[Get started](#get-started)　 / 　[Console](#the-local-console)　 / 　[Features](#what-works)　 / 　[Documentation](#go-further)**
+
+Open source · AGPL-3.0 · Developer preview
 
 </div>
 
-**NetEase UU Remote only ships a Windows host — there is no Linux client.** UUWay runs the official
-host under Wine, with its files unmodified on disk, and serves every Windows interface it depends on
-from a native Linux implementation. Open UU Remote on your phone and drive your Linux desktop just as
-you would a Windows PC.
+<br>
 
-## ✨ Nearly every UU feature works
+**Connect to your Linux desktop with NetEase UU Remote.** UUWay runs the official Windows host under Wine and serves its capture, input and system interfaces through native Linux implementations. The UU program files stay unmodified; UU still manages accounts and connections.
 
-| UU feature | On Linux | Notes |
-| --- | :---: | --- |
-| 🎞️ Screen streaming | ✅ | Zero-copy GPU capture + NVENC, up to 60 FPS at 1080p |
-| 🖱️ Pointer | ✅ | The controller draws your real cursor theme, and zoomed views follow it |
-| ⌨️ Keyboard & mouse | ✅ | Including the Super / ⌘ key, injected through libei / uinput |
-| 🀄 Phone IME | ✅ | Chinese text is committed straight into the focused field (Fcitx5) |
-| 🖥️ Resolution · refresh rate · scale | ✅ | Applied to Mutter, rolled back if the new mode never reaches the stream |
-| 💻 **Remote terminal** | ✅ | Opens your Linux login shell; sessions persist and can run side by side |
-| 📋 Clipboard | ✅ | Text in both directions, in real time |
-| 📁 Files: phone → desktop | ✅ | Transferred when you paste; the paste waits for the download |
-| 📁 Files: other device → Linux desktop | ✅ | The receive directory maps to the Linux XDG downloads directory |
-| 📁 Files: desktop → phone | ✅ | Implemented |
-| 🪟 Super Screen (virtual displays) | ❌ | Needs a Windows kernel driver (IddCx) that Wine cannot load |
-| 📺 1440p / 4K at 60 Hz | ⚠️ | Limited by the refresh rates your display (or dummy plug) advertises |
+| Your desktop, within reach | A terminal that stays open | Files in both directions |
+| :--- | :--- | :--- |
+| Native Wayland capture and NVENC encoding, up to 60 FPS at 1080p. | Your Linux login shell, with sessions that survive leaving the terminal page. | Shared clipboard and file transfers, received directly into Linux directories. |
 
-Verified with UU 4.42.0.2770 and no patch at all ([review](docs/releases/4.42.0.2770-native-review.md)).
-UUWay implements public Windows interfaces rather than offsets inside UU, so UU updates rarely matter.
+## Get started
 
-### 💻 Highlight: UU's remote terminal opens a Linux shell
+UUWay is a **developer preview**. The daily development setup is Ubuntu 24.04 with an RTX 3090; the verified requirements are listed below.
 
-On Windows, UU's remote terminal opens PowerShell. With UUWay it opens **your Linux login shell**.
-
-- Bytes flow **raw** between the PTY and UU with no console layer in between, so full-screen programs
-  such as vim and htop render correctly and CJK text stays intact.
-- Leave the terminal page and **the session keeps running**; it redraws when you return, and several
-  can run at once.
-- Closing a terminal in UU ends its shell, exactly as on Windows.
-
-## 🔧 How it works
-
-<p align="center">
-  <img src="docs/images/architecture.en.svg" alt="Architecture: every Windows interface the official UU host calls is served by a native Linux implementation" width="100%">
-</p>
-
-UUWay is an **adaptation layer**: UU calls the same APIs it would call on any Windows PC, and each
-call lands on a Linux implementation. UU still handles accounts, relays, and codec and bitrate
-negotiation.
-
-<p align="center">
-  <img src="docs/images/video-pipeline.en.svg" alt="Video path: pixels stay in video memory from compositor to encoder" width="100%">
-</p>
-
-See the [design notes](docs/design.md) for details.
-
-## 🚀 One-step install
-
-**You need:**
-
-- Ubuntu 24.04 with a GNOME 46 **Wayland** session that stays logged in (a display dummy plug for
-  headless machines)
-- An **NVIDIA** GPU with NVENC and the proprietary driver
-- The official UU Remote **Windows** installer and a UU account
+| Prepare | Requirement |
+| :--- | :--- |
+| System and desktop | Ubuntu 24.04, GNOME 46 **Wayland**, with the desktop logged in |
+| GPU | An **NVIDIA** GPU with NVENC and the proprietary driver |
+| Display | A physical display, or a display dummy plug for a headless host |
+| UU Remote | The official **Windows host installer** and a UU account |
 
 ```bash
-git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
+git clone https://github.com/GaryOAO/UUWay.git
+cd UUWay
 ./install.sh --installer ~/Downloads/UURemote_Setup.exe
 ```
 
-The script checks the system, installs the dependencies and WineHQ, installs UU into its own Wine
-prefix, builds the native runtime, grants input and screen-cast access, then packages and starts the
-services. Only two things need you: **sign in** in the UU window it opens, and in the screen-sharing
-dialog **pick the monitor and tick "remember"**. Then open UU Remote on your phone — this computer is
-in your device list. The installer's messages are in Chinese.
+The installer prepares dependencies and Wine, installs UU, builds the native runtime and starts the services. Two steps need you:
 
-- Resume after an interruption with `./install.sh --from STEP`; `./install.sh --dry-run` only prints
-  what it would run.
-- For a manual install, the optional 60 FPS pacing patch and troubleshooting, see the
-  [build and install guide](docs/build.md).
+1. **Sign in** in the UU window that opens.
+2. In the screen-sharing dialog, **select the display and tick “remember.”**
 
-> UUWay is a **developer preview**: it is in daily use on its development machine, but so far only
-> verified on Ubuntu 24.04 with an RTX 3090.
+Then open UU Remote on your phone and select this Linux device to connect. Installer messages are in Chinese.
 
-After installation, open **UUWay Console** from the application menu. It uses the bridge's existing
-Python + GTK stack and exposes service capabilities, input, text backend, display modes, the Linux
-penguin desktop image, and the file receive mapping (XDG Downloads by default).
+Resume an interrupted install with `./install.sh --from STEP`, or preview the steps with `./install.sh --dry-run`. See the [build and install guide](docs/build.md) for manual setup, the optional 60 FPS pacing patch and troubleshooting.
 
-## 📦 Repository layout
+## The local console
 
-```
+Open **UUWay 控制台** from the application menu. Connection status, everyday settings and diagnostics each have their own place. The console UI is currently in Chinese.
+
+<img src="docs/images/console-overview.png" alt="UUWay Console: a navy sidebar, local service status and shortcuts to display, input and file controls" width="100%">
+
+<sub>Interface preview; service status and display values shown are demonstration data.</sub>
+
+| Page | What you can do |
+| :--- | :--- |
+| **Overview** | Check the local service, start or reconnect, and open common tasks |
+| **Display and appearance** | Set resolution, refresh rate and scale; change the device cover shown by UU |
+| **Mouse and input** | Adjust pointer and scroll speeds, scroll direction, cursor mode and text input |
+| **File transfer** | Select files or folders for the phone; open or change the receive directory |
+| **Diagnostics** | Inspect services and directory mappings; generate and copy a status report |
+
+Input speed changes take effect after saving. Settings that need a restart appear in one persistent notice. Display changes made in the console offer a **30-second confirmation window** and revert if you do not confirm.
+
+## What works
+
+| Capability | Support |
+| :--- | :--- |
+| Screen streaming | Zero-copy GPU capture and NVENC hardware encoding, up to 60 FPS at 1080p |
+| Keyboard and mouse | libei / uinput injection, including Super / ⌘; the host cursor theme is supported |
+| Phone text input | Fcitx5 commits Chinese and other input directly into the focused field |
+| Display modes | Both the console and UU can select modes advertised by Linux, with rollback protection |
+| Remote terminal | Linux login shell, persistent concurrent sessions, full-screen apps and CJK text |
+| Clipboard | Text synchronization in both directions |
+| Files: phone → Linux | Transfer starts on paste; the paste waits for the download |
+| Files: other device → Linux | Receive directly into Linux Downloads or a custom directory |
+| Files: Linux → phone | Files and directories through the existing file bridge |
+
+**Current limits:** Super Screen virtual displays require a Windows kernel driver and are unsupported. Refresh rates at 1440p / 4K depend on the modes advertised by the display or dummy plug.
+
+Verified with **UU 4.42.0.2770**, without patching the official program. See the [release review](docs/releases/4.42.0.2770-native-review.md). UUWay implements public Windows interfaces instead of relying on fixed offsets inside UU.
+
+<details>
+<summary><strong>More on terminals and path mappings</strong></summary>
+
+- Terminal bytes pass directly between the PTY and UU. Sessions keep running when you leave the terminal page, redraw when you return, and end when you close their terminal.
+- Wine keeps `C:` as UU's private prefix and maps `Z:` to the Linux root. Desktop, Documents, Downloads and other user folders map to Linux XDG directories.
+- UU's receive directory uses the configured Linux download directory; other device drive letters retain the Linux device paths detected by Wine.
+
+</details>
+
+## How it works
+
+UUWay is an adaptation layer. UU calls its usual Windows APIs; Linux implementations handle the display, input, terminal and related interfaces. UU continues to handle accounts, relays, codec and bitrate negotiation.
+
+<img src="docs/images/architecture.en.svg" alt="Architecture: UUWay maps the official UU host's Windows interfaces to native Linux implementations" width="100%">
+
+<details>
+<summary><strong>Explore the GPU video path</strong></summary>
+
+<img src="docs/images/video-pipeline.en.svg" alt="Pixels stay in GPU memory from the Wayland compositor to the NVENC encoder" width="100%">
+
+See the [design notes](docs/design.md) for the technical details.
+
+</details>
+
+## Go further
+
+| Document | Contents |
+| :--- | :--- |
+| [Build and installation](docs/build.md) | Requirements, manual deployment, optional patches and troubleshooting |
+| [Design notes](docs/design.md) | Native interfaces and data paths |
+| [UU release review](docs/releases/4.42.0.2770-native-review.md) | Verified release and compatibility checks |
+
+<details>
+<summary><strong>Repository layout</strong></summary>
+
+```text
 install.sh  one-step installer
-src/        native backends (Linux and Windows/Wine sides) and helpers
-scripts/    service, packaging, build, release-audit tooling and Python/GTK console
-patches/    DXVK capture, Mutter pacing, portal session-lifetime patches
-config/     pinned build inputs and the udev rule
+src/        native Linux and Windows/Wine backends and helpers
+scripts/    services, builds, packaging, release audits and Python/GTK console
+assets/     console icon, desktop cover and vector sources
+patches/    DXVK capture, Mutter pacing and Portal lifetime patches
+config/     pinned build inputs and udev rules
 systemd/    user service templates
 native/     native runtime components
 tests/      unit tests and probes
-docs/       design notes, build guide, release reviews
+docs/       design, installation and release notes
 ```
 
-## ⚖️ License
+</details>
 
-UUWay is licensed under [**GNU AGPL-3.0**](https://github.com/GaryOAO/UUWay/blob/main/LICENSE).
+---
 
-## Disclaimer
+**License**　[GNU AGPL-3.0](LICENSE). UUWay is an independent, unofficial project, not affiliated with or endorsed by NetEase. “UU” and “UU Remote” are trademarks of their respective owners. This project distributes no UU program files; obtain the client from its official source.
 
-UUWay is an independent, unofficial project. It is not affiliated with or endorsed by NetEase.
-"UU" and "UU Remote" are trademarks of their respective owners. UUWay distributes no UU program
-files; you install the client yourself from the official source.
-
-## Acknowledgements
-
-UUWay grew out of [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)
-by Lachlan Chen, whose RDP-relay design it replaces with a native Wayland pipeline. It also builds
-on [DXVK](https://github.com/doitsujin/dxvk), [Wine](https://www.winehq.org/), PipeWire and Mutter.
+**Acknowledgements**　UUWay grew out of Lachlan Chen's [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge), replacing its RDP relay with a native Wayland pipeline. It also builds on [DXVK](https://github.com/doitsujin/dxvk), [Wine](https://www.winehq.org/), PipeWire and Mutter.
