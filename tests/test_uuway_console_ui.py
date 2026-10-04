@@ -104,6 +104,16 @@ class ConsoleInteractionTests(unittest.TestCase):
         self.assertIn("文字输入", self.ui.restart_label.get_text())
         self.assertEqual(console._read_json(self.config / "text-backend.json")["backend"], "fcitx")
 
+    def test_reset_image_keeps_explicit_default_for_service_restart(self):
+        custom = self.config / "custom.png"
+        custom.write_bytes(b"fixture image")
+        console._write_json(self.config / "desktop-image.json", {"version": 1, "path": str(custom)})
+        self.ui.reset_image()
+        saved = console._read_json(self.config / "desktop-image.json")
+        self.assertEqual(Path(saved["path"]).resolve(), console.DEFAULT_IMAGE.resolve())
+        self.assertTrue(self.ui.restart_revealer.get_reveal_child())
+        self.assertIn("设备封面", self.ui.restart_label.get_text())
+
     def test_poll_does_not_reset_unsaved_display_selection(self):
         self.ui.display_modes.set_active(1)
         self.ui.display_scales.set_active(1)

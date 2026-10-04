@@ -48,6 +48,19 @@ class ServiceLifecycleTests(unittest.TestCase):
                 event.assert_not_called()
                 notify.assert_called_once_with('STOPPING=1\nSTATUS=UU native service stopped')
 
+    def test_bridge_start_reapplies_desktop_image(self):
+        def worker(*args, **kwargs):
+            signal.raise_signal(signal.SIGTERM)
+
+        with self.fixture(worker) as (path, launch, event, notify), \
+                patch.object(service, 'apply_desktop_image', return_value=True) as refresh:
+            service.run(path)
+            refresh.assert_called_once_with(Path(path.parent / 'prefix'), path.parent)
+
+    def test_desktop_image_failure_does_not_block_bridge_start(self):
+        with patch.object(service.DesktopImageMapping, 'apply', side_effect=OSError('fixture image failure')):
+            self.assertFalse(service.apply_desktop_image('/fixture/prefix', '/fixture/config'))
+
     def test_stop_during_reconnect_delay_never_starts_second_trial(self):
         with self.fixture(RuntimeError(service.DISPLAY_REMAP_FAILURE)) as (path, launch, event, notify), \
                 patch.object(service.time, 'sleep', side_effect=lambda seconds: signal.raise_signal(signal.SIGTERM)):
@@ -350,10 +363,12 @@ class DesktopImageMappingTests(unittest.TestCase):
 
             self.assertTrue(service.DesktopImageMapping(
                 prefix, root / 'config', runner=run).apply())
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 5)
             self.assertEqual(calls[0][0][1:4], ['reg', 'add', r'HKCU\Control Panel\Desktop'])
             self.assertTrue(any('uuway-penguin.bmp' in value for value in calls[0][0]))
             self.assertEqual(calls[0][1]['env']['WINEPREFIX'], str(prefix))
+            self.assertEqual(calls[-2][0][1:], ['-k'])
+            self.assertEqual(calls[-1][0][1:], ['-w'])
 
     def test_custom_image_overrides_the_penguin(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -6,4 +6,3 @@
 *.so
 __pycache__/
 .pytest_cache/
-native/settings/target/

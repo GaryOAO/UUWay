@@ -144,7 +144,10 @@ def _desktop_image():
         if (isinstance(value, dict) and set(value) == {"version", "path"} and value["version"] == 1
                 and isinstance(value["path"], str) and path.is_absolute() and path.is_file()
                 and path.stat().st_size <= MAX_IMAGE):
-            return path, False
+            try:
+                return path, path.resolve() != DEFAULT_IMAGE.resolve()
+            except OSError:
+                return path, True
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         pass
     return DEFAULT_IMAGE, True
@@ -756,9 +759,12 @@ class Console:
 
     def reset_image(self, *_):
         try:
-            (CONFIG_DIR / "desktop-image.json").unlink(missing_ok=True)
+            # Keep the default as an explicit path. The bridge reapplies the
+            # registry value on restart; deleting the setting would leave the
+            # previous custom Wallpaper value in Wine's HKCU forever.
+            _write_json(CONFIG_DIR / "desktop-image.json", {"version": 1, "path": str(DEFAULT_IMAGE.resolve())})
             self.image_label.set_text("UUWay · 默认 Linux 企鹅")
-            self.image_label.set_tooltip_text(None)
+            self.image_label.set_tooltip_text(str(DEFAULT_IMAGE))
             self._set_image_preview(DEFAULT_IMAGE)
             self._needs_restart("设备封面")
         except OSError as error:

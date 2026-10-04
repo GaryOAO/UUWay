@@ -164,6 +164,11 @@ PINNED_MAIN_SCRIPTS = {('scripts/' + name): ('scripts/' + name) for name in (
     'uu-native-service.py', 'uu-native-trial.py', 'uu-native-capture-broker.py',
     'probe-wayland-portal.py', 'native_runtime_state.py',
     'native_display_confirmation.py', 'package-uu-native-runtime.py')}
+# The supervisor applies the default cover from inside its immutable bundle.
+# Keep the artwork beside the pinned Python entrypoints so a source-only
+# repack cannot accidentally point a new service at a missing development
+# checkout asset.
+PINNED_MAIN_SCRIPTS['assets/uuway-penguin.bmp'] = 'assets/uuway-penguin.bmp'
 INPUT_CONTRACT = dict(PRESET_INPUT_CONTRACT, schema_version=30,
     main_runtime_sources='versioned_bundle_Python_entrypoint_supervisor_broker_portal_wrapper_and_imports',
     independent_service_sources='text_and_display_guardian_not_migrated',
@@ -451,6 +456,10 @@ def verify(directory):
         inputs = dict(inputs, **PINNED_CAPTURE)
     if 'main_runtime_sources' in contract:
         inputs = dict(inputs, **PINNED_MAIN_SCRIPTS)
+        # Releases created before the bundled default cover was introduced
+        # remain verifiable and reusable; new releases always carry it.
+        if 'assets/uuway-penguin.bmp' not in manifest['files']:
+            inputs.pop('assets/uuway-penguin.bmp', None)
     if set(manifest['files']) != set(inputs):
         raise ValueError('Missing or unexpected bridge component')
     for name, expected in manifest['files'].items():

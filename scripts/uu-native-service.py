@@ -486,7 +486,35 @@ class DesktopImageMapping:
                     return False
         except (OSError, subprocess.SubprocessError):
             return False
+        finally:
+            # `wine reg` starts a wineserver even though it is a short-lived
+            # helper.  Leave the prefix cold so the supervised trial can take
+            # its lock immediately after this mapping phase.
+            for action in ('-k', '-w'):
+                try:
+                    self.runner(
+                        [trial.WINESERVER, action], env=environment,
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=10, check=False)
+                except (OSError, subprocess.SubprocessError):
+                    pass
         return True
+
+
+def apply_desktop_image(prefix, config_directory):
+    """Refresh UU's desktop image on every bridge start.
+
+    The console writes the selected image as private configuration while the
+    Wine registry is owned by the bridge prefix. Applying it here makes a
+    normal `systemctl --user restart uu-native-bridge` sufficient; the
+    console never needs to race a live Wine process. A missing or unreadable
+    image is intentionally non-fatal so a cover problem cannot prevent a
+    remote session from starting.
+    """
+    try:
+        return DesktopImageMapping(prefix, config_directory).apply()
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return False
 
 
 def text_configuration(config, config_directory):
@@ -518,6 +546,10 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
             raise ValueError('Native service requires absolute configured paths')
     bundle = Path(config['bundle'])
     verified = trial.bundle_tools.verify(bundle)
+    # Reapply a custom/default cover after every bridge restart. This used to
+    # happen only in the one-time Wine mapping phase, so changes made from the
+    # console survived in JSON but never reached HKCU after a restart.
+    apply_desktop_image(Path(config['prefix']), config_path.parent)
     # Expose the native display catalogue to UU so its mode list stays
     # complete.  The native bridge is read-only by default; only an explicit
     # opt-in enables remote writes to Mutter.
