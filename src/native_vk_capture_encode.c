@@ -297,7 +297,12 @@ static int capture_frame(struct uurb_capture_encoder *s, const void *buffer_key,
                          VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, source ? 2 : 1, release);
     GPU(vkEndCommandBuffer(s->command));
     GPU(vkResetFences(s->device, 1, &s->fence));
-    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    /* The DMA-BUF fence guards the FOREIGN ownership acquire and its layout
+     * transition as well as the blit. Without maintenance8's USE_ALL_STAGES
+     * dependency flag, ownership transfers have no defined pipeline stage;
+     * waiting at TRANSFER alone lets acquisition race the compositor under
+     * GPU load. Vulkan requires ALL_COMMANDS for this ownership handoff. */
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .waitSemaphoreCount = ready ? 1 : 0,
         .pWaitSemaphores = &ready, .pWaitDstStageMask = &wait_stage, .commandBufferCount = 1,
         .pCommandBuffers = &s->command};

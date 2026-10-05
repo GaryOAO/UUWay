@@ -160,6 +160,26 @@ class PackageIsolationTests(unittest.TestCase):
                 for name in dict(package.INPUTS, **package.INPUT_RUNTIME, **package.PINNED_CAPTURE):
                     self.assertEqual((updated / name).read_bytes(), (base / name).read_bytes())
 
+    def test_explicit_producer_update_preserves_other_native_components_and_old_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); self.fixture(root)
+            with patch.object(package, 'ROOT', root):
+                base = Path(package.package(root / 'releases', with_input=True)['bundle'])
+                component = 'capture/uu-pipewire-native-probe'
+                before = (base / component).read_bytes()
+                replacement = root / 'capture-fixed'
+                replacement.write_bytes(b'capture-with-correct-ownership-wait')
+                updated = Path(package.package(root / 'releases', with_input=True,
+                    reuse_runtime_from=base, replace_components={component: replacement})['bundle'])
+                self.assertNotEqual(updated, base)
+                self.assertEqual((base / component).read_bytes(), before)
+                self.assertEqual((updated / component).read_bytes(), replacement.read_bytes())
+                self.assertEqual((updated / component).stat().st_mode & 0o777, 0o700)
+                for name in dict(package.INPUTS, **package.INPUT_RUNTIME):
+                    self.assertEqual((updated / name).read_bytes(), (base / name).read_bytes(), name)
+                package.verify(base)
+                package.verify(updated)
+
     def test_schema32_33_and_erroneous_schema34_are_accepted_as_legacy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary); self.fixture(root)

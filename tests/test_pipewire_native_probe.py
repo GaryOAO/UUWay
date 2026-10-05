@@ -115,6 +115,11 @@ class NativePipewireProbeTests(unittest.TestCase):
         self.assertNotIn('vkMapMemory(', source)
         self.assertNotIn('mmap(', source)
 
+    def test_dmabuf_fence_wait_covers_foreign_ownership_acquire(self):
+        source = (ROOT / 'src/native_vk_capture_encode.c').read_text()
+        self.assertIn('VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;', source)
+        self.assertNotIn('VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;', source)
+
 
 if __name__ == '__main__':
     unittest.main()

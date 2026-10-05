@@ -513,6 +513,7 @@ CAPTURE_BACKEND_COMPONENT = 'app/bin/uurb-dxgi-capture.dll.so'
 # content-addressed repack.
 REPLACEABLE_COMPONENTS = (
     CAPTURE_BACKEND_COMPONENT,
+    'capture/uu-pipewire-native-probe',
     'runtime/uu-native-input',
     'runtime/bootstrap.exe',
 )
