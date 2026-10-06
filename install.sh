@@ -23,9 +23,10 @@ dry_run=0
 login=0
 with_console=1
 
-packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl
-          libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libvulkan-dev glslang-tools
-          libei-dev fcitx5-modules-dev xvfb xclip python3-gi gir1.2-gtk-3.0)
+packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl git ripgrep
+          libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev glslang-tools
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev libfcitx5utils-dev
+          libei-dev fcitx5-modules-dev xvfb xclip python3-gi python3-dbus gir1.2-gtk-3.0 gir1.2-atspi-2.0)
 
 usage() {
     cat <<'EOF'
@@ -216,6 +217,9 @@ current_step=3
 if should_run 3; then
     step_title 3 "构建原生运行时（第一次需要十几分钟）"
     cd "$repo_dir"
+    # The build scripts read CUDA's driver-API header from this fixed path; no Ubuntu package provides it.
+    [[ -f /usr/local/cuda/include/cuda.h ]] || ((dry_run)) ||
+        die "缺少 /usr/local/cuda/include/cuda.h（CUDA 12.1 头文件）。获取方法见 docs/build.md 的 \"CUDA headers\"；不想自己构建的话，请直接安装发布页的 .deb。"
     for script in build-dxvk-capture build-dxgi-capture-probe build-uu-native-bootstrap \
                   build-uu-native-input build-uu-native-display build-native-ime build-helpers \
                   build-pipewire-probe; do

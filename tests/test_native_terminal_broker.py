@@ -221,6 +221,10 @@ class PersistentTerminalSessionTests(NativeTerminalBrokerTests):
         pid = self.shell_pid(first)
         anchor = self.connect(port, self.ANCHOR, "session1")
         self.assertIsNotNone(anchor)
+        # The broker acknowledges an anchor before the session process has registered it, so a
+        # viewer detaching in that instant ends the session. A real anchor (the terminal page)
+        # outlives its viewers by far; give the registration a moment before detaching.
+        time.sleep(0.2)
         first.close()
         time.sleep(0.3)
         second = self.connect(port, self.ATTACH, "session1", 100, 30)
