@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-pytest python3-gi python3-dbus \
+            gir1.2-gtk-3.0 gir1.2-atspi-2.0 xvfb xclip x11-utils build-essential libjson-c-dev \
+            libx11-dev libxfixes-dev shellcheck
+      # The suites that need a GPU, a Wine prefix or a live session skip themselves.
+      - name: Unit tests
+        run: /usr/bin/python3 -m pytest tests -q -p no:cacheprovider
+      - name: Shell scripts
+        run: |
+          shellcheck -S warning install.sh packaging/*.sh packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Root-side work only: nothing here touches a home directory or a running service.
+set -e
+
+case "$1" in
+configure)
+    legacy=/etc/udev/rules.d/70-uurb-native-input.rules
+    shipped=/usr/lib/udev/rules.d/70-uurb-native-input.rules
+    # install.sh used to copy this rule to /etc; drop that copy once it is identical.
+    if [ -f "$legacy" ] && cmp -s "$legacy" "$shipped"; then
+        rm -f "$legacy"
+    fi
+    if command -v udevadm >/dev/null 2>&1 && [ -d /run/udev ]; then
+        udevadm control --reload || true
+        udevadm trigger --subsystem-match=misc --sysname-match=uinput --action=add || true
+    fi
+
+    echo "uuway: installed. Run 'uuway setup' as your normal user to finish (use --system to add WineHQ stable 11)."
+    if [ ! -x /opt/wine-stable/bin/wine ]; then
+        echo "uuway: WineHQ stable 11 is not installed yet; 'uuway setup --system' installs it."
+    fi
+    ;;
+esac
+
+exit 0

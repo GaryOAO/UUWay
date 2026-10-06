@@ -1,0 +1,33 @@
+name: 问题反馈 / Bug report
+description: 报告 UUWay 的错误
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么 / What happened
+      description: 你期望什么，实际看到了什么
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+  - type: input
+    id: environment
+    attributes:
+      label: 环境 / Environment
+      description: "显卡与驱动、Ubuntu 与 GNOME 版本、`uuway --version`"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: uuway doctor 输出 / Output of `uuway doctor`
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: "`journalctl --user -u uu-native-bridge -e --no-pager | tail -100`（请先去掉账号等隐私信息）"
+      render: text

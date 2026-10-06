@@ -1,0 +1,6 @@
+# UUWay's GPU capture path is built against the Wine 11.0 server protocol and
+# loads a fixed ntdll, so a WineHQ stable upgrade to another series breaks it.
+# Prefer 11.0.* without forcing a downgrade (priority below 1000).
+Package: winehq-stable wine-stable wine-stable-amd64 wine-stable-i386
+Pin: version 11.0.*
+Pin-Priority: 990

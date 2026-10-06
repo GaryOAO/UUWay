@@ -1,0 +1,65 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: UUWay
+Upstream-Contact: GaryOAO <62834599+GaryOAO@users.noreply.github.com>
+Source: https://github.com/GaryOAO/UUWay
+Comment: UUWay is an independent project. It does not contain or distribute any
+ UU Remote file; the user installs the official client from NetEase's own
+ installer. "UU" and "UU Remote" belong to their respective owners.
+ .
+ Complete corresponding source: the git tag of this version in the repository
+ above. The package is built from that tag by packaging/build-in-container.sh
+ inside an Ubuntu 24.04 container, fetching only the pinned, hash-checked
+ upstream sources named in config/*.json and scripts/build-*.sh.
+
+Files: *
+Copyright: 2026 GaryOAO
+License: AGPL-3+
+Comment: Portions derive from uu-remote-ubuntu-bridge by Lachlan Chen
+ (https://github.com/lachlanchen/uu-remote-ubuntu-bridge, Copyright 2026
+ Lachlan Chen). Those portions remain available under the MIT license
+ reproduced in /usr/share/doc/uuway/NOTICE.
+
+Files: usr/lib/uuway/build/dxvk-capture/stage/*
+Copyright: Philip Rebohle and the DXVK contributors
+License: Zlib
+Comment: d3d11.dll and dxgi.dll are DXVK v3.1 built from the upstream source
+ with patches/dxvk-3.1-private-capture.patch. The upstream license text is
+ installed as DXVK_LICENSE in the same directory.
+
+Files: usr/lib/uuway/build/native-presenter/*.dll usr/lib/uuway/build/native-presenter/*.dll.so usr/lib/uuway/build/native-presenter/*.exe
+Copyright: 2026 GaryOAO
+License: AGPL-3+
+Comment: Windows-side components are cross-compiled with mingw-w64, or with
+ winegcc against Wine 11.0 import libraries and Wine 9.0 headers (LGPL-2.1+,
+ sources at https://www.winehq.org). Video encoding uses the NVENC interface
+ declared in FFmpeg's nv-codec-headers n13.0.19.0 (MIT, header-only).
+
+License: AGPL-3+
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU Affero General Public License as published by the Free
+ Software Foundation, either version 3 of the License, or (at your option) any
+ later version.
+ .
+ This program is distributed in the hope that it will be useful, but WITHOUT
+ ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+ details.
+ .
+ The full text is in /usr/share/doc/uuway/LICENSE.
+
+License: Zlib
+ This software is provided 'as-is', without any express or implied warranty.
+ In no event will the authors be held liable for any damages arising from the
+ use of this software.
+ .
+ Permission is granted to anyone to use this software for any purpose,
+ including commercial applications, and to alter it and redistribute it
+ freely, subject to the following restrictions:
+ .
+ 1. The origin of this software must not be misrepresented; you must not claim
+    that you wrote the original software. If you use this software in a
+    product, an acknowledgment in the product documentation would be
+    appreciated but is not required.
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+ 3. This notice may not be removed or altered from any source distribution.

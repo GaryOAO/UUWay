@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version for a test build (no release is created)
+        default: 0.0.0~ci
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="${{ inputs.version }}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # The same scripts a maintainer runs locally: a clean Ubuntu 24.04 container does the build.
+      - name: Build the package
+        run: packaging/build-deb.sh --version "${{ steps.version.outputs.version }}" --output-dir out
+      - name: Install it in a clean container and check it
+        run: packaging/test-deb.sh out/uuway_${{ steps.version.outputs.version }}_amd64.deb
+      - name: Checksums
+        run: cd out && sha256sum uuway_*_amd64.deb > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uuway-deb
+          path: out/
+      # A draft: nothing becomes public until a maintainer reads the notes and publishes it.
+      - name: Draft the GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "UUWay ${GITHUB_REF_NAME#v}" --notes-file packaging/release-notes.md \
+            out/uuway_*_amd64.deb out/SHA256SUMS

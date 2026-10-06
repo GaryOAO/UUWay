@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove|purge)
+    # A script run as root from the read-only tree leaves Python caches that are not package
+    # files, so dpkg would leave them (and the directory) behind.
+    rm -rf /usr/lib/uuway/scripts/__pycache__
+    rmdir --ignore-fail-on-non-empty /usr/lib/uuway/scripts /usr/lib/uuway 2>/dev/null || true
+    if command -v udevadm >/dev/null 2>&1 && [ -d /run/udev ]; then
+        udevadm control --reload || true
+    fi
+    ;;
+esac
+
+# purge deliberately leaves every home directory alone: the Wine prefix, the UU
+# login, the screen-share grant and ~/.config/uurb belong to the user.
+exit 0

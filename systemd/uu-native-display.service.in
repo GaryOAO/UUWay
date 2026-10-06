@@ -1,6 +1,8 @@
 # Managed by UURB native installer; independent of UU/video reconnects.
 [Unit]
 Description=UU native Wayland display rollback guardian
+# After the package is removed this unit stays behind in the user's home; skip it quietly.
+ConditionPathExists=@ROOT@/scripts/uu-native-display-service.py
 After=graphical-session.target
 PartOf=graphical-session.target
 StartLimitIntervalSec=300

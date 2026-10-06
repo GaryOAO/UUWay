@@ -1,0 +1,72 @@
+name: 兼容性报告 / Compatibility report
+description: 告诉我们 UUWay 在你的机器上能不能用（成功和失败都欢迎）
+title: "[兼容性] <显卡> + <Ubuntu 版本>：<结果>"
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        UUWay 目前只在 Ubuntu 24.04 + GNOME 46 Wayland + NVIDIA 上验证过。你的报告会帮别人判断自己的机器能不能用。
+        运行 `uuway doctor` 可以一次性收集下面大部分信息。
+  - type: dropdown
+    id: result
+    attributes:
+      label: 结果 / Result
+      options:
+        - 完全可用 / Works
+        - 部分可用 / Partly works
+        - 不可用 / Does not work
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: 显卡与驱动 / GPU and driver
+      description: "`nvidia-smi` 的第一行和驱动版本"
+      placeholder: "NVIDIA GeForce RTX 3090, driver 580.x"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: 系统 / System
+      description: "Ubuntu 版本、GNOME 版本（`gnome-shell --version`）、内核（`uname -r`）"
+      placeholder: "Ubuntu 24.04.5, GNOME Shell 46.x, 6.8.0-xx"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: 版本 / Versions
+      description: "`uuway --version`、`/opt/wine-stable/bin/wine --version`、UU 远程版本"
+      placeholder: "uuway 1.0.0, wine-11.0, UU 4.42.0.2770"
+    validations:
+      required: true
+  - type: input
+    id: display
+    attributes:
+      label: 显示器 / Display
+      description: 真实显示器还是诱骗器、分辨率与刷新率
+      placeholder: "1080p 60 Hz, HDMI dummy plug"
+  - type: checkboxes
+    id: features
+    attributes:
+      label: 哪些功能正常 / What works
+      options:
+        - label: 画面串流 / Video
+        - label: 鼠标指针 / Cursor
+        - label: 键盘与鼠标 / Keyboard and mouse
+        - label: 手机中文输入 / Phone text input
+        - label: 远程终端 / Remote terminal
+        - label: 剪贴板 / Clipboard
+        - label: 文件传输 / File transfer
+        - label: 分辨率与刷新率切换 / Resolution switching
+  - type: textarea
+    id: doctor
+    attributes:
+      label: uuway doctor 输出 / Output of `uuway doctor`
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: 其他说明 / Anything else

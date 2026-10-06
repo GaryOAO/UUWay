@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=UUWay 控制台
+Name[en]=UUWay Console
+Keywords=UU;UUWay;Bridge;设置;控制台;
+Comment=UUWay Linux 原生 bridge：服务、输入、显示和文件接收
+Exec=/usr/bin/uuway-console
+Icon=uuway
+Terminal=false
+Categories=Settings;Utility;
+StartupNotify=true
+StartupWMClass=io.uuway.Console

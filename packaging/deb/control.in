@@ -1,0 +1,24 @@
+Package: uuway
+Version: @VERSION@
+Architecture: amd64
+Maintainer: GaryOAO <62834599+GaryOAO@users.noreply.github.com>
+Installed-Size: @SIZE@
+Depends: python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xclip, procps, libgtk-3-bin, udev, systemd@SHLIBS@
+Recommends: fcitx5
+Suggests: winehq-stable (>= 11.0)
+Section: utils
+Priority: optional
+Homepage: https://github.com/GaryOAO/UUWay
+Description: NetEase UU Remote host for Linux, with native Wayland capture and NVENC
+ UUWay runs the official UU Remote Windows host under Wine and hands every
+ Windows interface it relies on to a native Linux implementation: GPU
+ zero-copy screen capture through the Wayland/PipeWire portal, NVENC hardware
+ encoding, uinput keyboard and mouse, Fcitx5 text input, clipboard, file
+ transfer, and a Linux login shell as the remote terminal.
+ .
+ UU Remote itself is not included. Run "uuway setup" as your normal user to
+ install it from the official Windows installer into a private Wine prefix.
+ .
+ Requires GNOME on Wayland, an NVIDIA GPU with NVENC and the proprietary
+ driver, and WineHQ stable 11.0 (not packaged by Ubuntu; "uuway setup --system"
+ adds the WineHQ repository).

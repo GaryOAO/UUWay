@@ -1,0 +1,6 @@
+# The runtime bundle built from these files is verified byte for byte every time the service
+# starts, and they ship exactly as they were built and validated on real hardware.
+uuway: unstripped-binary-or-object [usr/lib/uuway/build/native-presenter/*]
+uuway: unstripped-binary-or-object [usr/lib/uuway/fcitx5/libuurb-native-ime.so]
+# prerm stops the *user* services of every logged-in user; deb-systemd-invoke only handles system units.
+uuway: maintainer-script-calls-systemctl [prerm:*]
