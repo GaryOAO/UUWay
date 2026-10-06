@@ -8,7 +8,7 @@
 ![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
-![Status](https://img.shields.io/badge/状态-开发者预览-f59e0b)
+![Status](https://img.shields.io/badge/状态-正式版-22c55e)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
 
 </div>
@@ -60,7 +60,7 @@ UUWay 是一层**适配层**：UU 照常调用它在任何一台 Windows 电脑�
 
 更多细节见[设计说明](docs/design.md)（英文）。
 
-## 🚀 一键安装
+## 🚀 安装
 
 **准备：**
 
@@ -68,28 +68,49 @@ UUWay 是一层**适配层**：UU 照常调用它在任何一台 Windows 电脑�
 - 支持 NVENC 的 **NVIDIA** 显卡和官方驱动
 - UU 远程官方 **Windows 版**安装包，以及一个 UU 账号
 
+**1. 安装软件包。** 从 [Releases](https://github.com/GaryOAO/UUWay/releases/latest) 下载 `uuway_<版本>_amd64.deb`：
+
+```bash
+sudo apt install ./uuway_*_amd64.deb
+```
+
+**2. 运行安装向导**（用普通用户，不要加 sudo）：
+
+```bash
+uuway setup --installer ~/Downloads/UURemote_Setup.exe
+```
+
+向导会依次检查环境、添加并安装 WineHQ stable 11.0（需要 sudo）、授权键鼠注入（需要管理员授权）、把 UU 装进独立的 Wine 前缀、授权屏幕共享，最后写入并启动用户服务。整个过程只有三件事需要你亲手完成：在弹出的 UU 窗口里**登录账号**，在屏幕共享对话框里**选择显示器并勾选「记住」**，以及在随后弹出的文字服务对话框里点**允许**。完成后打开手机上的 UU 远程，设备列表里就会出现这台电脑。
+
+- 向导可以反复运行：已完成的步骤会跳过。`uuway setup --dry-run` 只显示将要执行的命令，`--only 步骤` 只重做某一步。
+- 出问题先运行 `uuway doctor`，它会逐项检查环境和安装状态。
+- 向导会把 WineHQ 固定在 11.0 系列（写入 `/etc/apt/preferences.d/uuway-wine`，需要你确认），避免 `apt upgrade` 悄悄升到会让画面采集失效的版本。
+- 如果你使用 Fcitx5，向导会启用手机中文输入所需的插件，需要执行一次 `fcitx5 -r` 才会生效。
+- 升级：`sudo apt install ./新版本.deb`，再运行 `uuway refresh`（会重启桥接服务，正在进行的远程会话会短暂断开）。
+- 卸载：先 `uuway uninstall`，再 `sudo apt remove uuway`。Wine 前缀（含 UU 登录信息）不会被删除。
+
+> 已在 Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770 上长期日常使用。其他显卡、驱动和显示器配置还缺少验证，欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)，成功和失败的都有帮助。
+
+**从源码构建**（开发者）：
+
 ```bash
 git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
 ./install.sh --installer ~/Downloads/UURemote_Setup.exe
 ```
 
-脚本会依次检查环境、安装依赖和 WineHQ、把 UU 装进独立的 Wine 前缀、构建原生运行时、授权输入与屏幕共享，最后打包并启动服务。整个过程只有两件事需要你亲手完成：在弹出的 UU 窗口里**登录账号**，以及在屏幕共享对话框里**选择显示器并勾选「记住」**。完成后打开手机上的 UU 远程，设备列表里就会出现这台电脑。
-
-- 中断后用 `./install.sh --from 步骤号` 继续；`./install.sh --dry-run` 只显示将要执行的命令。
-- 手动安装、可选的 60 帧帧节奏补丁和排错，见[构建与安装指南](docs/build.md)（英文）。
-
-> UUWay 目前是**开发者预览版**：它在开发机上每天都在使用，但目前只在 Ubuntu 24.04 + RTX 3090 上验证过。
+脚本会检查环境、安装依赖和 WineHQ、构建原生运行时并启动服务；中断后用 `./install.sh --from 步骤号` 继续。手动安装、可选的 60 帧帧节奏补丁和排错见[构建与安装指南](docs/build.md)（英文）。
 
 ## 📦 目录结构
 
 ```
-install.sh  一键安装脚本
+install.sh  从源码构建并安装的脚本
+packaging/  deb 打包、容器内构建与安装测试
+assets/     图标与桌面图片
 src/        原生后端（Linux 侧与 Windows/Wine 侧）及辅助程序
 scripts/    服务、打包、构建、版本审计工具及 Python/GTK 控制台
 patches/    DXVK 采集、Mutter 帧节奏、Portal 会话生命周期补丁
 config/     固定版本的构建依赖与 udev 规则
 systemd/    用户服务模板
-native/     原生运行时组件
 tests/      单元测试与探针
 docs/       设计说明、构建指南、版本审计
 ```

@@ -8,7 +8,7 @@
 ![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
-![Status](https://img.shields.io/badge/status-developer_preview-f59e0b)
+![Status](https://img.shields.io/badge/status-stable-22c55e)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
 
 </div>
@@ -64,7 +64,7 @@ negotiation.
 
 See the [design notes](docs/design.md) for details.
 
-## 🚀 One-step install
+## 🚀 Install
 
 **You need:**
 
@@ -73,24 +73,54 @@ See the [design notes](docs/design.md) for details.
 - An **NVIDIA** GPU with NVENC and the proprietary driver
 - The official UU Remote **Windows** installer and a UU account
 
+**1. Install the package.** Download `uuway_<version>_amd64.deb` from the
+[latest release](https://github.com/GaryOAO/UUWay/releases/latest):
+
+```bash
+sudo apt install ./uuway_*_amd64.deb
+```
+
+**2. Run the setup wizard** as your normal user (no sudo):
+
+```bash
+uuway setup --installer ~/Downloads/UURemote_Setup.exe
+```
+
+The wizard checks the system, adds and installs WineHQ stable 11.0 (needs sudo), grants input access
+(needs an administrator prompt), installs UU into its own Wine prefix, grants screen-cast access,
+then writes and starts the user services. Only three things need you: **sign in** in the UU window
+it opens, in the screen-sharing dialog **pick the monitor and tick "remember"**, and click **Allow**
+in the text-service dialog that follows. Then open UU Remote on your phone — this computer is in your
+device list. The wizard's messages are in Chinese.
+
+- The wizard can be run again: finished steps are skipped. `uuway setup --dry-run` only prints what it
+  would run, and `--only STEP` redoes a single step.
+- When something is wrong, run `uuway doctor`; it checks the environment and the installation item by
+  item.
+- The wizard pins WineHQ to the 11.0 series (it writes `/etc/apt/preferences.d/uuway-wine`, after you
+  confirm), so that `apt upgrade` cannot move it to a version that breaks screen capture.
+- With Fcitx5, the wizard enables the add-on that phone text input needs; run `fcitx5 -r` once for it
+  to load.
+- Upgrade with `sudo apt install ./newer.deb`, then `uuway refresh` (it restarts the bridge service,
+  so a running remote session drops briefly).
+- Uninstall with `uuway uninstall`, then `sudo apt remove uuway`. The Wine prefix, which holds your UU
+  login, is never deleted.
+
+> In daily use on Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770. Other GPUs, drivers
+> and monitor setups are not verified yet; a
+> [compatibility report](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)
+> helps, whether it works or not.
+
+**Building from source** (developers):
+
 ```bash
 git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
 ./install.sh --installer ~/Downloads/UURemote_Setup.exe
 ```
 
-The script checks the system, installs the dependencies and WineHQ, installs UU into its own Wine
-prefix, builds the native runtime, grants input and screen-cast access, then packages and starts the
-services. Only two things need you: **sign in** in the UU window it opens, and in the screen-sharing
-dialog **pick the monitor and tick "remember"**. Then open UU Remote on your phone — this computer is
-in your device list. The installer's messages are in Chinese.
-
-- Resume after an interruption with `./install.sh --from STEP`; `./install.sh --dry-run` only prints
-  what it would run.
-- For a manual install, the optional 60 FPS pacing patch and troubleshooting, see the
-  [build and install guide](docs/build.md).
-
-> UUWay is a **developer preview**: it is in daily use on its development machine, but so far only
-> verified on Ubuntu 24.04 with an RTX 3090.
+The script checks the system, installs the dependencies and WineHQ, builds the native runtime and starts
+the services; resume with `./install.sh --from STEP`. For a manual install, the optional 60 FPS pacing
+patch and troubleshooting, see the [build and install guide](docs/build.md).
 
 After installation, open **UUWay Console** from the application menu. It uses the bridge's existing
 Python + GTK stack and exposes service capabilities, input, text backend, display modes, the Linux
@@ -99,13 +129,14 @@ penguin desktop image, and the file receive mapping (XDG Downloads by default).
 ## 📦 Repository layout
 
 ```
-install.sh  one-step installer
+install.sh  build-from-source installer
+packaging/  deb packaging, container build and install tests
+assets/     icons and the desktop image
 src/        native backends (Linux and Windows/Wine sides) and helpers
 scripts/    service, packaging, build, release-audit tooling and Python/GTK console
 patches/    DXVK capture, Mutter pacing, portal session-lifetime patches
 config/     pinned build inputs and the udev rule
 systemd/    user service templates
-native/     native runtime components
 tests/      unit tests and probes
 docs/       design notes, build guide, release reviews
 ```

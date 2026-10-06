@@ -4,6 +4,13 @@
 act (signing in to UU, choosing the monitor to share); `./install.sh --help` lists its options. This
 guide is the same procedure by hand, for when you want to see or change a step.
 
+**Most users do not need this guide.** The `.deb` on the
+[Releases page](https://github.com/GaryOAO/UUWay/releases/latest) contains every component built
+below: install it with `sudo apt install ./uuway_*_amd64.deb` and run `uuway setup`. This guide is for
+building from source. The reference build environment is `packaging/container-build.sh`, which builds
+everything in a clean Ubuntu 24.04 container (gcc 11, WineHQ stable 11.0.0.0, CUDA 12.1 headers);
+`packaging/build-deb.sh` runs it under docker and produces the package. Other compilers are untested.
+
 This is the procedure UUWay is developed and run with. It assumes Ubuntu 24.04, GNOME 46 on
 Wayland, an NVIDIA GPU with the proprietary driver, and a user session that stays logged in
 (auto-login plus a display dummy plug for headless machines). Nothing here replaces a system
@@ -22,10 +29,21 @@ Paths below use the defaults the tooling expects:
 ## 1. Dependencies
 
 ```bash
-sudo apt install build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl \
-    libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libvulkan-dev glslang-tools \
-    libei-dev fcitx5-modules-dev xvfb xclip python3-gi gir1.2-gtk-3.0
+sudo apt install build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl git ripgrep \
+    libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev glslang-tools \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev libfcitx5utils-dev \
+    libei-dev fcitx5-modules-dev xvfb xclip python3-gi python3-dbus gir1.2-gtk-3.0 gir1.2-atspi-2.0
 ```
+
+### CUDA headers
+
+The build scripts read the CUDA driver-API header from the fixed path `/usr/local/cuda/include/cuda.h`
+and link `-lcuda`. Use the **12.1** headers: newer ones map calls such as `cuCtxCreate` to newer symbol
+versions that older drivers do not export. Two small packages from NVIDIA's CUDA repository provide
+them (12.1.105, about 1 MB); `packaging/container-build.sh` shows the URLs and SHA-256 sums and how
+they are unpacked. The second one also ships the official `libcuda.so` link stub, which lets a machine
+without the NVIDIA driver link the binaries (`LIBRARY_PATH=/usr/local/cuda/lib64/stubs`). Never ship
+that stub; the driver provides `libcuda.so.1` on the machine that runs UUWay.
 
 Install **WineHQ stable 11** so that `/opt/wine-stable/bin/wine` exists
 ([WineHQ instructions](https://gitlab.winehq.org/wine/wine/-/wikis/Debian-Ubuntu)). CUDA comes from
