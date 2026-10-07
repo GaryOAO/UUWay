@@ -41,7 +41,7 @@ struct probe {
     unsigned delivery_gaps[4];
     struct uurb_capture_timing source_timing;
     unsigned missing_source_header;
-    unsigned process_callbacks, maximum_batch;
+    unsigned process_callbacks, maximum_batch, superseded;
     struct uurb_cursor_snapshot *cursor;
     unsigned cursor_updates;
     int cursor_mutter;
@@ -236,19 +236,54 @@ static void process_frame(struct probe *p, struct pw_buffer *frame)
     if (!valid) fail(p, "Invalid/non-DMA-BUF plane metadata; refusing fallback");
 }
 
+#define MAX_QUEUED 16
+
+/* Holds a new desktop image. Zero-size chunks are cursor-only updates or empty notifications. */
+static int carries_video(struct pw_buffer *frame)
+{
+    struct spa_buffer *buffer = frame->buffer;
+    if (!buffer || !buffer->n_datas || buffer->n_datas > 4) return 0;
+    for (uint32_t i = 0; i < buffer->n_datas; i++)
+        if (!buffer->datas[i].chunk || !buffer->datas[i].chunk->size ||
+            (buffer->datas[i].chunk->flags & SPA_CHUNK_FLAG_CORRUPTED)) return 0;
+    return 1;
+}
+
+/* A newer desktop image is already waiting, so this one is never delivered. Only its cursor
+ * metadata is kept: a new shape may be carried by this buffer alone. */
+static void supersede_frame(struct probe *p, struct pw_buffer *frame)
+{
+    struct spa_buffer *buffer = frame->buffer;
+    struct spa_meta *meta = p->cursor && buffer ? spa_buffer_find_meta(buffer, SPA_META_Cursor) : NULL;
+    int update = meta ? uurb_cursor_metadata(p->cursor, meta->data, meta->size, p->cursor_mutter) : 0;
+    pw_stream_queue_buffer(p->stream, frame);
+    if (update < 0) { fail(p, "Invalid bounded cursor metadata"); return; }
+    p->cursor_updates += update;
+    p->superseded++;
+}
+
 static void process(void *opaque)
 {
     struct probe *p = opaque;
-    unsigned batch = 0;
-    struct pw_buffer *frame;
+    struct pw_buffer *queued[MAX_QUEUED];
+    unsigned count = 0, newest = 0;
     p->process_callbacks++;
     /* Drain coalesced process notifications. Bound work per dispatch so the
      * control loop can still handle its watchdog and stream lifecycle events. */
-    while (batch < 16 && !p->failed && (frame = pw_stream_dequeue_buffer(p->stream))) {
-        process_frame(p, frame);
-        batch++;
+    while (count < MAX_QUEUED && !p->failed && (queued[count] = pw_stream_dequeue_buffer(p->stream))) count++;
+    if (count > p->maximum_batch) p->maximum_batch = count;
+    /* Real time over completeness: while a slow frame was being delivered (a busy GPU) the stream
+     * queued newer ones. Delivering them oldest first would put the remote picture further behind
+     * with every frame. Deliver the newest desktop image and recycle the older ones. Cursor-only
+     * buffers after it still run, in order, on top of that image. */
+    if (p->negotiated)
+        for (unsigned i = count; i-- > 0;)
+            if (carries_video(queued[i])) { newest = i; break; }
+    for (unsigned i = 0; i < count; i++) {
+        if (p->failed) pw_stream_queue_buffer(p->stream, queued[i]);
+        else if (i < newest) supersede_frame(p, queued[i]);
+        else process_frame(p, queued[i]);
     }
-    if (batch > p->maximum_batch) p->maximum_batch = batch;
 }
 
 static void timer(void *opaque, uint64_t expirations)
@@ -538,7 +573,7 @@ int main(int argc, char **argv)
                "\"negotiated_framerate\":[%u,%u],\"negotiated_max_framerate\":[%u,%u],\"requested_max_fps\":%lu,"
                "\"source_pts_samples\":%u,\"source_pts_invalid\":%u,\"source_header_missing\":%u,\"source_pts_fps\":%.3f,"
                "\"source_gap_bins_ms\":{\"lt12\":%u,\"12to24\":%u,\"24to40\":%u,\"ge40\":%u},"
-               "\"process_callbacks\":%u,\"maximum_batch\":%u,\"encode_timestamp_source\":\"%s\"}\n",
+               "\"process_callbacks\":%u,\"maximum_batch\":%u,\"superseded_frames\":%u,\"encode_timestamp_source\":\"%s\"}\n",
                 stats.imports, stats.average_us, stats.maximum_us, span, span > 0 ? (p.frames - 1) / span : 0,
                 (double)p.maximum_gap_ns / 1000, p.delivery_gaps[0], p.delivery_gaps[1], p.delivery_gaps[2], p.delivery_gaps[3],
                 p.video.framerate.num, p.video.framerate.denom, p.video.max_framerate.num, p.video.max_framerate.denom,
@@ -546,7 +581,7 @@ int main(int argc, char **argv)
                 p.source_timing.samples, p.source_timing.invalid, p.missing_source_header,
                 uurb_capture_timing_fps(&p.source_timing),
                 p.source_timing.gaps[0], p.source_timing.gaps[1], p.source_timing.gaps[2], p.source_timing.gaps[3],
-                p.process_callbacks, p.maximum_batch, (encode || relay) ? "pipewire-pts" : "none");
+                p.process_callbacks, p.maximum_batch, p.superseded, (encode || relay) ? "pipewire-pts" : "none");
         result = 0;
     } else fprintf(stderr, "Native capture did not deliver valid DMA-BUF frames\n");
 pw_done:

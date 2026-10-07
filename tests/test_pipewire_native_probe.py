@@ -121,5 +121,22 @@ class NativePipewireProbeTests(unittest.TestCase):
         self.assertNotIn('VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;', source)
 
 
+    def test_queued_frames_are_superseded_so_the_picture_never_falls_behind(self):
+        source = (ROOT / 'src/uu_pipewire_native_probe.c').read_text()
+        process = source[source.index('static void process(void *opaque)'):source.index('static void timer(')]
+        # Every queued buffer is taken first, then only the newest desktop image goes on to the encoder.
+        self.assertLess(process.index('pw_stream_dequeue_buffer'), process.index('carries_video'))
+        self.assertLess(process.index('supersede_frame'), process.index('process_frame'))
+        self.assertIn('for (unsigned i = count; i-- > 0;)', process)  # newest first, so later cursor-only buffers still run
+        self.assertIn('if (p->negotiated)', process)  # before negotiation nothing is judged or dropped
+        # A superseded buffer is recycled, never encoded, and still feeds its cursor metadata.
+        supersede = source[source.index('static void supersede_frame'):source.index('static void process(void *opaque)')]
+        self.assertIn('uurb_cursor_metadata', supersede)
+        self.assertLess(supersede.index('uurb_cursor_metadata'), supersede.index('pw_stream_queue_buffer'))
+        for forbidden in ('uurb_capture_encoder_frame', 'uurb_capture_encoder_cursor_frame', 'record_delivery'):
+            self.assertNotIn(forbidden, supersede)
+        self.assertIn('\\"superseded_frames\\":%u', source)
+
+
 if __name__ == '__main__':
     unittest.main()
