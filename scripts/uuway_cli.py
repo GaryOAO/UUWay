@@ -15,6 +15,7 @@ import contextlib
 import ctypes
 import fcntl
 import filecmp
+import getpass
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,8 @@ WINE_DIR = Path('/opt/wine-stable/bin')
 WINE_SERIES = 'wine-11.0'
 WINE_PIN = Path('/etc/apt/preferences.d/uuway-wine')
 SERVICES = ('uu-native-display', 'uu-native-text', 'uu-native-bridge')
+GDM_CONFIGS = (Path('/etc/gdm3/custom.conf'), Path('/etc/gdm/custom.conf'))  # Debian/Ubuntu, Fedora/Arch
+AUTOLOGIN_KEYS = ('AutomaticLoginEnable', 'AutomaticLogin')
 UDEV_RULE = '70-uurb-native-input.rules'
 SHIPPED_RULE = Path('/usr/lib/udev/rules.d') / UDEV_RULE
 LEGACY_RULE = Path('/etc/udev/rules.d') / UDEV_RULE
@@ -696,6 +699,161 @@ def launchers_run(ctx):
         ctx.run(['systemctl', '--user', 'daemon-reload'])
 
 
+# --------------------------------------------------------------------- step: autologin
+
+AUTOLOGIN_NOTE = """   UU 跟着你的桌面会话上线：重启、断电恢复或注销之后，没人在屏幕前登录，UU 就是离线的。
+   开启开机自动登录后，GDM 会在开机时自动登录 {user}，UU 随之上线；之后锁屏、息屏都不受影响。
+   代价：任何能接触这台机器的人，开机就能进入你的桌面。建议同时开启磁盘加密或固件密码，并设置自动锁屏。
+   另外 GNOME 钥匙环不会自动解锁，个别应用第一次用到它时会询问密码。
+   说明：自动登录只在 GDM 启动时触发；手动注销后会停在登录界面，需要重启（或在那里登录）UU 才会回来。
+   UU 看不到 GDM 登录界面：它属于另一个系统会话，UUWay 的采集和输入都只在你的桌面会话里。"""
+
+
+def gdm_config():
+    return next((path for path in GDM_CONFIGS if path.is_file()), None)
+
+
+def gdm_autologin(text):
+    """(enabled, user) as the [daemon] section sets them; a later line wins, as in GLib's key file parser."""
+    values, section = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('[') and line.endswith(']'):
+            section = line[1:-1]
+        elif section == 'daemon' and line[:1] not in ('#', ';'):
+            key, _, value = line.partition('=')
+            if key.strip() in AUTOLOGIN_KEYS:
+                values[key.strip()] = value.strip()
+    return values.get('AutomaticLoginEnable', '').lower() in ('true', '1', 'yes'), values.get('AutomaticLogin') or None
+
+
+def gdm_set_autologin(text, user, enable):
+    """The config with AutomaticLogin* set for user, or removed; every other line stays as it was."""
+    kept, section = [], None
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith('[') and stripped.endswith(']'):
+            section = stripped[1:-1]
+        elif section == 'daemon' and stripped[:1] not in ('#', ';') and stripped.partition('=')[0].strip() in AUTOLOGIN_KEYS:
+            continue
+        kept.append(line)
+    if not enable:
+        return ''.join(kept)
+    lines = f'AutomaticLoginEnable=true\nAutomaticLogin={user}\n'
+    for index, line in enumerate(kept):
+        if line.strip() == '[daemon]':
+            kept.insert(index + 1, lines)
+            return ''.join(kept)
+    separator = '' if not kept or kept[-1].endswith('\n') else '\n'
+    return ''.join(kept) + separator + '\n[daemon]\n' + lines
+
+
+def autologin_state(ctx):
+    """(config path, enabled, user), or None when this machine has no GDM config to edit."""
+    path = gdm_config()
+    if path is None:
+        return None
+    try:
+        return (path, *gdm_autologin(path.read_text()))
+    except OSError:
+        return None
+
+
+def autologin_declined(ctx):
+    return (ctx.state_dir / 'autologin-declined').exists()
+
+
+def autologin_done(ctx):
+    state = autologin_state(ctx)
+    return state is None or state[1] or autologin_declined(ctx)
+
+
+def autologin_apply(ctx, path, text, note):
+    """Write text over the GDM config as root: a backup next to it first, then install."""
+    stage = ctx.state_dir / 'gdm-custom.conf.new'
+    backup = path.with_name(path.name + time.strftime('.before-uuway-%Y%m%d-%H%M%S'))
+    if not ctx.dry_run:
+        write_atomic(stage, text.encode(), 0o600)
+    try:
+        ctx.run(ctx.elevate(['cp', '-p', str(path), str(backup)]))
+        ctx.run(ctx.elevate(['install', '-m', '0644', '-o', 'root', '-g', 'root', str(stage), str(path)]))
+    finally:
+        if not ctx.dry_run:
+            stage.unlink(missing_ok=True)
+    ok(note + f'（原文件备份为 {backup}）')
+    return backup
+
+
+def autologin_run(ctx):
+    state = autologin_state(ctx)
+    if state is None:
+        info('没有找到 GDM 配置（/etc/gdm3/custom.conf），不是 GNOME 登录管理器 GDM，跳过。')
+        return
+    path, enabled, current = state
+    user = getpass.getuser()
+    if enabled and current != user:
+        warn(f'GDM 已把自动登录开给了 {current}，UUWay 不会改动它；要给 {user} 开启，请自行编辑 {path}。')
+        return
+    if enabled:
+        ok(f'已经为 {user} 开启了开机自动登录')
+        return
+    explicit = 'autologin' in parse_steps(getattr(ctx.args, 'only', None))
+    print(AUTOLOGIN_NOTE.format(user=user))
+    if not explicit:
+        # A security setting: --yes and a non-interactive run never turn it on behind the user's back.
+        if ctx.assume_yes or ctx.dry_run or not sys.stdin.isatty():
+            info('这一步需要你亲自决定，已跳过；需要时运行：uuway autologin on')
+            return
+        if not input('   开启开机自动登录？[y/N] ').lower().startswith('y'):
+            ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            (ctx.state_dir / 'autologin-declined').touch(mode=0o600)
+            info('不开启。以后需要：uuway autologin on')
+            return
+    elif not ctx.confirm(f'为 {user} 开启开机自动登录？（会弹出授权窗口）'):
+        raise SetupError('没有开启自动登录。')
+    backup = autologin_apply(ctx, path, gdm_set_autologin(path.read_text(), user, True), f'已为 {user} 开启开机自动登录')
+    if not ctx.dry_run:
+        (ctx.state_dir / 'autologin-declined').unlink(missing_ok=True)
+        write_atomic(ctx.state_dir / 'autologin.json',
+                     json.dumps(dict(version=1, user=user, config=str(path), backup=str(backup))).encode(), 0o600)
+
+
+def autologin_off(ctx):
+    state = autologin_state(ctx)
+    if state is None:
+        info('没有找到 GDM 配置，没有可关闭的自动登录。')
+        return
+    path, enabled, current = state
+    recorded = read_json(ctx.state_dir / 'autologin.json')
+    if not enabled:
+        info('开机自动登录本来就没有开启。')
+    elif not recorded or recorded.get('user') != current:
+        warn(f'这个自动登录不是 UUWay 开启的，没有改动。要关闭，请编辑 {path}，把 AutomaticLoginEnable 改为 false。')
+        return
+    else:
+        autologin_apply(ctx, path, gdm_set_autologin(path.read_text(), current, False), '已关闭开机自动登录')
+    if not ctx.dry_run:
+        (ctx.state_dir / 'autologin.json').unlink(missing_ok=True)
+
+
+def command_autologin(args):
+    ctx = Context(args)
+    if getattr(args, 'action') == 'status':
+        state = autologin_state(ctx)
+        if state is None:
+            print('没有找到 GDM 配置，不适用。')
+        else:
+            path, enabled, user = state
+            print(f'开机自动登录：已为 {user} 开启（{path}）' if enabled else f'开机自动登录：未开启（{path}）')
+        return 0
+    if args.action == 'on':
+        args.only = 'autologin'
+        autologin_run(ctx)
+    else:
+        autologin_off(ctx)
+    return 0
+
+
 STEPS = (
     ('wine', 'WineHQ stable 11.0', wine_done, wine_run),
     ('udev', '键鼠注入权限（uinput）', udev_done, udev_run),
@@ -707,6 +865,7 @@ STEPS = (
     ('start', '启动服务', start_done, start_run),
     ('consent', '文字服务授权', consent_done, consent_run),
     ('launchers', '清理旧入口', launchers_done, launchers_run),
+    ('autologin', '开机自动登录（远程使用推荐，可选）', autologin_done, autologin_run),
 )
 STEP_NAMES = tuple(name for name, *_ in STEPS)
 REFRESH_STEPS = ('helpers', 'runtime', 'start')
@@ -834,6 +993,18 @@ def command_doctor(args):
         check('ok' if unit_active(ctx, name) else 'fail', f'{name} 运行中')
         for dropin in sorted((ctx.unit_dir / (name + '.service.d')).glob('*.conf')):
             check('warn', f'{name} 有 drop-in 覆盖', str(dropin))
+    login = autologin_state(ctx)
+    if login:
+        path, enabled, user = login
+        me = getpass.getuser()
+        if enabled and user == me:
+            check('ok', '开机自动登录', f'已为 {me} 开启')
+        elif enabled:
+            check('warn', '开机自动登录开给了另一个账号', f'{user}：重启后 {me} 的桌面不会自动出现，UU 不会上线')
+        elif autologin_declined(ctx):
+            check('ok', '开机自动登录', '未开启（你选择了不开启）：重启后需要有人登录，UU 才会上线')
+        else:
+            check('warn', '开机自动登录', '未开启：重启或断电恢复后需要有人在屏幕前登录，UU 才会上线；开启：uuway autologin on')
     if shutil.which('fcitx5') and fcitx_library().is_file():
         check('ok' if fcitx_conf_path(ctx).is_file() else 'warn', 'Fcitx5 输入法插件',
               str(fcitx_conf_path(ctx)))
@@ -852,6 +1023,7 @@ def command_doctor(args):
 
 def command_uninstall(args):
     ctx = Context(args)
+    turned_on_autologin = (ctx.state_dir / 'autologin.json').exists()  # --purge deletes the record below
     print(_paint('1', '卸载 UUWay 的用户级文件') + '（只处理带 UUWay 标记的文件）')
     if not ctx.confirm('停止并停用 UUWay 服务，删除它的单元文件和菜单入口？'):
         return 1
@@ -876,6 +1048,9 @@ def command_uninstall(args):
             info(f'删除 {directory}')
             if not ctx.dry_run:
                 shutil.rmtree(directory, ignore_errors=True)
+    if turned_on_autologin:
+        print('\n开机自动登录是 UUWay 开启的，卸载没有改动它；它的记录已随 --purge 删除，要关闭请编辑 GDM 配置。'
+              if args.purge else '\n开机自动登录是 UUWay 开启的，卸载没有改动它；要关闭：uuway autologin off')
     print('\nWine prefix（含 UU 登录信息）没有动：' + str(ctx.prefix)
           + '\n不再需要时可手动删除；要卸载程序本身：sudo apt remove uuway')
     return 0
@@ -918,6 +1093,11 @@ def build_parser():
     doctor.add_argument('--prefix', type=Path)
     doctor.add_argument('--json', action='store_true')
     doctor.set_defaults(handler=command_doctor)
+
+    autologin = commands.add_parser('autologin', help='开机自动登录（远程使用推荐）：重启后自动进入桌面，UU 随之上线')
+    common(autologin)
+    autologin.add_argument('action', choices=('on', 'off', 'status'))
+    autologin.set_defaults(handler=command_autologin)
 
     uninstall = commands.add_parser('uninstall', help='删除用户级服务与菜单入口')
     common(uninstall)

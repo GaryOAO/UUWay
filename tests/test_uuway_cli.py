@@ -580,6 +580,164 @@ class DryRunTests(CliCase):
         parser = cli.build_parser()
         for command in ("setup", "refresh", "doctor", "uninstall"):
             self.assertTrue(callable(parser.parse_args([command]).handler))
+        for action in ("on", "off", "status"):
+            self.assertTrue(callable(parser.parse_args(["autologin", action]).handler))
+
+
+UBUNTU_GDM = """# GDM configuration storage
+
+[daemon]
+# Uncomment the line below to force the login screen to use Xorg
+#WaylandEnable=false
+WaylandEnable=true
+
+#  AutomaticLoginEnable = true
+#  AutomaticLogin = user1
+
+[security]
+
+[xdmcp]
+"""
+
+
+class AutologinTests(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.gdm = self.root / "custom.conf"
+        self.gdm.write_text(UBUNTU_GDM)
+        override = patch.object(cli, "GDM_CONFIGS", (self.gdm,))
+        override.start()
+        self.addCleanup(override.stop)
+        override = patch.object(cli.getpass, "getuser", return_value="alice")
+        override.start()
+        self.addCleanup(override.stop)
+        self.staged = []
+
+    def recording_context(self, **options):
+        """Commands are only recorded, but the staged config is read where root would read it."""
+        ctx = self.context(**options)
+        self.record_commands(ctx)
+        record = ctx.run
+
+        def run(argv, **kwargs):
+            argv = [str(part) for part in argv]
+            if "install" in argv and Path(argv[-2]).exists():  # a dry run stages nothing
+                self.staged.append(Path(argv[-2]).read_text())
+            return record(argv, **kwargs)
+        ctx.run = run
+        return ctx
+
+    def test_reading_the_daemon_section_only_and_ignoring_comments(self):
+        self.assertEqual(cli.gdm_autologin(UBUNTU_GDM), (False, None))
+        self.assertEqual(cli.gdm_autologin("[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=alice\n"), (True, "alice"))
+        self.assertEqual(cli.gdm_autologin("[daemon]\nAutomaticLoginEnable=false\nAutomaticLogin=alice\n"), (False, "alice"))
+        self.assertEqual(cli.gdm_autologin("[security]\nAutomaticLoginEnable=true\nAutomaticLogin=bob\n"), (False, None))
+
+    def test_enabling_adds_two_lines_and_keeps_everything_else(self):
+        text = cli.gdm_set_autologin(UBUNTU_GDM, "alice", True)
+        self.assertEqual(cli.gdm_autologin(text), (True, "alice"))
+        self.assertEqual(text.replace("AutomaticLoginEnable=true\nAutomaticLogin=alice\n", "", 1), UBUNTU_GDM)
+        self.assertEqual(cli.gdm_set_autologin(text, "alice", True), text)  # idempotent
+
+    def test_enabling_replaces_existing_values_without_duplicates(self):
+        text = cli.gdm_set_autologin("[daemon]\nAutomaticLoginEnable=False\nAutomaticLogin=bob\nWaylandEnable=true\n", "alice", True)
+        self.assertEqual(text.count("AutomaticLogin"), 2)
+        self.assertEqual(cli.gdm_autologin(text), (True, "alice"))
+        self.assertIn("WaylandEnable=true", text)
+
+    def test_a_config_without_a_daemon_section_gets_one(self):
+        for original in ("", "[security]\nDisallowTCP=true", "[security]\nDisallowTCP=true\n"):
+            text = cli.gdm_set_autologin(original, "alice", True)
+            self.assertEqual(cli.gdm_autologin(text), (True, "alice"))
+            self.assertIn("DisallowTCP=true" if original else "[daemon]", text)
+
+    def test_disabling_removes_only_the_two_keys(self):
+        enabled = cli.gdm_set_autologin(UBUNTU_GDM, "alice", True)
+        self.assertEqual(cli.gdm_set_autologin(enabled, "alice", False), UBUNTU_GDM)
+        other_section = "[daemon]\nAutomaticLogin=alice\n[custom]\nAutomaticLogin=keep\n"
+        self.assertEqual(cli.gdm_set_autologin(other_section, "alice", False), "[daemon]\n[custom]\nAutomaticLogin=keep\n")
+
+    def test_on_backs_up_then_installs_the_edited_config_as_root(self):
+        ctx = self.recording_context(only="autologin")
+        _, output = self.quiet(cli.autologin_run, ctx)
+        copy, install = self.commands
+        self.assertEqual(copy[1:3], ["cp", "-p"])
+        self.assertEqual(copy[3], str(self.gdm))
+        self.assertIn(".before-uuway-", copy[4])
+        self.assertEqual(install[1:8], ["install", "-m", "0644", "-o", "root", "-g", "root"])
+        self.assertEqual(install[-1], str(self.gdm))
+        self.assertEqual(cli.gdm_autologin(self.staged[0]), (True, "alice"))
+        self.assertFalse((ctx.state_dir / "gdm-custom.conf.new").exists())
+        self.assertEqual(json.loads((ctx.state_dir / "autologin.json").read_text())["user"], "alice")
+        self.assertIn("钥匙环", output)  # the cost is shown before anything is asked
+
+    def test_yes_alone_never_turns_it_on(self):
+        ctx = self.recording_context()  # a plain `uuway setup --yes`
+        _, output = self.quiet(cli.autologin_run, ctx)
+        self.assertEqual(self.commands, [])
+        self.assertFalse((ctx.state_dir / "autologin.json").exists())
+        self.assertIn("uuway autologin on", output)
+
+    def test_a_declined_prompt_is_remembered_and_not_asked_again(self):
+        ctx = self.recording_context()
+        ctx.assume_yes = False
+        with patch.object(cli.sys.stdin, "isatty", return_value=True), patch("builtins.input", return_value="n"):
+            self.quiet(cli.autologin_run, ctx)
+        self.assertEqual(self.commands, [])
+        self.assertTrue(cli.autologin_done(ctx))
+
+    def test_another_accounts_autologin_is_never_changed(self):
+        self.gdm.write_text("[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=bob\n")
+        ctx = self.recording_context(only="autologin")
+        self.quiet(cli.autologin_run, ctx)
+        self.assertEqual(self.commands, [])
+        self.assertIn("bob", self.gdm.read_text())
+
+    def test_already_enabled_is_left_alone_and_off_only_reverts_what_uuway_did(self):
+        self.gdm.write_text("[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=alice\n")  # set by the owner, not by uuway
+        ctx = self.recording_context(only="autologin")
+        self.quiet(cli.autologin_run, ctx)
+        _, output = self.quiet(cli.autologin_off, ctx)
+        self.assertEqual(self.commands, [])
+        self.assertIn("不是 UUWay 开启的", output)
+
+    def test_off_restores_what_on_changed_and_forgets_the_record(self):
+        ctx = self.recording_context(only="autologin")
+        self.quiet(cli.autologin_run, ctx)
+        self.gdm.write_text(self.staged[0])  # what root's install would have written
+        self.commands.clear()
+        self.quiet(cli.autologin_off, ctx)
+        self.assertEqual(self.staged[1], UBUNTU_GDM)
+        self.assertFalse((ctx.state_dir / "autologin.json").exists())
+
+    def test_dry_run_and_other_login_managers_change_nothing(self):
+        ctx = self.recording_context(only="autologin")
+        ctx.dry_run = True
+        self.quiet(cli.autologin_run, ctx)
+        self.assertFalse((ctx.state_dir / "autologin.json").exists())
+        self.assertFalse((ctx.state_dir / "gdm-custom.conf.new").exists())
+        with patch.object(cli, "GDM_CONFIGS", (self.root / "absent.conf",)):
+            self.assertTrue(cli.autologin_done(ctx))  # no GDM: nothing to ask
+            self.assertIsNone(cli.autologin_state(ctx))
+
+    def test_the_step_is_optional_and_not_part_of_the_system_flag(self):
+        self.assertEqual(cli.STEP_NAMES[-1], "autologin")
+        self.assertNotIn("autologin", {"wine", "udev"})
+        self.assertIn("{'wine', 'udev'}", (ROOT / "scripts/uuway_cli.py").read_text())
+
+    def test_doctor_names_the_consequence_when_it_is_off(self):
+        def autologin_results():
+            args = Namespace(prefix=self.prefix, json=True)
+            with patch.object(cli.Context, "probe", lambda self, argv, **kw: completed(argv, 127)):
+                _, output = self.quiet(cli.command_doctor, args)
+            return [item for item in json.loads(output) if item["name"].startswith("开机自动登录")]
+        (item,) = autologin_results()
+        self.assertEqual(item["level"], "warn")
+        self.assertIn("UU 才会上线", item["detail"])
+        self.gdm.write_text(cli.gdm_set_autologin(UBUNTU_GDM, "alice", True))
+        self.assertEqual(autologin_results()[0]["level"], "ok")
+        self.gdm.write_text(cli.gdm_set_autologin(UBUNTU_GDM, "bob", True))
+        self.assertEqual(autologin_results()[0]["level"], "warn")  # enabled, but for someone else
 
 
 class DoctorTests(CliCase):

@@ -147,5 +147,10 @@ CJK text would arrive on the phone as `?`.
 
 - **Super Screen** creates virtual monitors through UU's IddCx driver, a Windows kernel-mode
   driver that Wine cannot load.
+- **The GDM login screen** is a separate session owned by the `gdm` user. The portal screen cast,
+  the input worker and the user services all belong to *your* session, so UU goes offline when
+  nobody is logged in. `uuway autologin on` makes GDM log the account in at boot (GDM does that once
+  per start, so a manual logout still stops at the greeter); showing the greeter itself would need
+  a second, system-level capture and input path that does not exist.
 - **Port mapping** listens on the *controller*, so it works as in UU, but nothing on the host side
   can create or observe a mapping.

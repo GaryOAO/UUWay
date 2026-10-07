@@ -33,6 +33,7 @@ you would a Windows PC.
 | 📁 Files: other device → Linux desktop | ✅ | The receive directory maps to the Linux XDG downloads directory |
 | 📁 Files: desktop → phone | ✅ | Implemented |
 | 🪟 Super Screen (virtual displays) | ❌ | Needs a Windows kernel driver (IddCx) that Wine cannot load |
+| 🔐 GDM login screen | ❌ | It belongs to another system session; UUWay works inside your desktop session. For remote-only use, enable `uuway autologin on` |
 | 📺 1440p / 4K at 60 Hz | ⚠️ | Limited by the refresh rates your display (or dummy plug) advertises |
 
 Verified with UU 4.42.0.2770 and no patch at all ([review](docs/releases/4.42.0.2770-native-review.md)).
@@ -97,6 +98,12 @@ device list. The wizard's messages are in Chinese.
   would run, and `--only STEP` redoes a single step.
 - When something is wrong, run `uuway doctor`; it checks the environment and the installation item by
   item.
+- **Using it only remotely?** Run `uuway autologin on`: after a reboot or a power cut GDM logs your account in
+  by itself, and UU comes online with the desktop (`uuway autologin off` undoes it). It is a security
+  setting, so the wizard and `--yes` never turn it on for you; anyone who can reach the machine gets your
+  desktop at boot, so pair it with disk encryption and an automatic screen lock. UU is offline at the GDM
+  login screen and after a manual logout, because UUWay's capture and input only exist inside your desktop
+  session.
 - The wizard pins WineHQ to the 11.0 series (it writes `/etc/apt/preferences.d/uuway-wine`, after you
   confirm), so that `apt upgrade` cannot move it to a version that breaks screen capture.
 - With Fcitx5, the wizard enables the add-on that phone text input needs; run `fcitx5 -r` once for it
