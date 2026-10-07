@@ -177,6 +177,10 @@ class PersistentTerminalSessionTests(NativeTerminalBrokerTests):
         client.sendall(struct.pack("!B3xI", 1, len(data)) + data)
 
     @staticmethod
+    def send_resize(client, columns, rows):
+        client.sendall(struct.pack("!B3xI", 2, 4) + struct.pack("!HH", columns, rows))
+
+    @staticmethod
     def read_until(client, marker, timeout=5):
         received = b""
         deadline = time.monotonic() + timeout
@@ -233,8 +237,57 @@ class PersistentTerminalSessionTests(NativeTerminalBrokerTests):
         self.send_input(second, b"stty size\n")
         self.assertIn(b"30 100", self.read_until(second, b"30 100"))
         anchor.close()
-        self.assertTrue(self.closed(second))
         second.close()
+
+    def test_live_viewer_outlives_a_dropped_anchor(self):
+        # UU can remove its pane process while a viewer is attached (reported on the PC client);
+        # that must not take the shell away from the viewer.
+        port = self.start()
+        viewer = self.connect(port, self.ATTACH, "session1")
+        pid = self.shell_pid(viewer)
+        anchor = self.connect(port, self.ANCHOR, "session1")
+        self.assertIsNotNone(anchor)
+        time.sleep(0.2)
+        anchor.close()
+        time.sleep(0.3)
+        self.assertEqual(self.shell_pid(viewer), pid)
+        viewer.close()
+
+    def test_session_ends_when_its_last_participant_drops(self):
+        port = self.start()
+        viewer = self.connect(port, self.ATTACH, "session1")
+        self.shell_pid(viewer)
+        anchor = self.connect(port, self.ANCHOR, "session1")
+        self.assertIsNotNone(anchor)
+        time.sleep(0.2)
+        anchor.close()
+        time.sleep(0.3)
+        viewer.close()
+        time.sleep(0.5)
+        self.assertIsNone(self.connect(port, self.ANCHOR, "session1"))
+
+    def test_out_of_range_resize_is_ignored_and_keeps_the_viewer(self):
+        # Reported from the PC client: 120x9001 while its terminal window initializes, then 120x30.
+        port = self.start()
+        viewer = self.connect(port, self.ATTACH, "session1", 100, 40)
+        pid = self.shell_pid(viewer)
+        for columns, rows in ((120, 9001), (0, 30), (120, 0), (1001, 30)):
+            self.send_resize(viewer, columns, rows)
+        self.send_input(viewer, b"stty size\n")
+        self.assertIn(b"40 100", self.read_until(viewer, b"40 100"))
+        self.send_resize(viewer, 120, 30)
+        self.send_input(viewer, b"stty size\n")
+        self.assertIn(b"30 120", self.read_until(viewer, b"30 120"))
+        self.assertEqual(self.shell_pid(viewer), pid)
+        viewer.close()
+
+    def test_malformed_resize_frame_still_drops_the_viewer(self):
+        port = self.start()
+        viewer = self.connect(port, self.ATTACH, "session1")
+        self.shell_pid(viewer)
+        viewer.sendall(struct.pack("!B3xI", 2, 3) + b"\x00\x78\x00")
+        self.assertTrue(self.closed(viewer))
+        viewer.close()
 
     def test_sessions_are_independent(self):
         port = self.start()

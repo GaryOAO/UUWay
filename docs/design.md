@@ -93,8 +93,11 @@ own pseudoconsole ends clients immediately when `PSEUDOCONSOLE_INHERIT_CURSOR` i
    viewer creates a holder process that owns the PTY; later viewers are handed to it with
    `SCM_RIGHTS` over an abstract socket checked with `SO_PEERCRED`. The psmux pane anchors the
    session, so closing the terminal in UU ends the shell and `exit` in the shell closes it in UU.
-   Returning viewers get a `SIGWINCH` redraw (full-screen programs repaint; a plain shell reprints
-   its prompt).
+   A viewer that is still attached keeps the shell when the pane goes away first; the session ends
+   when the last of viewer and pane has gone. Returning viewers get a `SIGWINCH` redraw
+   (full-screen programs repaint; a plain shell reprints its prompt). A resize frame with an
+   out-of-range size is ignored rather than treated as a protocol error, because a controller can
+   send one transiently while its terminal window initializes.
 
 ## Clipboard
 

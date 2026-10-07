@@ -237,9 +237,16 @@ static int apply_resize(int pty_master, const unsigned char *payload)
     memset(&size, 0, sizeof(size));
     size.ws_col = ntohs(columns_network);
     size.ws_row = ntohs(rows_network);
+    /* A controller can send one out-of-range size while its terminal window
+     * initializes (reported: 120x9001, then 120x30 a few milliseconds later).
+     * Dropping the viewer for it ended the session, so keep the previous
+     * size and carry on. */
     if (size.ws_col == 0 || size.ws_col > 1000 ||
-        size.ws_row == 0 || size.ws_row > 1000)
-        return 0;
+        size.ws_row == 0 || size.ws_row > 1000) {
+        fprintf(stderr, "terminal resize ignored size=%ux%u\n",
+                size.ws_col, size.ws_row);
+        return 1;
+    }
     {
         struct winsize current;
         pid_t group;
@@ -621,9 +628,12 @@ static int hold_session(int listener, int client, const struct handshake *handsh
             close(anchors[index]);
             anchors[index] = anchors[--anchor_count];
         }
+        /* UU can remove its pane process while a viewer is still attached
+         * (reported on the PC client). The viewer keeps the shell; the
+         * session ends when the last of viewer and anchor has gone. */
         if (anchored && anchor_count == 0) {
             fprintf(stderr, "terminal session anchor closed name=%s\n", handshake->name);
-            break;
+            anchored = 0;
         }
         if (!anchored && attach < 0)
             break;
