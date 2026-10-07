@@ -1,5 +1,12 @@
 ## UUWay：网易 UU 远程 Linux 被控端
 
+### 1.1.2 更新
+
+- **修复 PC 端远程终端打开约一秒后闪退。** 终端窗口初始化时，控制端可能先发一次不合理的窗口大小（[#2](https://github.com/GaryOAO/UUWay/issues/2) 里从 PC 端观察到 120×9001，随后才是 120×30）。以前桥接服务把这一帧当作协议错误，直接断开连接，整个终端随之结束。现在越界的窗口大小会被忽略，沿用上一次的大小；长度不对的畸形帧仍然会断开。
+- **UU 先撤掉终端面板时，还连着的终端不再被连带结束。** 以前只要 UU 这一侧的面板进程没了，桥接服务就立刻结束 shell，哪怕手机或电脑上还开着这个终端。现在只要还有终端连着，shell 就保留；面板和终端都走了才结束。关闭 UU 里的终端、在 shell 里 `exit` 的行为不变。
+- 这两处都有桥接服务的单元测试覆盖，但还没有在真实的 PC 客户端上端到端验证过。如果升级后 PC 端终端仍然闪退，或重连后回不到原来的 shell，欢迎在 [#2](https://github.com/GaryOAO/UUWay/issues/2) 或新 Issue 里附上 `uu-terminal-proxy.trace` 和桥接服务的日志。
+- 感谢 [@dororo42](https://github.com/dororo42) 报告并定位这个问题。
+
 ### 1.1.1 更新
 
 - **桌面崩溃或注销后，UU 不再一直离线。** 1.1.0 的开机自动登录只在 GDM 启动时触发：GNOME Shell 一旦崩溃，机器就停在登录界面，UU 离线，直到有人登录。现在 `uuway autologin on` 还会开启 GDM 的 `TimedLogin`，登录界面停留约 10 秒就自动重新登录，UU 随桌面回来。已经自己开过开机自动登录的人，`on` 只补这一层，`off` 也只撤销 UUWay 自己加的那部分。`uuway doctor` 会在缺这一层时给出警告，`uuway autologin status` 会分别显示两层。
@@ -50,6 +57,8 @@ UUWay 采用 [GNU AGPL-3.0](https://github.com/GaryOAO/UUWay/blob/main/LICENSE)�
 UUWay 是独立的非官方项目，与网易无关，也未获得网易的认可。"UU"、"UU 远程"为其各自所有者的商标。安装包不含任何 UU 程序文件，客户端需由你自行从官方渠道安装。
 
 ---
+
+**English summary (1.1.2).** The PC terminal no longer flash-quits: an out-of-range resize frame (reported: 120x9001 right before 120x30, issue #2) is ignored instead of dropping the connection, and a viewer that is still attached keeps its shell when UU removes its pane first. Both are covered by broker unit tests; they have not been verified end to end against a real PC client yet. Thanks to @dororo42 for the report.
 
 **English summary (1.1.1).** After a desktop crash or a logout UU no longer stays offline: `uuway autologin on` now also enables GDM's `TimedLogin`, so the login screen logs your account in again after about 10 seconds. `uuway refresh --restart-services` now warns before restarting the text service, which crashed a long-running GNOME Shell once in testing.
 
