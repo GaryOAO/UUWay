@@ -67,6 +67,7 @@ while IFS= read -r entry; do
     patch --batch --fuzz=0 -d "$source_dir" -p1 -i "$source_dir/debian/patches/$entry"
 done < "$source_dir/debian/patches/series"
 patch --batch --fuzz=0 -d "$source_dir" -p1 -i "$repo_dir/patches/mutter-46.2-capture-jitter-candidate.patch"
+patch --batch --fuzz=0 -d "$source_dir" -p1 -i "$repo_dir/patches/mutter-46.2-screencast-dmabuf-finish.patch"
 if [[ "${UURB_MUTTER_VIRTUAL_TIMESTAMPS:-0}" == 1 ]]; then
     patch --batch --fuzz=0 -d "$source_dir" -p1 -i "$repo_dir/patches/mutter-46.2-virtual-presentation-candidate.patch"
 fi

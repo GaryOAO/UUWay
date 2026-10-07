@@ -9,6 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'build/mutter-review/mutter-46.2/src/backends/meta-screen-cast-stream-src.c'
 PATCH = ROOT / 'patches/mutter-46.2-capture-jitter-candidate.patch'
+FINISH_PATCH = ROOT / 'patches/mutter-46.2-screencast-dmabuf-finish.patch'
 
 
 class MutterCapturePacingTests(unittest.TestCase):
@@ -65,6 +66,37 @@ int main(void) {
                             '-o', str(executable), '-'], input=harness, text=True,
                            check=True, capture_output=True, timeout=10)
             subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+
+    @unittest.skipUnless(SOURCE.is_file(), 'Download audited Mutter source to test patch application')
+    def test_dmabuf_finish_patch_applies_after_pacing_and_waits_before_queueing(self):
+        with tempfile.TemporaryDirectory(prefix='uurb-mutter-finish-') as temporary:
+            directory = Path(temporary)
+            target = directory / 'src/backends/meta-screen-cast-stream-src.c'
+            target.parent.mkdir(parents=True)
+            shutil.copyfile(SOURCE, target)
+            for patch in (PATCH, FINISH_PATCH):  # the order scripts/build-mutter-capture.sh applies them
+                subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i', str(patch)],
+                               cwd=directory, check=True, capture_output=True, timeout=5)
+            code = target.read_text()
+            branch = code[code.index('else if (spa_data->type == SPA_DATA_DmaBuf)'):]
+            branch = branch[:branch.index('Unknown SPA buffer type')]
+            self.assertLess(branch.index('meta_screen_cast_stream_src_record_to_framebuffer'),
+                            branch.index('cogl_framebuffer_finish (dmabuf_fbo)'))
+            self.assertLess(branch.index('return FALSE;'), branch.index('cogl_framebuffer_finish (dmabuf_fbo)'))
+            self.assertEqual(code.count('cogl_framebuffer_finish'), 1)  # memfd/CPU buffers are already synchronous
+
+    def test_dmabuf_finish_patch_is_built_and_required_for_staging(self):
+        # NVIDIA attaches no implicit fence to the dma-bufs Mutter renders into, so a busy GPU lets the
+        # consumer read stale ring contents. A build or bundle without the patch must not be staged.
+        self.assertEqual(FINISH_PATCH.read_text().count('\n+++ '), 1)
+        self.assertIn('+++ b/src/backends/meta-screen-cast-stream-src.c', FINISH_PATCH.read_text())
+        build = (ROOT / 'scripts/build-mutter-capture.sh').read_text()
+        self.assertLess(build.index('mutter-46.2-capture-jitter-candidate.patch'),
+                        build.index('mutter-46.2-screencast-dmabuf-finish.patch'))
+        self.assertLess(build.index('mutter-46.2-screencast-dmabuf-finish.patch'), build.index('meson setup'))
+        stage = (ROOT / 'scripts/stage-mutter-capture.py').read_text()
+        self.assertLess(stage.index("'cogl_framebuffer_finish (dmabuf_fbo)' not in"), stage.index('output.mkdir('))
+        self.assertIn('dmabuf_finish_patch_sha256', stage)
 
     def test_readonly_trace_is_hash_pinned_and_bounded(self):
         source = (ROOT / 'tests/probes/mutter_capture_pacing.py').read_text()

@@ -1,0 +1,46 @@
+Subject: Complete the GPU blit before a screen-cast dma-buf is queued
+
+The NVIDIA driver attaches no implicit fence to dma-bufs it renders into
+(measured on 580.178.04: DMA_BUF_IOCTL_EXPORT_SYNC_FILE reports a fence as
+signaled right after the blit is flushed, while the GPU still has tens of
+milliseconds of work pending). Mutter only flushes before it queues the
+buffer to PipeWire, so a consumer that reads it on the GPU while the GPU is
+busy sees the buffer's previous contents, up to a whole ring of 16 buffers
+old. With a busy GPU the remote picture jumps between the current frame and
+frames from seconds ago, then slowly catches up.
+
+Finish the blit before the buffer is queued. In a two-process reproduction a
+consumer read stale pixels in 9 of 10 trials with a flush and in 0 of 10 with
+a finish. Cost: the compositor waits for its own blit, once per recorded
+frame, only while a screen cast is running.
+
+--- a/src/backends/meta-screen-cast-stream-src.c
++++ b/src/backends/meta-screen-cast-stream-src.c
+@@ -631,10 +631,23 @@
+       COGL_TRACE_BEGIN_SCOPED (RecordToFramebuffer,
+                                "Meta::ScreenCastStreamSrc::record_to_framebuffer()");
+ 
+-      return meta_screen_cast_stream_src_record_to_framebuffer (src,
+-                                                                paint_phase,
+-                                                                dmabuf_fbo,
+-                                                                error);
++      if (!meta_screen_cast_stream_src_record_to_framebuffer (src,
++                                                              paint_phase,
++                                                              dmabuf_fbo,
++                                                              error))
++        return FALSE;
++
++      /* The buffer is queued to PipeWire right after this returns, and the
++       * consumer reads it on the GPU. The NVIDIA driver attaches no implicit
++       * fence to dma-bufs it renders into, so a consumer cannot tell that the
++       * blit above is still pending: under GPU load it reads whatever this
++       * buffer held the last time it was used, which is up to a full ring of
++       * buffers (16 frames) old. Wait for the GPU here so a queued buffer is
++       * always complete.
++       */
++      cogl_framebuffer_finish (dmabuf_fbo);
++
++      return TRUE;
+     }
+ 
+   g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,

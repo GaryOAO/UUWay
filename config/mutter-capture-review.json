@@ -19,6 +19,7 @@
   "debug_symbols_extracted_only": true,
   "pacing_trace": "build/native-presenter/mutter-pacing-counters.json",
   "candidate_patch": "patches/mutter-46.2-capture-jitter-candidate.patch",
+  "dmabuf_finish_patch": "patches/mutter-46.2-screencast-dmabuf-finish.patch",
   "candidate_deployed": true,
   "dsc_url": "https://launchpad.net/ubuntu/+archive/primary/+sourcefiles/mutter/46.2-1ubuntu0.24.04.16/mutter_46.2-1ubuntu0.24.04.16.dsc",
   "source_url": "https://download.gnome.org/sources/mutter/46/mutter-46.2.tar.xz",

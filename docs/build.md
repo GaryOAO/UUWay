@@ -105,11 +105,23 @@ Install the helpers into the prefix:
 install -m 0755 build/helpers/* ~/.local/share/wineprefixes/uu-remote/compat/
 ```
 
-### Optional: 60 FPS capture pacing
+### Optional: capture pacing and complete frames
 
-Stock Mutter 46.2 drops about a third of 60 Hz screen-cast frames because its frame limiter
-rejects frames that arrive a few microseconds early. `patches/mutter-46.2-capture-jitter-candidate.patch`
-tolerates that jitter.
+The private Mutter build carries two patches:
+
+- `patches/mutter-46.2-capture-jitter-candidate.patch`: stock Mutter 46.2 drops about a third of
+  60 Hz screen-cast frames because its frame limiter rejects frames that arrive a few microseconds
+  early. The patch tolerates that jitter.
+- `patches/mutter-46.2-screencast-dmabuf-finish.patch`: the NVIDIA driver attaches no implicit
+  fence to the dma-bufs Mutter renders into, and Mutter queues a buffer to PipeWire after only a
+  flush. While another process keeps the GPU busy, UUWay can therefore read a buffer before Mutter's
+  blit has run and capture what it held a whole ring (16 buffers) ago: the remote picture jumps
+  between the current frame and frames from seconds earlier, then slowly catches up. The patch
+  makes Mutter wait for its blit before queueing the buffer. The price is that the compositor
+  blocks for that wait once per recorded frame, only while a remote session streams, so with a
+  saturated GPU the local desktop refreshes more slowly.
+  `tests/probes/dmabuf_implicit_fence_probe.c` reproduces the stale read on your driver without
+  touching the desktop session.
 
 The private build replaces only `libmutter-14` and keeps the system Clutter and Cogl, so it must
 come from the Ubuntu revision that is installed. `config/mutter-capture-review.json` pins that
@@ -118,7 +130,7 @@ download the new `.debian.tar.xz` from Launchpad, check it against the `.dsc`, a
 `installed_package_version`, the two URLs and `debian_patches_sha256`.
 
 ```bash
-scripts/build-mutter-capture.sh          # prints the retained build directory
+bash scripts/build-mutter-capture.sh      # prints the retained build directory
 bundle=~/.local/lib/uurb/mutter-$(dpkg-query -W -f='${Version}' libmutter-14-0)-jitter-core
 python3 scripts/stage-mutter-capture.py build/mutter-build/rebuild.XXXXXX "$bundle"
 python3 tests/probes/mutter_bundle_probe.py "$bundle"   # a private headless Shell must start
@@ -245,6 +257,12 @@ service again. See [the 4.42 review](releases/4.42.0.2770-native-review.md) for 
   `~/.local/state/uurb/trial-*/capture.log`. `gpu_driver_mismatch` means the NVIDIA packages were
   updated without a reboot, so the loaded kernel module no longer matches the user-space driver:
   reboot. `capture_ended` without `capture_frame_accepted` for another reason: check step 4.
+- **The remote picture jumps back to frames from a few seconds ago while the GPU is busy (a render,
+  a training or OCR job), then slowly catches up.** Stale screen-cast buffers: Mutter queues a
+  buffer before the NVIDIA GPU has finished drawing into it. Build and load the private Mutter with
+  `mutter-46.2-screencast-dmabuf-finish.patch` (see "capture pacing and complete frames"), then log
+  out and back in. `./dmabuf_implicit_fence_probe` (build line in its header) shows whether your
+  driver is affected.
 - **No desktop after a system update, and `gnome-shell` segfaults in `libmutter-14.so` every few
   seconds.** A private Mutter library that no longer matches the system Mutter. The gated drop-in
   above falls back by itself; for an older drop-in that sets `LD_LIBRARY_PATH`, move it out of

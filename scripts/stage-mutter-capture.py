@@ -78,9 +78,14 @@ def main():
     if built != installed_version:
         parser.error(f'Build is Mutter {built} but {installed_version} is installed')
     patch = (ROOT / 'patches/mutter-46.2-capture-jitter-candidate.patch').read_bytes()
-    report = dict(build=str(build), patch_sha256=hashlib.sha256(patch).hexdigest(),
-                  mutter_package_version=built, system_support_libraries=args.core_only, libraries={})
+    finish_patch = (ROOT / 'patches/mutter-46.2-screencast-dmabuf-finish.patch').read_bytes()
     source_dir = build / 'mutter-46.2/src/backends'
+    # Without it a busy GPU makes the remote picture jump back to old frames, so never stage an older build.
+    if 'cogl_framebuffer_finish (dmabuf_fbo)' not in (source_dir / 'meta-screen-cast-stream-src.c').read_text():
+        parser.error('Build lacks the dma-buf finish patch; rebuild with scripts/build-mutter-capture.sh')
+    report = dict(build=str(build), patch_sha256=hashlib.sha256(patch).hexdigest(),
+                  dmabuf_finish_patch_sha256=hashlib.sha256(finish_patch).hexdigest(),
+                  mutter_package_version=built, system_support_libraries=args.core_only, libraries={})
     report['built_source_sha256'] = {
         name: hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
         for name in ['meta-screen-cast-stream-src.c', 'meta-screen-cast-virtual-stream-src.c']}
