@@ -36,6 +36,9 @@ WINE_PIN = Path('/etc/apt/preferences.d/uuway-wine')
 SERVICES = ('uu-native-display', 'uu-native-text', 'uu-native-bridge')
 GDM_CONFIGS = (Path('/etc/gdm3/custom.conf'), Path('/etc/gdm/custom.conf'))  # Debian/Ubuntu, Fedora/Arch
 AUTOLOGIN_KEYS = ('AutomaticLoginEnable', 'AutomaticLogin')
+TIMED_KEYS = ('TimedLoginEnable', 'TimedLogin', 'TimedLoginDelay')
+RECOVERY_DELAY = 10  # seconds the login screen waits before GDM logs the account in again
+GDM_TRUE = ('true', '1', 'yes')
 UDEV_RULE = '70-uurb-native-input.rules'
 SHIPPED_RULE = Path('/usr/lib/udev/rules.d') / UDEV_RULE
 LEGACY_RULE = Path('/etc/udev/rules.d') / UDEV_RULE
@@ -630,10 +633,21 @@ def start_done(ctx):
     return not ctx.restart_bridge and all(unit_active(ctx, name) for name in SERVICES)
 
 
+def restart_services_confirmed(ctx):
+    """Restarting the text service can take a long-running GNOME Shell down with it; say so before doing it."""
+    timed = timed_state(ctx)
+    safe = bool(timed and timed[0])
+    warn('重启文字服务时，它会向 GNOME 无障碍总线重新注册监听；桌面运行很久之后，这可能让 GNOME Shell 崩溃（1.1.0 实测发生过一次），'
+         '整个桌面会话随之结束，你正在用的应用会被关掉。')
+    info('已开启崩溃/注销后自动重新登录，崩溃后十几秒内桌面和 UU 会回来。' if safe else
+         '没有开启崩溃/注销后自动重新登录：崩溃后 UU 会一直离线，直到有人登录（先运行 uuway autologin on）。')
+    return ctx.confirm('仍要重启文字与显示服务吗？')
+
+
 def start_run(ctx):
     ctx.run(['systemctl', '--user', 'enable', '--now', *(name + '.service' for name in SERVICES)])
     if ctx.restart_bridge:
-        if getattr(ctx.args, 'restart_services', False):
+        if getattr(ctx.args, 'restart_services', False) and restart_services_confirmed(ctx):
             ctx.run(['systemctl', '--user', 'restart', 'uu-native-display.service', 'uu-native-text.service'])
         elif not ctx.dry_run:
             info('文字与显示服务保持运行，不会被隐式重启（会丢失剪贴板所有权）；'
@@ -701,11 +715,10 @@ def launchers_run(ctx):
 
 # --------------------------------------------------------------------- step: autologin
 
-AUTOLOGIN_NOTE = """   UU 跟着你的桌面会话上线：重启、断电恢复或注销之后，没人在屏幕前登录，UU 就是离线的。
-   开启开机自动登录后，GDM 会在开机时自动登录 {user}，UU 随之上线；之后锁屏、息屏都不受影响。
-   代价：任何能接触这台机器的人，开机就能进入你的桌面。建议同时开启磁盘加密或固件密码，并设置自动锁屏。
-   另外 GNOME 钥匙环不会自动解锁，个别应用第一次用到它时会询问密码。
-   说明：自动登录只在 GDM 启动时触发；手动注销后会停在登录界面，需要重启（或在那里登录）UU 才会回来。
+AUTOLOGIN_NOTE = """   UU 跟着你的桌面会话上线：重启、断电恢复、桌面崩溃或注销之后，没人在屏幕前登录，UU 就是离线的。
+   开启后有两层：开机时 GDM 自动登录 {user}；桌面崩溃或手动注销后，登录界面停留约 {delay} 秒也会自动重新登录，UU 随之回来。
+   代价：任何能接触这台机器的人，开机就能进入你的桌面；想在登录界面停留，要先 uuway autologin off。
+   建议同时开启磁盘加密或固件密码，并设置自动锁屏。另外 GNOME 钥匙环不会自动解锁，个别应用第一次用到它时会询问密码。
    UU 看不到 GDM 登录界面：它属于另一个系统会话，UUWay 的采集和输入都只在你的桌面会话里。"""
 
 
@@ -713,8 +726,8 @@ def gdm_config():
     return next((path for path in GDM_CONFIGS if path.is_file()), None)
 
 
-def gdm_autologin(text):
-    """(enabled, user) as the [daemon] section sets them; a later line wins, as in GLib's key file parser."""
+def gdm_values(text, keys):
+    """The active [daemon] values for keys; a later line wins, as in GLib's key file parser."""
     values, section = {}, None
     for line in text.splitlines():
         line = line.strip()
@@ -722,30 +735,51 @@ def gdm_autologin(text):
             section = line[1:-1]
         elif section == 'daemon' and line[:1] not in ('#', ';'):
             key, _, value = line.partition('=')
-            if key.strip() in AUTOLOGIN_KEYS:
+            if key.strip() in keys:
                 values[key.strip()] = value.strip()
-    return values.get('AutomaticLoginEnable', '').lower() in ('true', '1', 'yes'), values.get('AutomaticLogin') or None
+    return values
 
 
-def gdm_set_autologin(text, user, enable):
-    """The config with AutomaticLogin* set for user, or removed; every other line stays as it was."""
+def gdm_autologin(text):
+    """(enabled, user) of the login GDM does when it starts."""
+    values = gdm_values(text, AUTOLOGIN_KEYS)
+    return values.get('AutomaticLoginEnable', '').lower() in GDM_TRUE, values.get('AutomaticLogin') or None
+
+
+def gdm_timed_login(text):
+    """(enabled, user) of the login GDM does after the login screen has been idle for a while."""
+    values = gdm_values(text, TIMED_KEYS)
+    return values.get('TimedLoginEnable', '').lower() in GDM_TRUE, values.get('TimedLogin') or None
+
+
+def gdm_replace(text, keys, lines):
+    """text without the active [daemon] lines for keys, then lines (if any) right under [daemon]; the rest is kept."""
     kept, section = [], None
     for line in text.splitlines(keepends=True):
         stripped = line.strip()
         if stripped.startswith('[') and stripped.endswith(']'):
             section = stripped[1:-1]
-        elif section == 'daemon' and stripped[:1] not in ('#', ';') and stripped.partition('=')[0].strip() in AUTOLOGIN_KEYS:
+        elif section == 'daemon' and stripped[:1] not in ('#', ';') and stripped.partition('=')[0].strip() in keys:
             continue
         kept.append(line)
-    if not enable:
+    if not lines:
         return ''.join(kept)
-    lines = f'AutomaticLoginEnable=true\nAutomaticLogin={user}\n'
     for index, line in enumerate(kept):
         if line.strip() == '[daemon]':
+            kept[index] = line if line.endswith('\n') else line + '\n'
             kept.insert(index + 1, lines)
             return ''.join(kept)
     separator = '' if not kept or kept[-1].endswith('\n') else '\n'
     return ''.join(kept) + separator + '\n[daemon]\n' + lines
+
+
+def gdm_set_autologin(text, user, enable):
+    return gdm_replace(text, AUTOLOGIN_KEYS, f'AutomaticLoginEnable=true\nAutomaticLogin={user}\n' if enable else '')
+
+
+def gdm_set_timed_login(text, user, enable):
+    return gdm_replace(text, TIMED_KEYS,
+                       f'TimedLoginEnable=true\nTimedLogin={user}\nTimedLoginDelay={RECOVERY_DELAY}\n' if enable else '')
 
 
 def autologin_state(ctx):
@@ -759,13 +793,27 @@ def autologin_state(ctx):
         return None
 
 
+def timed_state(ctx):
+    """(enabled, user) of the idle-login-screen login, or None without a GDM config."""
+    path = gdm_config()
+    try:
+        return gdm_timed_login(path.read_text()) if path else None
+    except OSError:
+        return None
+
+
 def autologin_declined(ctx):
     return (ctx.state_dir / 'autologin-declined').exists()
 
 
 def autologin_done(ctx):
     state = autologin_state(ctx)
-    return state is None or state[1] or autologin_declined(ctx)
+    if state is None or autologin_declined(ctx):
+        return True
+    _, enabled, current = state
+    if enabled and current != getpass.getuser():
+        return True  # another account's setup is never ours to complete
+    return enabled and timed_state(ctx)[0]
 
 
 def autologin_apply(ctx, path, text, note):
@@ -794,28 +842,45 @@ def autologin_run(ctx):
     if enabled and current != user:
         warn(f'GDM 已把自动登录开给了 {current}，UUWay 不会改动它；要给 {user} 开启，请自行编辑 {path}。')
         return
-    if enabled:
-        ok(f'已经为 {user} 开启了开机自动登录')
+    timed_enabled, timed_user = gdm_timed_login(path.read_text())
+    need_boot = not enabled
+    need_recovery = not timed_enabled
+    if timed_enabled and timed_user != user:
+        warn(f'GDM 已把登录界面的自动重新登录开给了 {timed_user}，UUWay 不会改动它。')
+        need_recovery = False
+    if not need_boot and not need_recovery:
+        ok(f'已经为 {user} 开启了开机自动登录和崩溃/注销后的自动重新登录')
         return
+    what = '开机自动登录和崩溃/注销后自动重新登录' if need_boot and need_recovery else (
+        '开机自动登录' if need_boot else '崩溃/注销后自动重新登录')
     explicit = 'autologin' in parse_steps(getattr(ctx.args, 'only', None))
-    print(AUTOLOGIN_NOTE.format(user=user))
+    print(AUTOLOGIN_NOTE.format(user=user, delay=RECOVERY_DELAY))
     if not explicit:
         # A security setting: --yes and a non-interactive run never turn it on behind the user's back.
         if ctx.assume_yes or ctx.dry_run or not sys.stdin.isatty():
             info('这一步需要你亲自决定，已跳过；需要时运行：uuway autologin on')
             return
-        if not input('   开启开机自动登录？[y/N] ').lower().startswith('y'):
+        if not input(f'   开启{what}？[y/N] ').lower().startswith('y'):
             ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             (ctx.state_dir / 'autologin-declined').touch(mode=0o600)
             info('不开启。以后需要：uuway autologin on')
             return
-    elif not ctx.confirm(f'为 {user} 开启开机自动登录？（会弹出授权窗口）'):
+    elif not ctx.confirm(f'为 {user} 开启{what}？（会弹出授权窗口）'):
         raise SetupError('没有开启自动登录。')
-    backup = autologin_apply(ctx, path, gdm_set_autologin(path.read_text(), user, True), f'已为 {user} 开启开机自动登录')
+    text = path.read_text()
+    if need_boot:
+        text = gdm_set_autologin(text, user, True)
+    if need_recovery:
+        text = gdm_set_timed_login(text, user, True)
+    backup = autologin_apply(ctx, path, text, f'已为 {user} 开启{what}')
     if not ctx.dry_run:
         (ctx.state_dir / 'autologin-declined').unlink(missing_ok=True)
-        write_atomic(ctx.state_dir / 'autologin.json',
-                     json.dumps(dict(version=1, user=user, config=str(path), backup=str(backup))).encode(), 0o600)
+        before = read_json(ctx.state_dir / 'autologin.json') or {}
+        # Remember which parts uuway itself set, so that `off` never reverts what the owner had set up.
+        write_atomic(ctx.state_dir / 'autologin.json', json.dumps(dict(
+            version=2, user=user, config=str(path), backup=str(backup),
+            boot=bool(before.get('boot', before.get('user') is not None)) or need_boot,
+            recovery=bool(before.get('recovery')) or need_recovery)).encode(), 0o600)
 
 
 def autologin_off(ctx):
@@ -824,14 +889,26 @@ def autologin_off(ctx):
         info('没有找到 GDM 配置，没有可关闭的自动登录。')
         return
     path, enabled, current = state
+    timed_enabled, timed_user = gdm_timed_login(path.read_text())
     recorded = read_json(ctx.state_dir / 'autologin.json')
-    if not enabled:
-        info('开机自动登录本来就没有开启。')
-    elif not recorded or recorded.get('user') != current:
-        warn(f'这个自动登录不是 UUWay 开启的，没有改动。要关闭，请编辑 {path}，把 AutomaticLoginEnable 改为 false。')
-        return
+    if not enabled and not timed_enabled:
+        info('开机自动登录和崩溃/注销后的自动重新登录本来就没有开启。')
     else:
-        autologin_apply(ctx, path, gdm_set_autologin(path.read_text(), current, False), '已关闭开机自动登录')
+        owner = recorded.get('user') if recorded else None
+        # A 1.1.0 record has no "boot"/"recovery": it only ever set the boot login.
+        undo_boot = bool(recorded) and recorded.get('boot', True) and enabled and current == owner
+        undo_recovery = bool(recorded) and recorded.get('recovery', False) and timed_enabled and timed_user == owner
+        if not undo_boot and not undo_recovery:
+            warn(f'这些自动登录设置不是 UUWay 开启的，没有改动。要关闭，请编辑 {path}，'
+                 '把 AutomaticLoginEnable / TimedLoginEnable 改为 false。')
+            return
+        text = path.read_text()
+        if undo_boot:
+            text = gdm_set_autologin(text, current, False)
+        if undo_recovery:
+            text = gdm_set_timed_login(text, timed_user, False)
+        autologin_apply(ctx, path, text, '已关闭 UUWay 开启的' + '和'.join(
+            name for name, flag in (('开机自动登录', undo_boot), ('崩溃/注销后自动重新登录', undo_recovery)) if flag))
     if not ctx.dry_run:
         (ctx.state_dir / 'autologin.json').unlink(missing_ok=True)
 
@@ -844,7 +921,10 @@ def command_autologin(args):
             print('没有找到 GDM 配置，不适用。')
         else:
             path, enabled, user = state
+            timed_enabled, timed_user = timed_state(ctx)
             print(f'开机自动登录：已为 {user} 开启（{path}）' if enabled else f'开机自动登录：未开启（{path}）')
+            print(f'崩溃/注销后自动重新登录：已为 {timed_user} 开启（登录界面约 {RECOVERY_DELAY} 秒后）'
+                  if timed_enabled else '崩溃/注销后自动重新登录：未开启（桌面崩溃或注销后会停在登录界面，UU 离线）')
         return 0
     if args.action == 'on':
         args.only = 'autologin'
@@ -997,12 +1077,16 @@ def command_doctor(args):
     if login:
         path, enabled, user = login
         me = getpass.getuser()
-        if enabled and user == me:
-            check('ok', '开机自动登录', f'已为 {me} 开启')
+        timed_enabled, timed_user = timed_state(ctx)
+        recovers = timed_enabled and timed_user == me
+        if enabled and user == me and recovers:
+            check('ok', '开机自动登录', f'已为 {me} 开启；桌面崩溃或注销后登录界面约 {RECOVERY_DELAY} 秒会自动重新登录')
+        elif autologin_declined(ctx):
+            check('ok', '开机自动登录', '未完全开启（你选择了不开启）：重启或桌面崩溃后需要有人登录，UU 才会上线')
+        elif enabled and user == me:
+            check('warn', '崩溃/注销后自动重新登录', '开机自动登录已开，但桌面崩溃或手动注销后会停在登录界面，UU 不会自动回来；开启：uuway autologin on')
         elif enabled:
             check('warn', '开机自动登录开给了另一个账号', f'{user}：重启后 {me} 的桌面不会自动出现，UU 不会上线')
-        elif autologin_declined(ctx):
-            check('ok', '开机自动登录', '未开启（你选择了不开启）：重启后需要有人登录，UU 才会上线')
         else:
             check('warn', '开机自动登录', '未开启：重启或断电恢复后需要有人在屏幕前登录，UU 才会上线；开启：uuway autologin on')
     if shutil.which('fcitx5') and fcitx_library().is_file():

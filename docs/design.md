@@ -149,8 +149,10 @@ CJK text would arrive on the phone as `?`.
   driver that Wine cannot load.
 - **The GDM login screen** is a separate session owned by the `gdm` user. The portal screen cast,
   the input worker and the user services all belong to *your* session, so UU goes offline when
-  nobody is logged in. `uuway autologin on` makes GDM log the account in at boot (GDM does that once
-  per start, so a manual logout still stops at the greeter); showing the greeter itself would need
-  a second, system-level capture and input path that does not exist.
+  nobody is logged in. `uuway autologin on` sets two GDM keys: `AutomaticLogin` logs the account in
+  when GDM starts (a boot, a power cut), and `TimedLogin` logs it in again ten seconds after the login
+  screen appears, which is what brings the desktop back after a Shell crash or a logout, because GDM
+  does the first only once per start. Showing the greeter itself would need a second, system-level
+  capture and input path that does not exist.
 - **Port mapping** listens on the *controller*, so it works as in UU, but nothing on the host side
   can create or observe a mapping.

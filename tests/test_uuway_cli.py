@@ -657,6 +657,17 @@ class AutologinTests(CliCase):
         other_section = "[daemon]\nAutomaticLogin=alice\n[custom]\nAutomaticLogin=keep\n"
         self.assertEqual(cli.gdm_set_autologin(other_section, "alice", False), "[daemon]\n[custom]\nAutomaticLogin=keep\n")
 
+    def test_the_recovery_layer_is_independent_of_the_boot_login(self):
+        both = cli.gdm_set_timed_login(cli.gdm_set_autologin(UBUNTU_GDM, "alice", True), "alice", True)
+        self.assertEqual(cli.gdm_timed_login(both), (True, "alice"))
+        self.assertIn(f"TimedLoginDelay={cli.RECOVERY_DELAY}", both)
+        self.assertEqual(cli.gdm_set_timed_login(both, "alice", True), both)  # idempotent
+        only_boot = cli.gdm_set_timed_login(both, "alice", False)
+        self.assertEqual((cli.gdm_autologin(only_boot), cli.gdm_timed_login(only_boot)), ((True, "alice"), (False, None)))
+        self.assertEqual(cli.gdm_set_autologin(only_boot, "alice", False), UBUNTU_GDM)
+        self.assertEqual(cli.gdm_timed_login("[daemon]\n#TimedLoginEnable=true\nTimedLoginEnable=false\n"), (False, None))
+        self.assertEqual(cli.gdm_set_timed_login("[daemon]", "alice", True).count("[daemon]\n"), 1)  # header without newline
+
     def test_on_backs_up_then_installs_the_edited_config_as_root(self):
         ctx = self.recording_context(only="autologin")
         _, output = self.quiet(cli.autologin_run, ctx)
@@ -667,9 +678,12 @@ class AutologinTests(CliCase):
         self.assertEqual(install[1:8], ["install", "-m", "0644", "-o", "root", "-g", "root"])
         self.assertEqual(install[-1], str(self.gdm))
         self.assertEqual(cli.gdm_autologin(self.staged[0]), (True, "alice"))
+        self.assertEqual(cli.gdm_timed_login(self.staged[0]), (True, "alice"))  # crash / logout recovery too
         self.assertFalse((ctx.state_dir / "gdm-custom.conf.new").exists())
-        self.assertEqual(json.loads((ctx.state_dir / "autologin.json").read_text())["user"], "alice")
+        record = json.loads((ctx.state_dir / "autologin.json").read_text())
+        self.assertEqual((record["user"], record["boot"], record["recovery"]), ("alice", True, True))
         self.assertIn("钥匙环", output)  # the cost is shown before anything is asked
+        self.assertIn(f"{cli.RECOVERY_DELAY} 秒", output)
 
     def test_yes_alone_never_turns_it_on(self):
         ctx = self.recording_context()  # a plain `uuway setup --yes`
@@ -693,13 +707,52 @@ class AutologinTests(CliCase):
         self.assertEqual(self.commands, [])
         self.assertIn("bob", self.gdm.read_text())
 
-    def test_already_enabled_is_left_alone_and_off_only_reverts_what_uuway_did(self):
-        self.gdm.write_text("[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=alice\n")  # set by the owner, not by uuway
+    def test_an_owner_set_boot_login_is_kept_and_only_the_recovery_layer_is_added_and_removed(self):
+        owner = "[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=alice\n"  # set by the owner, not by uuway
+        self.gdm.write_text(owner)
         ctx = self.recording_context(only="autologin")
         self.quiet(cli.autologin_run, ctx)
+        staged = self.staged[0]
+        self.assertEqual(cli.gdm_autologin(staged), (True, "alice"))
+        self.assertEqual(cli.gdm_timed_login(staged), (True, "alice"))
+        self.assertIn("AutomaticLoginEnable=True\n", staged)  # the owner's own line is not rewritten
+        record = json.loads((ctx.state_dir / "autologin.json").read_text())
+        self.assertEqual((record["boot"], record["recovery"]), (False, True))
+        self.gdm.write_text(staged)
+        self.quiet(cli.autologin_off, ctx)
+        self.assertEqual(self.staged[1], owner)  # only the recovery lines went away
+
+    def test_everything_already_enabled_is_a_no_op_and_off_will_not_touch_it(self):
+        both = "[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=alice\nTimedLoginEnable=true\nTimedLogin=alice\nTimedLoginDelay=30\n"
+        self.gdm.write_text(both)
+        ctx = self.recording_context(only="autologin")
+        _, output = self.quiet(cli.autologin_run, ctx)
+        self.assertEqual(self.commands, [])
+        self.assertIn("已经为 alice 开启", output)
         _, output = self.quiet(cli.autologin_off, ctx)
         self.assertEqual(self.commands, [])
         self.assertIn("不是 UUWay 开启的", output)
+        self.assertEqual(self.gdm.read_text(), both)
+
+    def test_a_timed_login_for_another_account_is_left_alone(self):
+        self.gdm.write_text("[daemon]\nTimedLoginEnable=true\nTimedLogin=bob\nTimedLoginDelay=5\n")
+        ctx = self.recording_context(only="autologin")
+        self.quiet(cli.autologin_run, ctx)
+        staged = self.staged[0]
+        self.assertEqual(cli.gdm_autologin(staged), (True, "alice"))  # the boot login is still added
+        self.assertEqual(cli.gdm_timed_login(staged), (True, "bob"))
+        self.assertIn("TimedLoginDelay=5", staged)
+        self.assertFalse(json.loads((ctx.state_dir / "autologin.json").read_text())["recovery"])
+
+    def test_a_1_1_0_record_only_ever_covered_the_boot_login(self):
+        recorded = "[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=alice\nTimedLoginEnable=true\nTimedLogin=alice\nTimedLoginDelay=7\n"
+        self.gdm.write_text(recorded)
+        ctx = self.recording_context()
+        ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (ctx.state_dir / "autologin.json").write_text(json.dumps(dict(version=1, user="alice", config=str(self.gdm), backup="x")))
+        self.quiet(cli.autologin_off, ctx)
+        self.assertEqual(cli.gdm_autologin(self.staged[0]), (False, None))
+        self.assertEqual(cli.gdm_timed_login(self.staged[0]), (True, "alice"))  # set by the owner: kept
 
     def test_off_restores_what_on_changed_and_forgets_the_record(self):
         ctx = self.recording_context(only="autologin")
@@ -725,19 +778,51 @@ class AutologinTests(CliCase):
         self.assertNotIn("autologin", {"wine", "udev"})
         self.assertIn("{'wine', 'udev'}", (ROOT / "scripts/uuway_cli.py").read_text())
 
-    def test_doctor_names_the_consequence_when_it_is_off(self):
-        def autologin_results():
+    def test_doctor_names_the_consequence_of_each_missing_layer(self):
+        def results():
             args = Namespace(prefix=self.prefix, json=True)
             with patch.object(cli.Context, "probe", lambda self, argv, **kw: completed(argv, 127)):
                 _, output = self.quiet(cli.command_doctor, args)
-            return [item for item in json.loads(output) if item["name"].startswith("开机自动登录")]
-        (item,) = autologin_results()
+            return [item for item in json.loads(output) if item["name"].startswith(("开机自动登录", "崩溃/注销后自动重新登录"))]
+        (item,) = results()
         self.assertEqual(item["level"], "warn")
         self.assertIn("UU 才会上线", item["detail"])
-        self.gdm.write_text(cli.gdm_set_autologin(UBUNTU_GDM, "alice", True))
-        self.assertEqual(autologin_results()[0]["level"], "ok")
+        boot = cli.gdm_set_autologin(UBUNTU_GDM, "alice", True)
+        self.gdm.write_text(boot)
+        (item,) = results()
+        self.assertEqual((item["level"], item["name"]), ("warn", "崩溃/注销后自动重新登录"))
+        self.assertIn("UU 不会自动回来", item["detail"])
+        self.gdm.write_text(cli.gdm_set_timed_login(boot, "alice", True))
+        (item,) = results()
+        self.assertEqual(item["level"], "ok")
         self.gdm.write_text(cli.gdm_set_autologin(UBUNTU_GDM, "bob", True))
-        self.assertEqual(autologin_results()[0]["level"], "warn")  # enabled, but for someone else
+        self.assertEqual(results()[0]["level"], "warn")  # enabled, but for someone else
+
+    def test_status_reports_both_layers(self):
+        self.gdm.write_text(cli.gdm_set_autologin(UBUNTU_GDM, "alice", True))
+        _, output = self.quiet(cli.command_autologin, Namespace(action="status", prefix=self.prefix, dry_run=False, yes=True))
+        self.assertIn("开机自动登录：已为 alice 开启", output)
+        self.assertIn("崩溃/注销后自动重新登录：未开启", output)
+
+    def test_restarting_the_services_warns_about_the_desktop_and_can_be_declined(self):
+        def start(answer):
+            ctx = self.recording_context(restart_services=True)
+            ctx.assume_yes = False
+            ctx.restart_bridge = True
+            self.active.add("uu-native-bridge")
+            with patch.object(cli.time, "sleep"), patch("builtins.input", return_value=answer):
+                _, output = self.quiet(cli.start_run, ctx)
+            return output
+        output = start("n")
+        restarted = [c[-1] for c in self.commands if "restart" in c]
+        self.assertEqual(restarted, ["uu-native-bridge.service"])  # the bridge only
+        self.assertIn("可能让 GNOME Shell 崩溃", output)
+        self.assertIn("没有开启崩溃/注销后自动重新登录", output)
+        self.commands.clear()
+        self.gdm.write_text(cli.gdm_set_timed_login(UBUNTU_GDM, "alice", True))
+        output = start("y")
+        self.assertIn("uu-native-text.service", " ".join(" ".join(c) for c in self.commands if "restart" in c))
+        self.assertIn("十几秒内桌面和 UU 会回来", output)
 
 
 class DoctorTests(CliCase):
