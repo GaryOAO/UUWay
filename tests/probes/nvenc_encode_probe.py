@@ -75,11 +75,13 @@ def validate_stream_info(info, codec, rows):
             raise RuntimeError('Wrong decoded picture type or IDR')
 
 
-def run(source_format, missing_backend=False, input_bind='sampled', negotiated_rates=False):
+def run(source_format, missing_backend=False, input_bind='sampled', negotiated_rates=False, amd=False):
     if source_format not in ('bgra', 'nv12'):
         raise ValueError('Expected bgra or nv12')
     if input_bind not in ('sampled', 'rtv', 'uav'):
         raise ValueError('Expected sampled, rtv or uav input bind')
+    wine = os.environ.get('UURB_TEST_WINE', '/opt/wine-stable/bin/wine')
+    wineserver = os.environ.get('UURB_TEST_WINESERVER', '/opt/wine-stable/bin/wineserver')
     with tempfile.TemporaryDirectory(prefix='uurb-nvenc-encode-') as temporary:
         directory = Path(temporary)
         app = directory / 'app'
@@ -94,12 +96,15 @@ def run(source_format, missing_backend=False, input_bind='sampled', negotiated_r
         with executable.open('rb') as binary:
             if binary.read(2) != b'MZ':
                 raise RuntimeError('Expected a real Windows PE executable')
-        env = dict(os.environ, WINEPREFIX=str(directory / 'wine'), WINELOADER='/opt/wine-stable/bin/wine',
+        env = dict(os.environ, WINEPREFIX=str(directory / 'wine'), WINELOADER=wine,
             WINEDEBUG='-all', WINEDLLOVERRIDES='mscoree,mshtml=;d3d11,dxgi=n;uurb-nvenc-encode-loader=n',
-            DXVK_CONFIG_FILE=str(ROOT / 'config/dxvk-native.conf'), DXVK_LOG_PATH=str(directory))
+            DXVK_CONFIG_FILE=str(ROOT / ('config/dxvk-amd.conf' if amd else 'config/dxvk-native.conf')), DXVK_LOG_PATH=str(directory))
         for name in ['DXVK_CONFIG', 'DXVK_FILTER_DEVICE_NAME', 'VK_INSTANCE_LAYERS', 'WINEDLLPATH']:
             env.pop(name, None)
         env.pop('UURB_NVENC_NEGOTIATION_PROBE', None)
+        env.pop('UURB_AMD_UU_PROBE', None)
+        if amd:
+            env['UURB_AMD_UU_PROBE'] = '1'
         if negotiated_rates:
             env['UURB_NVENC_NEGOTIATION_PROBE'] = '1'
         try:
@@ -107,7 +112,7 @@ def run(source_format, missing_backend=False, input_bind='sampled', negotiated_r
             arguments = ['uurb-nvenc-encode-loader.dll', '--missing-backend'] if missing_backend else [output_directory, source_format, input_bind]
             with (directory / 'probe.log').open('w') as log:
                 process = subprocess.Popen(['xvfb-run', '-a', '--server-args=-screen 0 640x360x24 -nolisten tcp',
-                    '/opt/wine-stable/bin/wine', str(executable), *arguments],
+                    wine, str(executable), *arguments],
                     env=env, cwd=app, stdout=log, stderr=log, start_new_session=True)
                 try:
                     code = process.wait(timeout=90)
@@ -193,9 +198,9 @@ def run(source_format, missing_backend=False, input_bind='sampled', negotiated_r
                                     sequence_ex_before_initialize_matches_active=True,
                                     negotiated_rate_segments=rate_segments,
                                     idr_frames=[row['frame'] for row in rows if row['idr']]))
-            return dict(windows_pe_client=True, standard_nvenc_function_table=True,
+            return dict(wine_version=subprocess.check_output([wine, '--version'], text=True).strip(), windows_pe_client=True, standard_nvenc_function_table=True,
                 encoding_implemented=True, synthetic_only=True, uu_session_tested=False,
-                source_format=source_format, raw_pixel_upload=False, raw_pixel_readback=False,
+                source_format=source_format, raw_pixel_upload=amd, raw_pixel_readback=amd, encoder_backend="amd-vaapi" if amd else "nvidia-nvenc",
                 input_bind=input_bind, sampleable_gpu_copy=input_bind != 'sampled',
                 independent_decode_on_cpu=True, retained_output_buffers=2, registered_source_textures=2,
                 exact_reference_settings_only=not negotiated_rates, decoded=decoded,
@@ -207,7 +212,7 @@ def run(source_format, missing_backend=False, input_bind='sampled', negotiated_r
                 close_with_locked_output_and_mapped_input=True,
                 abi_negative_checks_passed=True)
         finally:
-            subprocess.run(['/opt/wine-stable/bin/wineserver', '-k'], env=env, capture_output=True, timeout=10)
+            subprocess.run([wineserver, '-k'], env=env, capture_output=True, timeout=10)
 
 
 if __name__ == '__main__':
@@ -216,5 +221,6 @@ if __name__ == '__main__':
     parser.add_argument('--missing-backend', action='store_true')
     parser.add_argument('--input-bind', choices=['sampled', 'rtv', 'uav'], default='sampled')
     parser.add_argument('--negotiated-rates', action='store_true')
+    parser.add_argument('--amd', action='store_true', help='Test explicit AMD VA-API host-copy backend')
     options = parser.parse_args()
-    print(json.dumps(run(options.source_format, options.missing_backend, options.input_bind, options.negotiated_rates), indent=2))
+    print(json.dumps(run(options.source_format, options.missing_backend, options.input_bind, options.negotiated_rates, options.amd), indent=2))

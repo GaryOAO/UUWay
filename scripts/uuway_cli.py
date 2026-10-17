@@ -54,6 +54,7 @@ UPDATE_RESUME_UNIT = 'uuway-update-resume'  # the one-shot that finishes an upda
 UPDATE_STALE_DAYS = 14
 SERVICE_MARKER = '# Managed by UURB native installer;'
 DESKTOP_MARKER = '# Managed by UUWay console installer'
+AMD_DESKTOP_MARKER = '# Managed by UUWay AMD\n'
 FCITX_MARKER = '# Managed by uuway setup'
 HELPERS = ('uu-clipboard-bridge', 'uu-clipboard-files.exe', 'uu-conpty.dll',
            'uu-terminal-bridge', 'uu-terminal-proxy.exe')
@@ -269,10 +270,27 @@ def check_environment(ctx):
     if session != 'wayland' or 'GNOME' not in desktop:
         raise SetupError(f'请在 GNOME Wayland 会话里运行（当前会话：{session or "未知"} / {desktop or "未知"}）。')
     ok('GNOME Wayland 会话')
+    if amd_backend_enabled():
+        result = amd_backend_probe(ctx)
+        if result.returncode:
+            raise SetupError('AMD VA-API 编码验证失败：' + result.stderr[-1000:])
+        ok('AMD VA-API 硬件编码（兼容模式，画面经过内存中转）')
+        return
     gpus = ctx.probe(['nvidia-smi', '-L'])
     if gpus.returncode != 0:
         raise SetupError('没有找到可用的 NVIDIA 显卡驱动。UUWay 需要支持 NVENC 的 NVIDIA 显卡和官方驱动。')
     ok('NVIDIA 显卡：' + gpus.stdout.splitlines()[0].split(' (UUID')[0])
+
+
+def amd_backend_enabled():
+    marker = ROOT / 'build/encoder-backend'
+    return marker.is_file() and marker.read_text().strip() == 'amd-vaapi'
+
+
+def amd_backend_probe(ctx):
+    binary = ROOT / 'build/native-presenter/uu-vaapi-probe'
+    with tempfile.TemporaryDirectory(prefix='uuway-amd-check-') as directory:
+        return ctx.probe([binary, directory])
 
 
 # --------------------------------------------------------------------- step: wine
@@ -303,10 +321,12 @@ def wine_run(ctx):
     ctx.run(sudo + ['dpkg', '--add-architecture', 'i386'])
     if not list(Path('/etc/apt/sources.list.d').glob('winehq*')):
         ctx.run(sudo + ['install', '-d', '-m', '0755', '/etc/apt/keyrings'])
-        ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/keyrings/winehq-archive.key',
+        ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/keyrings/winehq-archive.asc',
                         'https://dl.winehq.org/wine-builds/winehq.key'])
         ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/sources.list.d/winehq-noble.sources',
                         'https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources'])
+        ctx.run(sudo + ['sed', '-i', 's@winehq-archive.key@winehq-archive.asc@',
+                        '/etc/apt/sources.list.d/winehq-noble.sources'])
     else:
         info('已有 WineHQ 软件源配置，保持不变。')
     ctx.run(wine_pin_command(ctx))
@@ -383,6 +403,40 @@ def prefix_done(ctx):
         and not getattr(ctx.args, 'login', False)
 
 
+def open_uu(ctx):
+    """Open the login UI with the service bootstrap recent UU versions need."""
+    wine = WINE_DIR / 'wine'
+    executable = r'C:\Program Files\Netease\GameViewer\GameViewer.exe'
+    env = ctx.wine_env()
+    argv = [str(wine), executable]
+    if amd_backend_enabled():
+        if unit_active(ctx, 'uu-native-bridge'):
+            raise SetupError('UU 后台运行在独立显示中，无法在桌面打开它的窗口。需要重新登录时请运行 uuway-amd setup --login。')
+        stage = ctx.state_dir / 'login-support'
+        if not ctx.dry_run:
+            stage.mkdir(parents=True, exist_ok=True, mode=0o700)
+            for source, target in [('uu-native-bootstrap.exe', 'bootstrap.exe'),
+                                   ('uu-native-winlogon.exe', 'winlogon.exe')]:
+                shutil.copy2(ROOT / 'build/native-presenter' / source, stage / target)
+        argv = [str(wine), str(stage / 'bootstrap.exe'), '--login', executable,
+                'UURB-NATIVE-LOGIN-AMD']
+        env['UURB_NATIVE_BOOTSTRAP'] = '1'
+    if ctx.dry_run:
+        ctx.run(argv, env=env)
+        return
+    ctx.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (ctx.state_dir / 'login.log').open('a') as log:
+        return subprocess.Popen(argv, env=env, stdout=log, stderr=log,
+                                start_new_session=True)
+
+
+def command_open(args):
+    ctx = Context(args)
+    if not ctx.server_exe.is_file():
+        raise SetupError('UU 尚未安装，请先运行 uuway-amd setup。')
+    open_uu(ctx)
+
+
 def prefix_run(ctx):
     if unit_active(ctx, 'uu-native-bridge'):
         info('先停止正在运行的 UUWay 服务（之后会重新启动）。')
@@ -407,6 +461,9 @@ def prefix_run(ctx):
         if not ctx.dry_run:
             ctx.prefix.chmod(0o700)  # the service refuses a prefix other users can enter
         ctx.run([wine, installer, '/S'], env=ctx.wine_env())
+        # Recent installers leave GameViewerService running after /S exits.
+        # Stop only this owned prefix, then open the interactive login below.
+        ctx.run([wineserver, '-k'], env=ctx.wine_env(), check=False)
         ctx.run([wineserver, '-w'], env=ctx.wine_env())
         if not ctx.dry_run and not ctx.server_exe.is_file():
             raise SetupError('安装包运行结束，但没有找到 GameViewerServer.exe。')
@@ -414,10 +471,7 @@ def prefix_run(ctx):
         ctx.args.login = True
     if getattr(ctx.args, 'login', False) or not signed_in(ctx):
         info('接下来会打开 UU 窗口：请登录你的 UU 账号，登录成功后从托盘图标完全退出 UU。')
-        if not ctx.dry_run:
-            subprocess.Popen([str(wine), r'C:\Program Files\Netease\GameViewer\GameViewer.exe'],
-                             env=ctx.wine_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
+        open_uu(ctx)
         ctx.wait_for_user('在 UU 里登录并完全退出')
         if not ctx.dry_run and not signed_in(ctx):
             warn('没有检测到登录信息；如果连接不上，请运行 uuway setup --login 重新登录。')
@@ -425,6 +479,7 @@ def prefix_run(ctx):
     # UU's terminal starts PowerShell; Wine must load UUWay's stand-in, not its placeholder.
     ctx.run([wine, 'reg', 'add', r'HKCU\Software\Wine\DllOverrides', '/v', 'powershell.exe',
              '/t', 'REG_SZ', '/d', 'native', '/f'], env=ctx.wine_env())
+    ctx.run([wineserver, '-k'], env=ctx.wine_env(), check=False)
     ctx.run([wineserver, '-w'], env=ctx.wine_env())
 
 
@@ -731,7 +786,53 @@ def consent_run(ctx):
 
 # --------------------------------------------------------------------- step: launchers
 
+def amd_launcher_text():
+    return (AMD_DESKTOP_MARKER + '[Desktop Entry]\nType=Application\nName=UU远程\n'
+            f'Exec=/bin/bash "{ROOT / "scripts/uuway-amd.sh"}" open\n'
+            'Icon=024B_GameViewer.0\nStartupWMClass=gameviewer.exe\nTerminal=false\n')
+
+
+def amd_launcher_targets(ctx):
+    yield ctx.home / '.local/share/applications/uuway-amd.desktop'
+    for path in (ctx.home / 'Desktop/UU远程.desktop',
+                 ctx.home / '.local/share/applications/wine/Programs/UU远程.desktop'):
+        if not path.is_file() or path.is_symlink():
+            continue
+        text = path.read_text()
+        if text.startswith(AMD_DESKTOP_MARKER) or (
+                'StartupWMClass=gameviewer.exe\n' in text and
+                f'Path={ctx.app_dir}\n' in text):
+            yield path
+
+
+def remove_amd_launchers(ctx):
+    # Also works when uninstall is invoked through the installed NVIDIA CLI.
+    # Only restore/remove our marked regular files; never follow a backup link.
+    paths = (ctx.home / '.local/share/applications/uuway-amd.desktop',
+             ctx.home / 'Desktop/UU远程.desktop',
+             ctx.home / '.local/share/applications/wine/Programs/UU远程.desktop')
+    for path in paths:
+        try:
+            if path.is_symlink() or not path.is_file() or not path.read_text().startswith(AMD_DESKTOP_MARKER):
+                continue
+            backup = path.with_suffix('.desktop.before-amd')
+            if backup.is_symlink() or (backup.exists() and not backup.is_file()):
+                warn(f'备份不是普通文件，保留入口：{path}')
+                continue
+            info(f'恢复快捷方式 {path}' if backup.is_file() else f'删除 {path}')
+            if not ctx.dry_run:
+                if backup.is_file():
+                    os.replace(backup, path)
+                else:
+                    path.unlink()
+        except OSError as error:
+            warn(f'{path}：{error}')
+
+
 def launchers_done(ctx):
+    if amd_backend_enabled():
+        return all(path.is_file() and path.read_text() == amd_launcher_text()
+                   for path in amd_launcher_targets(ctx))
     desktop = ctx.home / '.local/share/applications/uuway.desktop'
     try:
         return not desktop.read_text().startswith(DESKTOP_MARKER)
@@ -740,6 +841,16 @@ def launchers_done(ctx):
 
 
 def launchers_run(ctx):
+    if amd_backend_enabled():
+        for path in amd_launcher_targets(ctx):
+            if not ctx.dry_run:
+                if path.is_file() and not path.read_text().startswith(AMD_DESKTOP_MARKER):
+                    backup = path.with_suffix('.desktop.before-amd')
+                    if not backup.exists():
+                        shutil.copy2(path, backup)
+                write_atomic(path, amd_launcher_text().encode(), 0o755)
+        ok('UU 桌面与菜单入口已配置为 AMD 版启动器')
+        return
     desktop = ctx.home / '.local/share/applications/uuway.desktop'
     with contextlib.suppress(OSError):
         if desktop.read_text().startswith(DESKTOP_MARKER):
@@ -1074,21 +1185,26 @@ def command_doctor(args):
     desktop = os.environ.get('XDG_CURRENT_DESKTOP', '')
     check('ok' if session == 'wayland' and 'GNOME' in desktop else 'fail', 'GNOME Wayland 会话',
           f'{session or "?"} / {desktop or "?"}')
-    gpus = ctx.probe(['nvidia-smi', '-L'])
-    check('ok' if gpus.returncode == 0 else 'fail', 'NVIDIA 驱动',
-          gpus.stdout.splitlines()[0] if gpus.returncode == 0 else '没有找到可用的 NVIDIA 驱动')
-    for library in ('libcuda.so.1', 'libnvidia-encode.so.1'):
-        try:
-            ctypes.CDLL(library)
-            check('ok', library)
-        except OSError:
-            check('fail', library, '驱动没有提供它（NVENC 需要）')
-    with contextlib.suppress(ImportError):
-        import native_runtime_state
-        mismatch = native_runtime_state.nvidia_driver_mismatch()
-        if mismatch:
-            check('fail', 'NVIDIA 内核模块与用户态库版本不一致',
-                  f'{mismatch["kernel_module"]} ≠ {mismatch["userspace"]}，请重启')
+    if amd_backend_enabled():
+        result = amd_backend_probe(ctx)
+        check('ok' if result.returncode == 0 else 'fail', 'AMD VA-API 硬件编码',
+              'H.264/HEVC 编码验证通过；内存中转模式' if result.returncode == 0 else result.stderr[-500:])
+    else:
+        gpus = ctx.probe(['nvidia-smi', '-L'])
+        check('ok' if gpus.returncode == 0 else 'fail', 'NVIDIA 驱动',
+              gpus.stdout.splitlines()[0] if gpus.returncode == 0 else '没有找到可用的 NVIDIA 驱动')
+        for library in ('libcuda.so.1', 'libnvidia-encode.so.1'):
+            try:
+                ctypes.CDLL(library)
+                check('ok', library)
+            except OSError:
+                check('fail', library, '驱动没有提供它（NVENC 需要）')
+        with contextlib.suppress(ImportError):
+            import native_runtime_state
+            mismatch = native_runtime_state.nvidia_driver_mismatch()
+            if mismatch:
+                check('fail', 'NVIDIA 内核模块与用户态库版本不一致',
+                      f'{mismatch["kernel_module"]} ≠ {mismatch["userspace"]}，请重启')
     version = wine_version(ctx)
     check('ok' if version and version.startswith(WINE_SERIES) else 'fail', 'WineHQ stable 11.0',
           version or '没有找到 /opt/wine-stable/bin/wine（运行 uuway setup）')
@@ -1515,6 +1631,7 @@ def command_uninstall(args):
                 warn(f'不是 UUWay 管理的文件，已保留：{path}')
         except OSError as error:
             warn(f'{path}：{error}')
+    remove_amd_launchers(ctx)
     ctx.run(['systemctl', '--user', 'daemon-reload'], check=False)
     if args.purge:
         for directory in (ctx.config_dir, ctx.state_dir, ctx.releases.parent):
@@ -1555,6 +1672,10 @@ def build_parser():
     setup.add_argument('--regrant-screen', action='store_true', help='重新授权屏幕共享')
     setup.add_argument('--restart-services', action='store_true', help='同时重启文字与显示服务')
     setup.set_defaults(handler=command_setup)
+
+    launch = commands.add_parser('open', help='打开 UU 窗口（含新版 UU 登录所需的服务引导）')
+    launch.add_argument('--prefix', type=Path)
+    launch.set_defaults(handler=command_open)
 
     refresh = commands.add_parser('refresh', help='升级软件包后，重打运行时并重启桥接服务')
     common(refresh)

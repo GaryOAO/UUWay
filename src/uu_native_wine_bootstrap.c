@@ -114,10 +114,65 @@ static DWORD attach_input(const WCHAR *folder, DWORD pid)
     return code;
 }
 
+/* Login uses the same documented Windows service bootstrap as the runtime,
+ * without capture hooks, registry changes or account access. Recent UU builds
+ * otherwise stay on the splash screen waiting for GameViewerServer. */
+static int login_gui(const WCHAR *executable, const WCHAR *token)
+{
+    if (wcsncmp(token, L"UURB-NATIVE-", 12)) return 2;
+    HANDLE stop = CreateEventW(NULL, TRUE, FALSE, token);
+    if (!stop) return 1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        PROCESS_INFORMATION existing = {0};
+        DWORD result = launch(executable, &existing);
+        if (existing.hThread) CloseHandle(existing.hThread);
+        if (existing.hProcess) CloseHandle(existing.hProcess);
+        CloseHandle(stop);
+        return result ? 1 : 0;
+    }
+    WCHAR path[32768];
+    DWORD length = GetModuleFileNameW(NULL, path, ARRAYSIZE(path));
+    WCHAR *base = length && length < ARRAYSIZE(path) ? wcsrchr(path, L'\\') : NULL;
+    DWORD status = ERROR_INVALID_PARAMETER;
+    PROCESS_INFORMATION winlogon = {0}, gui = {0};
+    SC_HANDLE manager = NULL, service = NULL;
+    if (!base || (size_t)(++base - path) + 32 >= ARRAYSIZE(path)) goto done;
+    wcscpy(base, L"winlogon.exe");
+    status = launch(path, &winlogon);
+    if (status) goto done;
+    manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!manager) { status = GetLastError(); goto done; }
+    service = OpenServiceW(manager, L"GameViewerService", SERVICE_START | SERVICE_USER_DEFINED_CONTROL);
+    if (!service) { status = GetLastError(); goto done; }
+    if (!StartServiceW(service, 0, NULL) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
+        status = GetLastError(); goto done;
+    }
+    SERVICE_STATUS state = {0};
+    if (!ControlService(service, 133, &state)) { status = GetLastError(); goto done; }
+    event("login_service_bootstrap_accepted", 0);
+    status = launch(executable, &gui);
+    event("login_gui_started", status);
+    if (!status) WaitForSingleObject(stop, INFINITE);
+done:
+    if (service) CloseServiceHandle(service);
+    if (manager) CloseServiceHandle(manager);
+    if (gui.hThread) CloseHandle(gui.hThread);
+    if (gui.hProcess) CloseHandle(gui.hProcess);
+    if (winlogon.hProcess) {
+        TerminateProcess(winlogon.hProcess, 0);
+        WaitForSingleObject(winlogon.hProcess, 5000);
+        CloseHandle(winlogon.hProcess); CloseHandle(winlogon.hThread);
+    }
+    CloseHandle(stop);
+    event("login_exit", status);
+    return status ? 1 : 0;
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     WCHAR guard[16];
     if (GetEnvironmentVariableW(L"UURB_NATIVE_BOOTSTRAP", guard, 16) != 1 || wcscmp(guard, L"1")) return 2;
+    if (argc == 4 && !wcscmp(argv[1], L"--login")) return login_gui(argv[2], argv[3]);
     if (argc == 3 && !wcscmp(argv[1], L"--stop")) {
         if (wcsncmp(argv[2], L"UURB-NATIVE-", 12)) return 2;
         HANDLE stop = OpenEventW(EVENT_MODIFY_STATE, FALSE, argv[2]);

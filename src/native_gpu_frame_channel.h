@@ -5,7 +5,12 @@
  * dedicated opaque-memory FD is transferred with frame 1; subsequent frames
  * refer to the same allocation. Exactly one frame may be outstanding. */
 #define UURB_GPU_CHANNEL_MAGIC 0x47525555u
+#ifdef UURB_VAAPI
+/* Distinct ABI: size-sealed host BGRA memfd, never an opaque GPU allocation. */
+#define UURB_GPU_CHANNEL_VERSION 4u
+#else
 #define UURB_GPU_CHANNEL_VERSION 3u
+#endif
 enum { UURB_GPU_FRAME = 1, UURB_GPU_ACK = 2, UURB_GPU_END = 3 };
 struct uurb_gpu_message {
     uint32_t magic, version, kind, width, height, reserved;

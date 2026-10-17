@@ -239,6 +239,15 @@ DISPLAY_RUNTIME_SOURCE_NAMES = {
 }
 
 
+VAAPI_FIELDS = dict(encoder_backend='amd-vaapi', gpu_message_version=4,
+    pixel_transport='size_sealed_memfd_bgra_host_copy', gpu_zero_copy=False,
+    encoder_reconfigure='close_and_reopen_between_frames_force_IDR',
+    spatial_aq='32_luma_variance_regions_vaapi_qp_delta',
+    unsupported_encoder_modes=RATE_CONTRACT_FIELDS['unsupported_encoder_modes'] + ['temporal_AQ', 'multipass'])
+VAAPI_INPUT_CONTRACT = dict(INPUT_CONTRACT, schema_version=38, **VAAPI_FIELDS)
+VAAPI_CONTRACT = dict(CONTRACT, schema_version=39, **VAAPI_FIELDS)
+
+
 def digest(path):
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 128 * 1024 * 1024:
@@ -445,7 +454,7 @@ def verify(directory):
         raise ValueError('Invalid bundle manifest')
     manifest = json.loads(manifest_file.read_text())
     contract = manifest.get('contract')
-    if contract not in (CONTRACT, INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT, DEFERRED_IME_INPUT_CONTRACT, COMPOSITED_INPUT_CONTRACT, NATIVE_IME_INPUT_CONTRACT, SOURCE_PINNED_INPUT_CONTRACT, PRESET_INPUT_CONTRACT, FAILURE_CONTRACT, FAILURE_INPUT_CONTRACT, PINNED_CONTRACT, PINNED_INPUT_CONTRACT, LIFECYCLE_CONTRACT, LIFECYCLE_INPUT_CONTRACT, SOURCE_TIMING_CONTRACT, SOURCE_TIMING_INPUT_CONTRACT, PRE_TIMING_CONTRACT, RECREATE_INPUT_CONTRACT, GEOMETRY_INPUT_CONTRACT, VIRTUAL_TRACE_INPUT_CONTRACT, PADDED_TEXT_INPUT_CONTRACT, TEXT_DIAGNOSTIC_INPUT_CONTRACT, DEFAULT_DISPLAY_INPUT_CONTRACT, META_INPUT_CONTRACT, SETTINGS_INPUT_CONTRACT, GPU_CONFIRM_INPUT_CONTRACT, EMBEDDED_INPUT_CONTRACT, DISPLAY_INPUT_CONTRACT, SERVICE_INPUT_CONTRACT, REVISION_INPUT_CONTRACT, PURE_TEXT_INPUT_CONTRACT, CURSOR_INPUT_CONTRACT, RATE_INPUT_CONTRACT, REFERENCE_CONTRACT, REFERENCE_INPUT_CONTRACT, *LEGACY_DISPLAY_SET_CONTRACTS) or set(manifest) != {'contract', 'files'}:
+    if contract not in (VAAPI_CONTRACT, VAAPI_INPUT_CONTRACT, CONTRACT, INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT, DEFERRED_IME_INPUT_CONTRACT, COMPOSITED_INPUT_CONTRACT, NATIVE_IME_INPUT_CONTRACT, SOURCE_PINNED_INPUT_CONTRACT, PRESET_INPUT_CONTRACT, FAILURE_CONTRACT, FAILURE_INPUT_CONTRACT, PINNED_CONTRACT, PINNED_INPUT_CONTRACT, LIFECYCLE_CONTRACT, LIFECYCLE_INPUT_CONTRACT, SOURCE_TIMING_CONTRACT, SOURCE_TIMING_INPUT_CONTRACT, PRE_TIMING_CONTRACT, RECREATE_INPUT_CONTRACT, GEOMETRY_INPUT_CONTRACT, VIRTUAL_TRACE_INPUT_CONTRACT, PADDED_TEXT_INPUT_CONTRACT, TEXT_DIAGNOSTIC_INPUT_CONTRACT, DEFAULT_DISPLAY_INPUT_CONTRACT, META_INPUT_CONTRACT, SETTINGS_INPUT_CONTRACT, GPU_CONFIRM_INPUT_CONTRACT, EMBEDDED_INPUT_CONTRACT, DISPLAY_INPUT_CONTRACT, SERVICE_INPUT_CONTRACT, REVISION_INPUT_CONTRACT, PURE_TEXT_INPUT_CONTRACT, CURSOR_INPUT_CONTRACT, RATE_INPUT_CONTRACT, REFERENCE_CONTRACT, REFERENCE_INPUT_CONTRACT, *LEGACY_DISPLAY_SET_CONTRACTS) or set(manifest) != {'contract', 'files'}:
         raise ValueError('Unreviewed bridge contract')
     # Feature fields are inspected only AFTER exact known-contract matching.
     # This keeps old releases usable without broadening accepted manifests.
@@ -471,7 +480,7 @@ def verify(directory):
             raise ValueError('Bundle paths must not cross symlinks')
         if digest(component) != expected:
             raise ValueError('Changed bridge component: ' + name)
-    has_display_set = contract in (INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT)
+    has_display_set = contract in (VAAPI_INPUT_CONTRACT, INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT)
     if has_display_set:
         if contract == DPI_V2_INPUT_CONTRACT:
             verify_pe_export(directory / INPUT_BRIDGE_COMPONENT, DISPLAY_DPI_V2_EXPORT, 'Input bridge')
@@ -498,9 +507,10 @@ def verify(directory):
                 native_gpu_display_confirmation_included='display_confirmation_is_remote_presentation_proof' in contract,
                 native_input_settings_included='input_settings_version' in contract,
                 native_display_geometry_included='display_geometry_queries' in contract,
-                native_source_timing_included=contract.get('gpu_message_version') == 3,
+                native_source_timing_included=contract.get('gpu_message_version') in (3, 4),
                 native_capture_producer_included='capture_producer' in contract,
                 native_main_scripts_included='main_runtime_sources' in contract,
+                encoder_backend=contract.get('encoder_backend', 'nvidia-nvenc'),
                 uu_session_tested=False, production_ready=False)
 
 
@@ -611,6 +621,12 @@ def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bri
                 verify_elf_export(sources['runtime/uurb-native-display.dll.so'], DISPLAY_QUERY_V2_EXPORT)
             else:
                 verify_display_set_bridge(sources[INPUT_BRIDGE_COMPONENT])
+        marker = ROOT / 'build/encoder-backend'
+        if marker.is_file() and marker.read_text().strip() == 'amd-vaapi':
+            if reuse_runtime_from is not None:
+                raise ValueError('AMD transport must be packaged as a complete runtime, not mixed into a reused GPU bundle')
+            contract = VAAPI_INPUT_CONTRACT if with_input else VAAPI_CONTRACT
+            sources['dxvk.conf'] = ROOT / 'config/dxvk-amd.conf'
         before = {name: digest(source) for name, source in sources.items()}
         for name, source in inputs.items():
             destination = stage / name

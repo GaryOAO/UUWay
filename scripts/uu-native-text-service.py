@@ -54,7 +54,7 @@ def live_daemon(endpoint, restore_state, reclaim_stale=True):
             proc = Path('/proc') / str(pid)
             command = (proc / 'cmdline').read_bytes().split(b'\0')
             command = [os.fsdecode(part) for part in command if part]
-            if len(command) not in (6, 8) or Path(os.readlink(proc / 'exe')).name not in ('python3', 'python3.12'):
+            if len(command) not in (6, 8) or Path(os.readlink(proc / 'exe')).resolve() != Path('/usr/bin/python3').resolve():
                 raise ValueError('Unexpected text daemon executable')
             script = Path(command[1])
             if not script.is_absolute():

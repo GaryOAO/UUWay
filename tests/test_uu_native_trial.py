@@ -2,6 +2,7 @@ import importlib.util
 import copy
 import os
 import socket
+import shutil
 import subprocess
 from pathlib import Path
 import tempfile
@@ -15,6 +16,19 @@ spec.loader.exec_module(trial)
 
 
 class CleanupTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('xvfb-run'), 'requires Xvfb')
+    def test_runtime_keeps_wine_on_a_separate_display_for_clipboard_files(self):
+        # Exercise the actual launcher, including an inherited desktop DISPLAY.
+        # A real desktop launch would make clipboard discover() reject the pair.
+        with patch.object(trial, 'WINE', '/usr/bin/python3'):
+            command = trial.wine_launch_command(
+                ['-c', 'import os; print(os.environ["DISPLAY"])'],
+                dict(width=640, height=360))
+        result = subprocess.run(command, env=dict(os.environ, DISPLAY=':9876'),
+                                capture_output=True, text=True, check=True, timeout=10)
+        self.assertTrue(result.stdout.strip().startswith(':'))
+        self.assertNotEqual(result.stdout.strip(), ':9876')
+
     def test_deferred_ime_allows_only_missing_exact_private_endpoint(self):
         with tempfile.TemporaryDirectory() as name:
             parent = Path(name); endpoint = parent / 'ime.sock'

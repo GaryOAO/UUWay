@@ -17,6 +17,28 @@ spec.loader.exec_module(package)
 
 
 class PackageIsolationTests(unittest.TestCase):
+    def test_explicit_amd_bundle_preserves_backend_transport_and_quantization_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            (root / 'build/encoder-backend').write_text('amd-vaapi\n')
+            (root / 'config/dxvk-amd.conf').write_text('dxgi.customVendorId = 10de\n')
+            with patch.object(package, 'ROOT', root):
+                for with_input in (False, True):
+                    with self.subTest(with_input=with_input):
+                        release = package.package(root / 'releases', with_input=with_input)
+                        bundle = Path(release['bundle'])
+                        result = package.verify(bundle)
+                        self.assertEqual(result['encoder_backend'], 'amd-vaapi')
+                        self.assertTrue(result['native_source_timing_included'])
+                        self.assertEqual(result['native_display_set_config_included'], with_input)
+                        manifest = json.loads((bundle / 'manifest.json').read_text())
+                        self.assertEqual(manifest['contract']['gpu_message_version'], 4)
+                        self.assertFalse(manifest['contract']['gpu_zero_copy'])
+                        self.assertIn('temporal_AQ', manifest['contract']['unsupported_encoder_modes'])
+                        self.assertNotIn('AQ', manifest['contract']['unsupported_encoder_modes'])
+                        self.assertEqual((bundle / 'dxvk.conf').read_text(), 'dxgi.customVendorId = 10de\n')
+
     @staticmethod
     def pe_input_bridge(marker=True, machine=0x8664, export=None):
         """Return a small, non-loadable PE fixture with an export table.

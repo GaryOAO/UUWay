@@ -1,9 +1,12 @@
 import importlib.util
+import os
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -16,6 +19,28 @@ finally:
 
 
 class TextServiceTests(unittest.TestCase):
+    def test_system_python_daemon_is_adopted_across_python_versions(self):
+        with tempfile.TemporaryDirectory() as name:
+            endpoint, restore = Path(name) / 'text.sock', Path(name) / 'restore.json'
+            script = Path(name) / 'daemon.py'
+            script.write_text('import socket, sys, time\n'
+                              's = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)\n'
+                              's.bind(sys.argv[2])\n'
+                              'import os; os.chmod(sys.argv[2], 0o600)\n'
+                              's.listen(1)\nprint("ready", flush=True)\ntime.sleep(30)\n')
+            child = subprocess.Popen(['/usr/bin/python3', str(script), '--socket', str(endpoint),
+                                      '--restore-state', str(restore)], stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(child.stdout.readline().strip(), 'ready')
+                with patch.object(service, 'DAEMON', script):
+                    identity = service.live_daemon(endpoint, restore)
+                self.assertEqual(identity[0], child.pid)
+                os.close(identity[1])
+            finally:
+                child.terminate()
+                child.wait(timeout=5)
+                child.stdout.close()
+
     def test_stale_owned_socket_is_reclaimed_not_timed_out_live_process(self):
         with tempfile.TemporaryDirectory() as name:
             endpoint = Path(name) / 'text.sock'

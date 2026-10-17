@@ -64,6 +64,11 @@ static inline int uurb_nvenc_negotiate(const NV_ENC_INITIALIZE_PARAMS *p, const 
     expected.rcParams.disableIadapt = c->rcParams.disableIadapt;
     expected.rcParams.disableBadapt = c->rcParams.disableBadapt;
     expected.rcParams.zeroReorderDelay = c->rcParams.zeroReorderDelay;
+#ifdef UURB_VAAPI
+    /* ULL's default I/P allocation hint. VA-API owns the actual CBR budget. */
+    if (c->rcParams.lowDelayKeyFrameScale > 1) return 0;
+    expected.rcParams.lowDelayKeyFrameScale = c->rcParams.lowDelayKeyFrameScale;
+#endif
     if (c->rcParams.multiPass != NV_ENC_MULTI_PASS_DISABLED &&
         c->rcParams.multiPass != NV_ENC_TWO_PASS_QUARTER_RESOLUTION &&
         c->rcParams.multiPass != NV_ENC_TWO_PASS_FULL_RESOLUTION) return 0;
@@ -88,6 +93,20 @@ static inline int uurb_nvenc_negotiate(const NV_ENC_INITIALIZE_PARAMS *p, const 
         wanted = &expected.encodeCodecConfig.h264Config.h264VUIParameters;
     }
 #undef COMMON
+#ifdef UURB_VAAPI
+    /* One 4:2:0 slice; periodic keyframes follow the requested GOP. */
+#define AMD_CODEC(dst, src) do { \
+    if ((src)->chromaFormatIDC > 1 || ((src)->idrPeriod && (src)->idrPeriod != c->gopLength)) return 0; \
+    (dst)->chromaFormatIDC = (src)->chromaFormatIDC; (dst)->idrPeriod = (src)->idrPeriod; \
+} while (0)
+    if (hevc) AMD_CODEC(&expected.encodeCodecConfig.hevcConfig, &c->encodeCodecConfig.hevcConfig);
+    else AMD_CODEC(&expected.encodeCodecConfig.h264Config, &c->encodeCodecConfig.h264Config);
+#undef AMD_CODEC
+    /* With both presence flags clear the color fields have no bitstream
+     * meaning. Accept the all-zero SDK structure, keep conversion BT.709. */
+    NV_ENC_CONFIG_H264_VUI_PARAMETERS absent = {0};
+    if (!memcmp(vui, &absent, sizeof(absent))) *wanted = absent;
+#endif
     /* Preserve either explicitly tested BT.709 limited metadata or entirely
      * unspecified color metadata. Never relabel HDR/full-range as BT.709. */
     if (!vui->videoSignalTypePresentFlag && !vui->colourDescriptionPresentFlag &&

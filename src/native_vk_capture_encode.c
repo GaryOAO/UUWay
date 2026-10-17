@@ -7,6 +7,13 @@
 #include "native_vk_dmabuf_import.h"
 #include "native_cuda_encode_session.h"
 #include "native_vk_cursor_composite.h"
+#ifdef UURB_VAAPI
+#include "native_host_frame.h"
+#include <fcntl.h>
+#define HOST_IMAGE_USAGE VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+#else
+#define HOST_IMAGE_USAGE 0
+#endif
 #include <libdrm/drm_fourcc.h>
 #include <linux/dma-buf.h>
 #include <sys/ioctl.h>
@@ -28,6 +35,9 @@ struct input_cache {
 };
 
 struct uurb_capture_encoder {
+#ifdef UURB_VAAPI
+    struct uurb_host_frame *host;
+#endif
     struct uurb_vk_importer *importer;
     VkPhysicalDevice physical;
     VkDevice device;
@@ -128,7 +138,7 @@ static int allocate_output(struct uurb_capture_encoder *s, uint32_t width, uint3
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2, .pNext = &export_query,
         .format = VK_FORMAT_B8G8R8A8_UNORM, .type = VK_IMAGE_TYPE_2D,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT};
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | HOST_IMAGE_USAGE};
     VkExternalImageFormatProperties export_properties = {
         .sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
     VkImageFormatProperties2 image_properties = {
@@ -144,7 +154,7 @@ static int allocate_output(struct uurb_capture_encoder *s, uint32_t width, uint3
     VkImageCreateInfo image = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external,
         .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_B8G8R8A8_UNORM, .extent = {width, height, 1},
         .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | HOST_IMAGE_USAGE,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     GPU(vkCreateImage(s->device, &image, NULL, &s->output));
     VkMemoryRequirements requirements;
@@ -165,6 +175,11 @@ static int allocate_output(struct uurb_capture_encoder *s, uint32_t width, uint3
     GPU(vkAllocateMemory(s->device, &allocate, NULL, &s->memory));
     GPU(vkBindImageMemory(s->device, s->output, s->memory, 0));
     s->bytes = requirements.size; s->width = width; s->height = height;
+#ifdef UURB_VAAPI
+    s->host = uurb_host_frame_open(s->physical, s->device, width, height);
+    if (!s->host) goto fail;
+    s->bytes = (uint64_t)width * height * 4;
+#endif
     if (s->cursor && !(s->composite = uurb_vk_cursor_composite_open(s->physical, s->device, s->output, width, height)))
         goto fail;
     return 0;
@@ -288,6 +303,9 @@ static int capture_frame(struct uurb_capture_encoder *s, const void *buffer_key,
         vkCmdBlitImage(s->command, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        s->output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
     }
+#ifdef UURB_VAAPI
+    uurb_host_frame_record(s->host, s->command, s->output);
+#endif
     VkImageMemoryBarrier release[2] = {
         barrier(s->output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
                 s->family, VK_QUEUE_FAMILY_EXTERNAL, s->composite ? VK_ACCESS_MEMORY_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, 0),
@@ -314,22 +332,35 @@ static int capture_frame(struct uurb_capture_encoder *s, const void *buffer_key,
     }
     /* Source read is complete before returning to PipeWire. No release sync FD
      * is needed for this synchronous path; the buffer has not been requeued. */
+#ifdef UURB_VAAPI
+    int host_fd = uurb_host_frame_publish(s->host);
+    if (host_fd < 0) goto fail;
+#endif
     if (s->sink) {
+#ifdef UURB_VAAPI
+        if (s->shared_fd < 0) s->shared_fd = fcntl(host_fd, F_DUPFD_CLOEXEC, 0);
+        if (s->shared_fd < 0) goto fail;
+#else
         if (s->shared_fd < 0) {
             VkMemoryGetFdInfoKHR export = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
                 .memory = s->memory, .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
             GPU(s->get_fd(s->device, &export, &s->shared_fd));
         }
+#endif
         if (s->sink(s->sink_opaque, s->shared_fd, s->bytes, s->uuid, width, height, timestamp)) {
             fprintf(stderr, "GPU sink failed delivery/acknowledgment; refusing allocation reuse\n");
             goto fail;
         }
     } else {
         if (!s->encoder) {
+#ifdef UURB_VAAPI
+            int encoded_fd = fcntl(host_fd, F_DUPFD_CLOEXEC, 0);
+#else
             VkMemoryGetFdInfoKHR export = {.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
                 .memory = s->memory, .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT};
             int encoded_fd = -1;
             GPU(s->get_fd(s->device, &export, &encoded_fd));
+#endif
             s->encoder = uurb_encoder_open(encoded_fd, s->bytes, s->uuid, width, height, s->hevc, 20000000);
             if (!s->encoder) goto fail;
         }
@@ -376,6 +407,9 @@ int uurb_capture_encoder_close(struct uurb_capture_encoder *s)
     if (uurb_encoder_close(s->encoder)) {
         fprintf(stderr, "CUDA/NVENC cleanup failed; exiting isolated capture worker\n"); _Exit(4);
     }
+#ifdef UURB_VAAPI
+    uurb_host_frame_close(s->host);
+#endif
     uurb_vk_cursor_composite_close(s->composite);
     if (s->output) vkDestroyImage(s->device, s->output, NULL);
     if (s->memory) vkFreeMemory(s->device, s->memory, NULL);

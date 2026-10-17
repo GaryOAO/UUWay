@@ -157,6 +157,27 @@ int main(int argc, char **argv)
         init.enableEncodeAsync = 0; init.frameRateNum = 241;
         CHECK(api.nvEncInitializeEncoder(encoder, &init) == NV_ENC_ERR_UNSUPPORTED_PARAM && init.frameRateNum == 241);
         init.frameRateNum = 60;
+        char amd_flag[2];
+        int amd_uu = GetEnvironmentVariableA("UURB_AMD_UU_PROBE", amd_flag, 2) == 1 && amd_flag[0] == '1';
+        if (amd_uu) {
+            config.gopLength = NVENC_INFINITE_GOPLENGTH;
+            config.rcParams.enableAQ = 1;
+            config.rcParams.disableIadapt = 1;
+            config.rcParams.lowDelayKeyFrameScale = 1;
+            if (codec) {
+                config.encodeCodecConfig.hevcConfig.idrPeriod = config.gopLength;
+                config.encodeCodecConfig.hevcConfig.chromaFormatIDC = 1;
+                config.encodeCodecConfig.hevcConfig.maxNumRefFramesInDPB = 1;
+                config.encodeCodecConfig.hevcConfig.sliceMode = 3;
+                config.encodeCodecConfig.hevcConfig.sliceModeData = 1;
+            } else {
+                config.encodeCodecConfig.h264Config.idrPeriod = config.gopLength;
+                config.encodeCodecConfig.h264Config.chromaFormatIDC = 1;
+                config.encodeCodecConfig.h264Config.maxNumRefFrames = 1;
+                config.encodeCodecConfig.h264Config.sliceMode = 3;
+                config.encodeCodecConfig.h264Config.sliceModeData = 1;
+            }
+        }
         if (negotiated) {
             init.frameRateNum = codec ? 120 : 30000;
             init.frameRateDen = codec ? 1 : 1001;
@@ -284,6 +305,9 @@ int main(int argc, char **argv)
                     config.rcParams.maxBitRate = 16000000;
                     config.rcParams.vbvBufferSize = 200000;
                     config.rcParams.vbvInitialDelay = 100000;
+                } else if (amd_uu) {
+                    config.rcParams.averageBitRate = config.rcParams.maxBitRate = 20000000;
+                    config.rcParams.vbvBufferSize = config.rcParams.vbvInitialDelay = 20000000 / 60;
                 } else uurb_nvenc_reference_config(&preset.presetCfg, 640, 360, codec, 20000000, &config, &init);
                 NV_ENC_RECONFIGURE_PARAMS change = {.version = NV_ENC_RECONFIGURE_PARAMS_VER,
                     .reInitEncodeParams = init, .resetEncoder = 1, .forceIDR = 1};

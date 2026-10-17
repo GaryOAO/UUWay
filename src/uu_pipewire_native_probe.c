@@ -461,12 +461,16 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < count; i++) {
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(devices[i], &properties);
+#ifdef UURB_VAAPI
+        if (properties.vendorID == 0x1002) {
+#else
         if (properties.vendorID == 0x10de) {
-            if (selected) { fprintf(stderr, "Multiple NVIDIA GPUs: explicit selection required\n"); goto vulkan_done; }
+#endif
+            if (selected) { fprintf(stderr, "Multiple backend-compatible GPUs: explicit selection required\n"); goto vulkan_done; }
             selected = devices[i];
         }
     }
-    if (!selected) { fprintf(stderr, "No NVIDIA Vulkan physical device\n"); goto vulkan_done; }
+    if (!selected) { fprintf(stderr, "No backend-compatible Vulkan physical device\n"); goto vulkan_done; }
     uint8_t storage[16384];
     struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage, sizeof(storage));
     const struct spa_pod *params[4];

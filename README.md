@@ -13,6 +13,10 @@
 
 </div>
 
+> 可选 AMD 后端：新增 Radeon 核显的 VA-API H.264/HEVC 编码支持，
+> 使用内存中转，配置和验证范围见 [AMD 使用说明](docs/amd-vaapi.md)。
+> 下文的 NVIDIA、零拷贝和性能描述属于原版 UUWay。
+
 **网易 UU 远程官方只有 Windows 被控端，没有 Linux 版客户端。** UUWay 让官方原版被控端在 Wine 中运行（磁盘上的文件不做任何修改），再把它依赖的每一个 Windows 接口交给 Linux 原生实现。于是，用手机打开 UU 远程，就能像控制一台 Windows 电脑一样控制你的 Linux 桌面。
 
 ## ✨ UU 的功能，几乎全部可用
