@@ -13,10 +13,7 @@
 
 </div>
 
-> NVIDIA NVENC is the default; AMD VA-API H.264/HEVC is an optional backend that requires a manual build.
-> Installation does not automatically switch GPU backends or install GPU drivers. AMD uses host-memory
-> copies; the zero-copy and performance claims below apply to NVIDIA. See the [AMD guide](docs/amd-vaapi.md)
-> for setup and validation scope.
+> Release packages include NVIDIA NVENC and AMD VA-API H.264/HEVC. Installation probes NVIDIA first, then verifies AMD; it never installs or switches GPU drivers. AMD uses host-memory copies, so zero-copy and performance claims apply only to NVIDIA.
 
 **NetEase UU Remote only ships a Windows host — there is no Linux client.** UUWay runs the official
 host under Wine, with its files unmodified on disk, and serves every Windows interface it depends on
@@ -27,7 +24,7 @@ you would a Windows PC.
 
 | UU feature | On Linux | Notes |
 | --- | :---: | --- |
-| 🎞️ Screen streaming | ✅ | Zero-copy GPU capture + NVENC, up to 60 FPS at 1080p |
+| 🎞️ Screen streaming | ✅ | NVIDIA zero-copy + NVENC, or AMD VA-API through host memory |
 | 🖱️ Pointer | ✅ | The controller draws your real cursor theme, and zoomed views follow it |
 | ⌨️ Keyboard & mouse | ✅ | Including the Super / ⌘ key, injected through libei / uinput |
 | 🀄 Phone IME | ✅ | Chinese text is committed straight into the focused field (Fcitx5) |
@@ -72,23 +69,21 @@ See the [design notes](docs/design.md) for details.
 
 ## 🚀 Install
 
-Choose the installation path for your GPU first. **`uuway setup` and `install.sh` default to NVIDIA;
-they do not automatically detect and switch to AMD, or install or switch GPU drivers.** Prepare the
-appropriate driver before setup.
+Release packages include both GPU backends. **`uuway setup` and `install.sh` probe NVIDIA NVENC first, then verify AMD VA-API H.264/HEVC, and persist the first working choice.** They never install or switch GPU drivers.
 
 | GPU | Encoding backend | Installation |
 | --- | --- | --- |
-| NVIDIA with NVENC | NVENC, zero-copy GPU path | Default instructions below |
-| AMD | VA-API H.264/HEVC with host-memory copies | Manual build; see “AMD (optional)” below and the [AMD guide](docs/amd-vaapi.md) |
+| NVIDIA with NVENC | NVENC, zero-copy GPU path | Selected first |
+| AMD | VA-API H.264/HEVC with host-memory copies | Selected when NVIDIA is unavailable |
 | Intel | No corresponding encoding backend | An Intel-only GPU setup is currently unsupported |
 
-### NVIDIA (default)
+### Install
 
 **You need:**
 
 - Ubuntu 24.04 with a GNOME 46 **Wayland** session that stays logged in (a display dummy plug for
   headless machines)
-- An **NVIDIA** GPU with NVENC and the proprietary driver
+- An **NVIDIA** GPU with NVENC or an **AMD** GPU with H.264/HEVC VA-API and its driver
 - The official UU Remote **Windows** installer and a UU account
 
 **1. Install the package.** Download `uuway_<version>_amd64.deb` from the
@@ -162,33 +157,19 @@ After installation, open **UUWay Console** from the application menu. It uses th
 Python + GTK stack and exposes service capabilities, input, text backend, display modes, the Linux
 penguin desktop image, and the file receive mapping (XDG Downloads by default).
 
-### AMD (optional)
+### Backend selection
 
-The AMD backend requires a manual build and is not part of the default package setup or update flow.
-Install the `uuway` deb package above to supply shared components, then follow the [AMD guide](docs/amd-vaapi.md)
-to prepare working AMD Vulkan/VA-API drivers, WineHQ 11.0 and build dependencies. **Do not run the NVIDIA
-setup wizard or `install.sh` above.**
-
-Use a separate checkout:
+Release packages contain both NVIDIA and AMD runtimes. `uuway setup` and `install.sh` probe NVIDIA NVENC
+first, then verify AMD VA-API H.264/HEVC, and persist the first working choice. They never install or switch
+GPU drivers. Use `UURB_BACKEND=nvidia|amd` for an explicit diagnostic override:
 
 ```bash
-git clone https://github.com/GaryOAO/UUWay.git UUWay-amd
-cd UUWay-amd
-bash scripts/build-amd-runtime.sh
-python3 scripts/test-amd-runtime.py
-bash scripts/uuway-amd.sh setup --installer ~/Downloads/UURemote_Setup.exe
-bash scripts/uuway-amd.sh doctor
+UURB_BACKEND=amd uuway doctor
+UURB_BACKEND=nvidia uuway doctor
 ```
 
-The completed build selects the AMD backend; setup then tests actual H.264/HEVC hardware encoding.
-The author validated Radeon 780M + Ubuntu 26.04 + GNOME Wayland + WineHQ 11.0 + UU 4.42.1. Other AMD
-models and AMD operation on Ubuntu 24.04 remain unverified. Host-memory copies add overhead, so the
-NVIDIA zero-copy performance figures do not apply.
-
-Use `bash scripts/uuway-amd.sh refresh` afterwards. Avoid plain `uuway refresh` and `uuway update install`,
-which deploy the NVIDIA runtime. Background operation uses a separate Xvfb display to preserve clipboard
-file pastes; run `bash scripts/uuway-amd.sh setup --login` to sign in again. See the [AMD guide](docs/amd-vaapi.md)
-for the full limitations and uninstall instructions.
+The AMD path copies frames through host memory, so NVIDIA zero-copy performance figures do not apply.
+Intel remains unsupported. Developers building from source can still follow the [AMD guide](docs/amd-vaapi.md).
 
 ## 📦 Repository layout
 

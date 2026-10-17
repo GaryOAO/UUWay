@@ -1,5 +1,11 @@
 ## UUWay：网易 UU 远程 Linux 被控端
 
+### 1.3.0 更新
+
+- **发布包同时带 NVIDIA 与 AMD 后端并自动选择。** 安装时优先验证 NVIDIA NVENC，失败后验证 AMD VA-API H.264/HEVC；首次成功的后端会写入用户运行时配置，刷新不会因环境短暂变化悄悄切换。可用 `UURB_BACKEND=nvidia|amd` 做诊断覆盖。
+- AMD 使用 host-memory copy 路径，Intel 仍不支持。UUWay 只检测驱动和编码能力，不会自动安装或切换显卡驱动。
+- 发布物没有签名，仍提供同一 Release 内的 `SHA256SUMS`。
+
 ### 1.2.0 更新
 
 - **新增 `uuway update`：检查并安装新版本。** `uuway update` 只查看有没有新版本；`uuway update install` 下载、校验哈希、备份、安装，装好后运行 `uuway refresh`，等机器回到线上并稳定约 90 秒，不正常就自动回滚到更新前的版本；`uuway update status` 看上次结果，`uuway update rollback` 手动回到更新前的版本。`uuway doctor` 会提示有新版本和上次更新是否失败，但它不联网。

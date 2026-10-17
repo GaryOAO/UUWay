@@ -72,7 +72,9 @@ NATIVE_PRESENTER = (
     'uu-pipewire-native-probe',
     'uu-pipewire-dmabuf-probe',
 )
-EXECUTABLE_ELF = {'uu-native-input', 'uu-pipewire-native-probe', 'uu-pipewire-dmabuf-probe'}
+BACKEND_NAMES = ('nvidia', 'amd')
+AMD_BACKEND_EXTRA = ('uu-vaapi-probe',)
+EXECUTABLE_ELF = {'uu-native-input', 'uu-pipewire-native-probe', 'uu-pipewire-dmabuf-probe', 'uu-vaapi-probe'}
 
 DXVK_STAGE = ('dxgi.dll', 'd3d11.dll', 'DXVK_LICENSE')
 
@@ -102,6 +104,7 @@ def files():
     entries = []
     for name in RUNTIME_SCRIPTS:
         entries.append((f'scripts/{name}', f'{LIB}/scripts/{name}', script_mode(name)))
+    entries.append(('scripts/uuway-amd.sh', f'{LIB}/scripts/uuway-amd.sh', 0o755))
     for name in SYSTEMD_TEMPLATES:
         entries.append((f'systemd/{name}', f'{LIB}/systemd/{name}', 0o644))
     entries += [
@@ -109,6 +112,7 @@ def files():
         ('assets/uuway-icon.svg', f'{LIB}/assets/uuway-icon.svg', 0o644),
         ('assets/uuway-icon.svg', 'usr/share/icons/hicolor/scalable/apps/uuway.svg', 0o644),
         ('config/dxvk-native.conf', f'{LIB}/config/dxvk-native.conf', 0o644),
+        ('config/dxvk-amd.conf', f'{LIB}/config/dxvk-amd.conf', 0o644),
         ('config/70-uurb-native-input.rules', 'usr/lib/udev/rules.d/70-uurb-native-input.rules', 0o644),
         ('build/native-ime/libuurb-native-ime.so', f'{LIB}/fcitx5/libuurb-native-ime.so', 0o644),
         ('packaging/deb/uuway.desktop', 'usr/share/applications/uuway.desktop', 0o644),
@@ -123,6 +127,25 @@ def files():
     for name in NATIVE_PRESENTER:
         mode = 0o755 if name in EXECUTABLE_ELF else 0o644
         entries.append((f'build/native-presenter/{name}', f'{LIB}/build/native-presenter/{name}', mode))
+    # A release carries both immutable GPU runtimes.  The common input/display
+    # artifacts are duplicated deliberately: a user can select either backend
+    # without rebuilding or installing a driver.
+    for backend in BACKEND_NAMES:
+        for name in NATIVE_PRESENTER:
+            mode = 0o755 if name in EXECUTABLE_ELF else 0o644
+            source = f'build/backends/{backend}/native-presenter/{name}'
+            entries.append((source, f'{LIB}/{source}', mode))
+        if backend == 'amd':
+            for name in AMD_BACKEND_EXTRA:
+                source = f'build/backends/{backend}/native-presenter/{name}'
+                entries.append((source, f'{LIB}/{source}', 0o755))
+        for name in DXVK_STAGE:
+            source = f'build/backends/{backend}/dxvk-capture/stage/{name}'
+            entries.append((source, f'{LIB}/{source}', 0o644))
+        for name in HELPERS:
+            mode = 0o755 if name in EXECUTABLE_HELPERS else 0o644
+            source = f'build/backends/{backend}/helpers/{name}'
+            entries.append((source, f'{LIB}/{source}', mode))
     for name in HELPERS:
         mode = 0o755 if name in EXECUTABLE_HELPERS else 0o644
         entries.append((f'build/helpers/{name}', f'{LIB}/build/helpers/{name}', mode))

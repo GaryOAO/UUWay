@@ -17,6 +17,52 @@ import uuway_cli as cli
 
 
 class AmdSetupTests(unittest.TestCase):
+    def backend_fixture(self, root):
+        for backend in ('nvidia', 'amd'):
+            (root / 'build/backends' / backend / 'native-presenter').mkdir(parents=True)
+            (root / 'build/backends' / backend / 'dxvk-capture').mkdir(parents=True)
+        (root / 'build/backends/amd/native-presenter/uu-vaapi-probe').write_bytes(b'probe')
+
+    def test_auto_selection_prefers_nvidia_when_both_probes_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self.backend_fixture(root)
+            ctx = Mock(runtime_config=root / 'missing.json')
+            ctx.probe.side_effect = [subprocess.CompletedProcess([], 0, stdout='GPU', stderr='')]
+            with patch.object(cli, 'ROOT', root):
+                self.assertEqual(cli.select_backend(ctx), 'nvidia')
+            self.assertEqual(ctx.probe.call_args.args[0], ['nvidia-smi', '-L'])
+
+    def test_auto_selection_falls_back_to_verified_amd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self.backend_fixture(root)
+            ctx = Mock(runtime_config=root / 'missing.json')
+            ctx.probe.side_effect = [
+                subprocess.CompletedProcess([], 1, stderr='no NVIDIA'),
+                subprocess.CompletedProcess([], 0, stderr=''),
+            ]
+            with patch.object(cli, 'ROOT', root):
+                self.assertEqual(cli.select_backend(ctx), 'amd')
+            self.assertEqual(Path(ctx.probe.call_args_list[1].args[0][0]).name, 'uu-vaapi-probe')
+
+    def test_forced_backend_and_saved_choice_are_stable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); self.backend_fixture(root)
+            config = root / 'runtime.json'; config.write_text('{"backend":"amd"}')
+            ctx = Mock(runtime_config=config)
+            ctx.probe.return_value = subprocess.CompletedProcess([], 0)
+            with patch.object(cli, 'ROOT', root), patch.dict(os.environ, {'UURB_BACKEND': 'amd'}):
+                self.assertEqual(cli.select_backend(ctx), 'amd')
+            with patch.object(cli, 'ROOT', root), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(cli.select_backend(ctx), 'amd')
+
+    def test_no_backend_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'build').mkdir()
+            ctx = Mock(runtime_config=root / 'missing.json')
+            with patch.object(cli, 'ROOT', root):
+                with self.assertRaisesRegex(cli.SetupError, 'NVIDIA NVENC.*AMD VA-API'):
+                    cli.select_backend(ctx)
+
     def test_spatial_aq_allocates_bits_to_flat_regions_and_bounds_strength(self):
         source = r'''
 #include "native_spatial_aq.h"

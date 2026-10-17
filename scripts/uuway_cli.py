@@ -58,6 +58,8 @@ AMD_DESKTOP_MARKER = '# Managed by UUWay AMD\n'
 FCITX_MARKER = '# Managed by uuway setup'
 HELPERS = ('uu-clipboard-bridge', 'uu-clipboard-files.exe', 'uu-conpty.dll',
            'uu-terminal-bridge', 'uu-terminal-proxy.exe')
+GPU_BACKENDS = ('nvidia', 'amd')
+GPU_BACKEND_ENV = 'UURB_BACKEND'
 FCITX_CONF = '''{marker}
 [Addon]
 Name=UU Bridge native text input
@@ -270,16 +272,14 @@ def check_environment(ctx):
     if session != 'wayland' or 'GNOME' not in desktop:
         raise SetupError(f'请在 GNOME Wayland 会话里运行（当前会话：{session or "未知"} / {desktop or "未知"}）。')
     ok('GNOME Wayland 会话')
-    if amd_backend_enabled():
-        result = amd_backend_probe(ctx)
-        if result.returncode:
-            raise SetupError('AMD VA-API 编码验证失败：' + result.stderr[-1000:])
+    backend = select_backend(ctx)
+    ctx.backend = backend
+    if backend == 'amd':
         ok('AMD VA-API 硬件编码（兼容模式，画面经过内存中转）')
-        return
-    gpus = ctx.probe(['nvidia-smi', '-L'])
-    if gpus.returncode != 0:
-        raise SetupError('没有找到可用的 NVIDIA 显卡驱动。UUWay 需要支持 NVENC 的 NVIDIA 显卡和官方驱动。')
-    ok('NVIDIA 显卡：' + gpus.stdout.splitlines()[0].split(' (UUID')[0])
+    else:
+        gpus = ctx.probe(['nvidia-smi', '-L'])
+        ok('NVIDIA 显卡：' + (gpus.stdout.splitlines()[0].split(' (UUID')[0]
+                              if gpus.stdout.splitlines() else '驱动可用'))
 
 
 def amd_backend_enabled():
@@ -287,10 +287,92 @@ def amd_backend_enabled():
     return marker.is_file() and marker.read_text().strip() == 'amd-vaapi'
 
 
-def amd_backend_probe(ctx):
-    binary = ROOT / 'build/native-presenter/uu-vaapi-probe'
+def backend_root(backend):
+    """Locate an immutable backend tree in a package or source checkout."""
+    for root in (ROOT / 'build/backends' / backend, DEB_ROOT / 'build/backends' / backend):
+        if root.is_dir():
+            return root
+    # Old source installs had one tree selected by build/encoder-backend.
+    if backend == 'amd' and amd_backend_enabled():
+        return ROOT / 'build'
+    if backend == 'nvidia' and not amd_backend_enabled() and (ROOT / 'build').is_dir():
+        return ROOT / 'build'
+    return None
+
+
+def backend_available(backend):
+    root = backend_root(backend)
+    if not root:
+        return False
+    if root == ROOT / 'build':
+        return root.is_dir()  # legacy marker layout; probe supplies the capability check
+    return (root / 'native-presenter').is_dir() and (root / 'dxvk-capture').is_dir()
+
+
+def amd_backend_probe(ctx, backend='amd'):
+    root = backend_root(backend) or ROOT / 'build'
+    binary = root / 'native-presenter/uu-vaapi-probe'
     with tempfile.TemporaryDirectory(prefix='uuway-amd-check-') as directory:
         return ctx.probe([binary, directory])
+
+
+def probe_backend(ctx, backend):
+    if not backend_available(backend):
+        return False, 'runtime is not installed'
+    if backend == 'nvidia':
+        result = ctx.probe(['nvidia-smi', '-L'])
+        stderr = getattr(result, 'stderr', '')
+        stderr = stderr if isinstance(stderr, str) else ''
+        return result.returncode == 0, stderr[-500:] or 'NVIDIA driver unavailable'
+    result = amd_backend_probe(ctx)
+    stderr = getattr(result, 'stderr', '')
+    stderr = stderr if isinstance(stderr, str) else ''
+    return result.returncode == 0, stderr[-500:] or 'VA-API H.264/HEVC probe failed'
+
+
+def configured_backend(ctx):
+    path = getattr(ctx, 'runtime_config', None)
+    if not isinstance(path, (str, os.PathLike, Path)):
+        return None
+    config = read_json(path)
+    value = config.get('backend') if isinstance(config, dict) else None
+    return value if value in GPU_BACKENDS else None
+
+
+def select_backend(ctx):
+    """Select NVIDIA first, then a verified AMD VA-API runtime.
+
+    UURB_BACKEND is an intentional diagnostic override.  A saved service choice
+    wins over changing hardware so a refresh cannot silently swap transports.
+    """
+    forced = os.environ.get(GPU_BACKEND_ENV, '').strip().lower()
+    if forced:
+        if forced not in GPU_BACKENDS:
+            raise SetupError(f'{GPU_BACKEND_ENV} 只能是 nvidia 或 amd。')
+        ok_backend, detail = probe_backend(ctx, forced)
+        if not ok_backend:
+            raise SetupError(f'强制选择 {forced} 后端失败：{detail}')
+        return forced
+    saved = configured_backend(ctx)
+    if saved:
+        ok_backend, detail = probe_backend(ctx, saved)
+        if not ok_backend:
+            raise SetupError(f'已保存的 {saved} 后端当前不可用：{detail}。如需切换请先删除配置或设置 {GPU_BACKEND_ENV}。')
+        return saved
+    for backend in GPU_BACKENDS:
+        ok_backend, _ = probe_backend(ctx, backend)
+        if ok_backend:
+            return backend
+    raise SetupError('没有检测到可用的 NVIDIA NVENC 或 AMD VA-API 后端；请安装对应显卡驱动后重试。UUWay 不会自动安装或切换显卡驱动。')
+
+
+def backend_for_context(ctx):
+    backend = getattr(ctx, 'backend', None) or configured_backend(ctx)
+    if backend in GPU_BACKENDS:
+        return backend
+    # Keep old launcher/uninstall behavior and source checkouts working before
+    # setup has run; setup itself always calls select_backend first.
+    return 'amd' if amd_backend_enabled() else 'nvidia'
 
 
 # --------------------------------------------------------------------- step: wine
@@ -409,15 +491,16 @@ def open_uu(ctx):
     executable = r'C:\Program Files\Netease\GameViewer\GameViewer.exe'
     env = ctx.wine_env()
     argv = [str(wine), executable]
-    if amd_backend_enabled():
+    if backend_for_context(ctx) == 'amd':
         if unit_active(ctx, 'uu-native-bridge'):
-            raise SetupError('UU 后台运行在独立显示中，无法在桌面打开它的窗口。需要重新登录时请运行 uuway-amd setup --login。')
+            raise SetupError('UU 后台运行在独立显示中，无法在桌面打开它的窗口。需要重新登录时请运行 uuway setup --login。')
         stage = ctx.state_dir / 'login-support'
         if not ctx.dry_run:
             stage.mkdir(parents=True, exist_ok=True, mode=0o700)
             for source, target in [('uu-native-bootstrap.exe', 'bootstrap.exe'),
                                    ('uu-native-winlogon.exe', 'winlogon.exe')]:
-                shutil.copy2(ROOT / 'build/native-presenter' / source, stage / target)
+                shutil.copy2((backend_root('amd') or ROOT / 'build') / 'native-presenter' / source,
+                             stage / target)
         argv = [str(wine), str(stage / 'bootstrap.exe'), '--login', executable,
                 'UURB-NATIVE-LOGIN-AMD']
         env['UURB_NATIVE_BOOTSTRAP'] = '1'
@@ -607,8 +690,9 @@ def package_bundle(ctx):
     if not ctx.dry_run:
         ctx.releases.parent.mkdir(parents=True, exist_ok=True)
         ctx.releases.mkdir(mode=0o700, exist_ok=True)
+    backend = backend_for_context(ctx)
     result = ctx.run([PYTHON, ROOT / 'scripts/package-uu-native-runtime.py', 'package', '--with-input',
-                      ctx.releases], capture=True)
+                      '--backend', backend, ctx.releases], capture=True)
     if ctx.dry_run:
         return ctx.releases / '<sha256>'
     try:
@@ -699,11 +783,14 @@ def runtime_run(ctx):
     if unit_active(ctx, 'uu-native-bridge'):
         info('先停止 UUWay 桥接服务，写好配置后再启动。')
         ctx.run(['systemctl', '--user', 'stop', 'uu-native-bridge.service'])
+    if not getattr(ctx, 'backend', None):
+        ctx.backend = backend_for_context(ctx)
     bundle = package_bundle(ctx)
     ok(f'运行时：{bundle}')
     command = [PYTHON, ROOT / 'scripts/install-uu-native-service.py', '--bundle', bundle,
                '--prefix', ctx.prefix, '--restore-state', ctx.restore_state,
-               '--state-parent', ctx.state_dir, '--text-socket', ctx.state_dir / 'text.sock']
+               '--state-parent', ctx.state_dir, '--text-socket', ctx.state_dir / 'text.sock',
+               '--backend', ctx.backend]
     if not ctx.runtime_config.exists():
         # A re-run must keep what the console saved, so these only go in on a fresh install.
         command += ['--cursor-mode', 'metadata', '--preserve-display-session']
@@ -830,7 +917,7 @@ def remove_amd_launchers(ctx):
 
 
 def launchers_done(ctx):
-    if amd_backend_enabled():
+    if backend_for_context(ctx) == 'amd':
         return all(path.is_file() and path.read_text() == amd_launcher_text()
                    for path in amd_launcher_targets(ctx))
     desktop = ctx.home / '.local/share/applications/uuway.desktop'
@@ -841,7 +928,7 @@ def launchers_done(ctx):
 
 
 def launchers_run(ctx):
-    if amd_backend_enabled():
+    if backend_for_context(ctx) == 'amd':
         for path in amd_launcher_targets(ctx):
             if not ctx.dry_run:
                 if path.is_file() and not path.read_text().startswith(AMD_DESKTOP_MARKER):
@@ -1185,7 +1272,14 @@ def command_doctor(args):
     desktop = os.environ.get('XDG_CURRENT_DESKTOP', '')
     check('ok' if session == 'wayland' and 'GNOME' in desktop else 'fail', 'GNOME Wayland 会话',
           f'{session or "?"} / {desktop or "?"}')
-    if amd_backend_enabled():
+    try:
+        backend = select_backend(ctx)
+    except SetupError as error:
+        backend = configured_backend(ctx) or ('amd' if amd_backend_enabled() else 'nvidia')
+        check('fail', 'GPU 后端自动选择', str(error))
+    else:
+        check('ok', 'GPU 后端自动选择', f'已选择 {backend}（NVIDIA 优先，AMD VA-API 作为后备）')
+    if backend == 'amd':
         result = amd_backend_probe(ctx)
         check('ok' if result.returncode == 0 else 'fail', 'AMD VA-API 硬件编码',
               'H.264/HEVC 编码验证通过；内存中转模式' if result.returncode == 0 else result.stderr[-500:])

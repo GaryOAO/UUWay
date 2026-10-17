@@ -78,6 +78,13 @@ need.add('build/native-presenter/uu-pipewire-dmabuf-probe')
 have = {str(path.relative_to('/usr/lib/uuway')) for path in pathlib.Path('/usr/lib/uuway/build').rglob('*') if path.is_file()}
 missing, extra = sorted(need - have), sorted(have - need - {f'build/helpers/{n}' for n in (
     'uu-clipboard-bridge', 'uu-clipboard-files.exe', 'uu-conpty.dll', 'uu-terminal-bridge', 'uu-terminal-proxy.exe')})
+extra = [path for path in extra if not path.startswith('build/backends/')]
+for backend in ('nvidia', 'amd'):
+    for required in (f'build/backends/{backend}/native-presenter',
+                     f'build/backends/{backend}/dxvk-capture/stage',
+                     f'build/backends/{backend}/helpers'):
+        if not any(path.startswith(required + '/') for path in have):
+            missing.append(required)
 sys.exit(f'missing {missing}\nunexpected {extra}' if missing or extra else 0)
 PY
 
@@ -121,6 +128,13 @@ check "the bundle is owned by the user (the capture producer must be)" bash -c "
     [ \"\$(stat -c %U '$bundle/capture/uu-pipewire-native-probe')\" = tester ] && [ \"\$(stat -c %a '$bundle/capture/uu-pipewire-native-probe')\" = 700 ]"
 check "repacking gives the same content address" bash -c "
     runuser -u tester -- env HOME=/home/tester /usr/bin/python3 $lib/scripts/package-uu-native-runtime.py package --with-input /home/tester/.local/share/uuway/releases | /usr/bin/python3 -c \"import json,sys; assert json.load(sys.stdin)['bundle'] == '$bundle'\""
+for backend in nvidia amd; do
+    check "the $backend backend can be selected from the dual-backend package" bash -c "
+        runuser -u tester -- env HOME=/home/tester /usr/bin/python3 $lib/scripts/package-uu-native-runtime.py package --with-input --backend $backend /home/tester/.local/share/uuway/releases-$backend > /tmp/package-$backend.json &&
+        b=\$(/usr/bin/python3 -c \"import json; print(json.load(open('/tmp/package-$backend.json'))['bundle'])\") &&
+        runuser -u tester -- /usr/bin/python3 $lib/scripts/package-uu-native-runtime.py verify \"\$b\" >/dev/null &&
+        grep -q '\"backend\": \"$backend\"' \"\$b/manifest.json\""
+done
 
 section "Service units from the installed tree"
 as_user mkdir -m 700 -p /home/tester/.local/share/wineprefixes/uu-remote /home/tester/.local/state/uurb

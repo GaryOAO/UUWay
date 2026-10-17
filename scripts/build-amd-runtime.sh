@@ -3,7 +3,7 @@
 # No CUDA headers, CUDA stubs, NVIDIA driver or global DXVK overrides required.
 set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-base="${1:-/usr/lib/uuway}"
+base="${UURB_AMD_BASE:-${1:-/usr/lib/uuway}}"
 winegcc="${UURB_WINEGCC:-/opt/wine-stable/bin/winegcc}"
 stage="$repo_dir/build/native-presenter"
 headers="$repo_dir/build/gpu-relay/nv-codec-headers"
@@ -16,9 +16,11 @@ done
 git -C "$headers" diff --exit-code HEAD -- include/
 mkdir -p "$stage"
 rm -f "$repo_dir/build/encoder-backend"
-cp -a "$base/build/dxvk-capture" "$repo_dir/build/"
-cp -a "$base/build/helpers" "$repo_dir/build/"
-cp -a "$base/build/native-presenter/." "$stage/"
+if [[ "$base" != "$repo_dir" ]]; then
+    cp -a "$base/build/dxvk-capture" "$repo_dir/build/"
+    cp -a "$base/build/helpers" "$repo_dir/build/"
+    cp -a "$base/build/native-presenter/." "$stage/"
+fi
 bash "$repo_dir/scripts/build-uu-native-bootstrap.sh"
 common=(-std=c11 -O2 -Wall -Wextra -Werror -DUURB_VAAPI -I "$headers/include")
 if [[ "${UURB_AMD_TRACE:-0}" == 1 ]]; then common+=(-DUURB_NVENC_TRACE); fi
