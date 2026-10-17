@@ -24,6 +24,13 @@ jobs:
         run: |
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="${{ inputs.version }}"; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Validate version-specific release notes
+        if: github.ref_type == 'tag'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test "$(grep -c '^## UUWay ' packaging/release-notes.md)" -eq 1
+          grep -Fxq "## UUWay ${VERSION}" packaging/release-notes.md
       # The same scripts a maintainer runs locally: a clean Ubuntu 24.04 container does the build.
       - name: Build the package
         run: packaging/build-deb.sh --version "${{ steps.version.outputs.version }}" --output-dir out
