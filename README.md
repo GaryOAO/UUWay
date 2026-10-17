@@ -13,9 +13,9 @@
 
 </div>
 
-> 可选 AMD 后端：新增 Radeon 核显的 VA-API H.264/HEVC 编码支持，
-> 使用内存中转，配置和验证范围见 [AMD 使用说明](docs/amd-vaapi.md)。
-> 下文的 NVIDIA、零拷贝和性能描述属于原版 UUWay。
+> 默认使用 NVIDIA NVENC；AMD VA-API H.264/HEVC 是需手动构建的可选后端。
+> 安装时不会自动切换显卡后端或安装显卡驱动。AMD 使用内存中转，
+> 下文零拷贝和性能描述仅适用于 NVIDIA；配置和验证范围见 [AMD 使用说明](docs/amd-vaapi.md)。
 
 **网易 UU 远程官方只有 Windows 被控端，没有 Linux 版客户端。** UUWay 让官方原版被控端在 Wine 中运行（磁盘上的文件不做任何修改），再把它依赖的每一个 Windows 接口交给 Linux 原生实现。于是，用手机打开 UU 远程，就能像控制一台 Windows 电脑一样控制你的 Linux 桌面。
 
@@ -67,6 +67,16 @@ UUWay 是一层**适配层**：UU 照常调用它在任何一台 Windows 电脑�
 
 ## 🚀 安装
 
+先按显卡选择安装方式。**`uuway setup` 和 `install.sh` 默认走 NVIDIA，不会自动识别后切换到 AMD，也不会自动安装或切换显卡驱动。** 请先准备好对应的驱动。
+
+| 显卡 | 编码后端 | 安装方式 |
+| --- | --- | --- |
+| NVIDIA（支持 NVENC） | NVENC，GPU 零拷贝 | 下方默认安装流程 |
+| AMD | VA-API H.264/HEVC，内存中转 | 手动构建，见下方「AMD（可选）」及 [AMD 使用说明](docs/amd-vaapi.md) |
+| Intel | 暂无对应编码后端 | 当前不支持仅使用 Intel 显卡运行 |
+
+### NVIDIA（默认）
+
 **准备：**
 
 - Ubuntu 24.04，GNOME 46 **Wayland** 会话，桌面保持登录（没有显示器的主机插一个显示器诱骗器）
@@ -107,6 +117,25 @@ git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
 ```
 
 脚本会检查环境、安装依赖和 WineHQ、构建原生运行时并启动服务；中断后用 `./install.sh --from 步骤号` 继续。手动安装、可选的 60 帧帧节奏补丁和排错见[构建与安装指南](docs/build.md)（英文）。
+
+### AMD（可选）
+
+AMD 后端目前需要手动构建，尚未接入发布包的默认安装或更新流程。先安装上面的 `uuway` deb 包以提供已有组件，再按 [AMD 使用说明](docs/amd-vaapi.md) 准备可用的 AMD Vulkan/VA-API 驱动、WineHQ 11.0 和构建依赖；**不要运行上面的 NVIDIA 安装向导或 `install.sh`**。
+
+在单独的源码目录中运行：
+
+```bash
+git clone https://github.com/GaryOAO/UUWay.git UUWay-amd
+cd UUWay-amd
+bash scripts/build-amd-runtime.sh
+python3 scripts/test-amd-runtime.py
+bash scripts/uuway-amd.sh setup --installer ~/Downloads/UURemote_Setup.exe
+bash scripts/uuway-amd.sh doctor
+```
+
+构建完成后才会选择 AMD 后端，安装向导会实际验证 H.264/HEVC 硬件编码。作者已在 Radeon 780M + Ubuntu 26.04 + GNOME Wayland + WineHQ 11.0 + UU 4.42.1 上验证；其他 AMD 型号及 Ubuntu 24.04 的 AMD 实机运行尚未验证。该路径有内存复制开销，不能套用 NVIDIA 零拷贝路径的性能数据。
+
+后续使用 `bash scripts/uuway-amd.sh refresh`，不要使用普通 `uuway refresh` 或 `uuway update install`，它们会部署 NVIDIA 运行时。后台运行使用独立 Xvfb，以保留剪贴板文件粘贴；需要重新登录时运行 `bash scripts/uuway-amd.sh setup --login`。完整限制和卸载方式见 [AMD 使用说明](docs/amd-vaapi.md)。
 
 ## 📦 目录结构
 
