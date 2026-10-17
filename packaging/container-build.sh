@@ -25,7 +25,8 @@ packages=(ca-certificates curl gnupg git ripgrep python3 build-essential gcc-11 
           gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 meson ninja-build pkg-config
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev
           glslang-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-          libfcitx5core-dev libfcitx5utils-dev dpkg-dev xz-utils)
+          libfcitx5core-dev libfcitx5utils-dev libavcodec-dev libavutil-dev libswscale-dev
+          libva-dev dpkg-dev xz-utils)
 
 die() { printf '\n✗ %s\n' "$*" >&2; exit 1; }
 step() { printf '\n━━ %s\n' "$*"; }
@@ -115,6 +116,16 @@ for script in build-dxvk-capture build-dxgi-capture-probe build-uu-native-bootst
     printf '\n── %s\n' "$script"
     bash "scripts/$script.sh"
 done
+
+step "Save NVIDIA runtime and build the AMD VA-API runtime"
+mkdir -p build/backends/nvidia
+cp -a build/dxvk-capture build/helpers build/native-presenter build/backends/nvidia/
+UURB_AMD_BASE="$repo_dir" bash scripts/build-amd-runtime.sh
+mkdir -p build/backends/amd
+cp -a build/dxvk-capture build/helpers build/native-presenter build/backends/amd/
+# Keep the legacy single-tree paths as the NVIDIA default for older tooling.
+rm -rf build/dxvk-capture build/helpers build/native-presenter build/encoder-backend
+cp -a build/backends/nvidia/dxvk-capture build/backends/nvidia/helpers build/backends/nvidia/native-presenter build/
 
 step "Package"
 unset LIBRARY_PATH

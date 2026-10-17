@@ -22,11 +22,13 @@ assume_yes=0
 dry_run=0
 login=0
 with_console=1
+gpu_backend=""
 
 packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl git ripgrep
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev glslang-tools
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev libfcitx5utils-dev
-          libei-dev fcitx5-modules-dev xvfb xclip python3-gi python3-dbus gir1.2-gtk-3.0 gir1.2-atspi-2.0)
+          libei-dev fcitx5-modules-dev xvfb xclip python3-gi python3-dbus gir1.2-gtk-3.0 gir1.2-atspi-2.0
+          libavcodec-dev libavutil-dev libswscale-dev libva-dev libva-utils)
 
 usage() {
     cat <<'EOF'
@@ -126,10 +128,10 @@ fi
 [[ "${XDG_SESSION_TYPE:-}" == wayland && "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]] ||
     die "请在 GNOME Wayland 会话里打开终端运行（当前会话：${XDG_SESSION_TYPE:-未知} / ${XDG_CURRENT_DESKTOP:-未知}）。"
 ok "GNOME Wayland 会话"
-if ! command -v nvidia-smi >/dev/null || ! nvidia-smi -L >/dev/null 2>&1; then
-    die "没有找到可用的 NVIDIA 显卡驱动。UUWay 需要支持 NVENC 的 NVIDIA 显卡和官方驱动。"
+if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+    gpu_backend=nvidia
+    ok "NVIDIA 显卡：$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
 fi
-ok "NVIDIA 显卡：$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
 
 if should_run 1; then
     missing=()
@@ -161,6 +163,14 @@ if should_run 1; then
             die "装好的 WineHQ stable 不是 11 版（$("$wine_dir/wine" --version)）。"
     fi
 fi
+
+if [[ -z "$gpu_backend" ]] && compgen -G '/dev/dri/renderD*' >/dev/null && command -v vainfo >/dev/null &&
+    vainfo --display drm 2>/dev/null | grep -Eq 'VAProfile(H264|HEVC).*VAEntrypointEnc'; then
+    gpu_backend=amd
+    ok "AMD 显卡：VA-API H.264/HEVC 编码可用"
+fi
+[[ -n "$gpu_backend" ]] ||
+    die "没有找到可用的 NVIDIA NVENC 或 AMD VA-API 后端。请先安装对应显卡驱动；UUWay 不会自动安装或切换驱动。"
 
 # ---------------------------------------------------------------------------
 current_step=2
@@ -217,14 +227,23 @@ current_step=3
 if should_run 3; then
     step_title 3 "构建原生运行时（第一次需要十几分钟）"
     cd "$repo_dir"
-    # The build scripts read CUDA's driver-API header from this fixed path; no Ubuntu package provides it.
-    [[ -f /usr/local/cuda/include/cuda.h ]] || ((dry_run)) ||
-        die "缺少 /usr/local/cuda/include/cuda.h（CUDA 12.1 头文件）。获取方法见 docs/build.md 的 \"CUDA headers\"；不想自己构建的话，请直接安装发布页的 .deb。"
-    for script in build-dxvk-capture build-dxgi-capture-probe build-uu-native-bootstrap \
-                  build-uu-native-input build-uu-native-display build-native-ime build-helpers \
-                  build-pipewire-probe; do
-        run bash "scripts/$script.sh"
-    done
+    if [[ "$gpu_backend" == nvidia ]]; then
+        [[ -f /usr/local/cuda/include/cuda.h ]] || ((dry_run)) ||
+            die "缺少 /usr/local/cuda/include/cuda.h（CUDA 12.1 头文件）。AMD 用户不需要 CUDA；也可以直接安装发布页的 .deb。"
+        for script in build-dxvk-capture build-dxgi-capture-probe build-uu-native-bootstrap \
+                      build-uu-native-input build-uu-native-display build-native-ime build-helpers \
+                      build-pipewire-probe; do
+            run bash "scripts/$script.sh"
+        done
+    else
+        for script in build-dxvk-capture build-uu-native-bootstrap build-uu-native-input \
+                      build-uu-native-display build-native-ime build-helpers; do
+            run bash "scripts/$script.sh"
+        done
+        run env UURB_AMD_BASE="$repo_dir" bash scripts/build-amd-runtime.sh
+    fi
+    run mkdir -p "build/backends/$gpu_backend"
+    run cp -a build/dxvk-capture build/helpers build/native-presenter "build/backends/$gpu_backend/"
     if ((with_console)); then
         run bash scripts/build-uu-settings.sh
     fi
@@ -272,18 +291,18 @@ if should_run 6; then
     step_title 6 "打包并启动服务"
     cd "$repo_dir"
     if ((dry_run)); then
-        run "$python" scripts/package-uu-native-runtime.py package --with-input build/uu-native-releases
+        run "$python" scripts/package-uu-native-runtime.py package --with-input --backend "$gpu_backend" build/uu-native-releases
         bundle="$repo_dir/build/uu-native-releases/<sha256>"
     else
-        printf '   %s$ %s%s\n' "$dim" "$python scripts/package-uu-native-runtime.py package --with-input build/uu-native-releases" "$reset"
-        bundle="$("$python" scripts/package-uu-native-runtime.py package --with-input build/uu-native-releases | jq -r .bundle)"
+        printf '   %s$ %s%s\n' "$dim" "$python scripts/package-uu-native-runtime.py package --with-input --backend $gpu_backend build/uu-native-releases" "$reset"
+        bundle="$("$python" scripts/package-uu-native-runtime.py package --with-input --backend "$gpu_backend" build/uu-native-releases | jq -r .bundle)"
         [[ -d "$bundle" ]] || die "打包没有产生运行时目录。"
     fi
     ok "运行时：$bundle"
     run "$python" scripts/install-uu-native-service.py \
         --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
         --state-parent "$state_dir" --text-socket "$state_dir/text.sock" --cursor-mode metadata \
-        --preserve-display-session
+        --preserve-display-session --backend "$gpu_backend"
 
     # Apply Wine's Linux path view while the bridge is stopped.  Keeping this
     # out of the long-lived service avoids racing Wine initialization on boot.

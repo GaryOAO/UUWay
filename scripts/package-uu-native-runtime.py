@@ -25,6 +25,31 @@ INPUTS = {
     'dxvk.conf': 'config/dxvk-native.conf',
     'licenses/DXVK_LICENSE': 'build/dxvk-capture/stage/DXVK_LICENSE',
 }
+BACKENDS = ('nvidia', 'amd')
+
+
+def backend_inputs(backend, inputs):
+    """Return source paths for a backend-specific build, with legacy fallback.
+
+    Releases contain both builds below ``build/backends``.  A checkout made by an
+    older release still has the single ``build`` tree, so keep accepting that
+    layout while it is being upgraded.
+    """
+    if backend is None:
+        return dict(inputs)
+    if backend not in BACKENDS:
+        raise ValueError('Unknown encoder backend: ' + str(backend))
+    root = ROOT / 'build' / 'backends' / backend
+    if not root.is_dir():
+        return dict(inputs)
+    result = {}
+    for name, source in inputs.items():
+        source = Path(source)
+        if source.parts[:1] == ('build',) and source.parts[1] in ('native-presenter', 'dxvk-capture', 'helpers'):
+            result[name] = str(Path('build/backends') / backend / Path(*source.parts[1:]))
+        else:
+            result[name] = source
+    return result
 CONTRACT = {
     'schema_version': 1,
     'capture_boundary': 'IDXGIOutput1/5 + IDXGIOutputDuplication',
@@ -454,7 +479,7 @@ def verify(directory):
         raise ValueError('Invalid bundle manifest')
     manifest = json.loads(manifest_file.read_text())
     contract = manifest.get('contract')
-    if contract not in (VAAPI_CONTRACT, VAAPI_INPUT_CONTRACT, CONTRACT, INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT, DEFERRED_IME_INPUT_CONTRACT, COMPOSITED_INPUT_CONTRACT, NATIVE_IME_INPUT_CONTRACT, SOURCE_PINNED_INPUT_CONTRACT, PRESET_INPUT_CONTRACT, FAILURE_CONTRACT, FAILURE_INPUT_CONTRACT, PINNED_CONTRACT, PINNED_INPUT_CONTRACT, LIFECYCLE_CONTRACT, LIFECYCLE_INPUT_CONTRACT, SOURCE_TIMING_CONTRACT, SOURCE_TIMING_INPUT_CONTRACT, PRE_TIMING_CONTRACT, RECREATE_INPUT_CONTRACT, GEOMETRY_INPUT_CONTRACT, VIRTUAL_TRACE_INPUT_CONTRACT, PADDED_TEXT_INPUT_CONTRACT, TEXT_DIAGNOSTIC_INPUT_CONTRACT, DEFAULT_DISPLAY_INPUT_CONTRACT, META_INPUT_CONTRACT, SETTINGS_INPUT_CONTRACT, GPU_CONFIRM_INPUT_CONTRACT, EMBEDDED_INPUT_CONTRACT, DISPLAY_INPUT_CONTRACT, SERVICE_INPUT_CONTRACT, REVISION_INPUT_CONTRACT, PURE_TEXT_INPUT_CONTRACT, CURSOR_INPUT_CONTRACT, RATE_INPUT_CONTRACT, REFERENCE_CONTRACT, REFERENCE_INPUT_CONTRACT, *LEGACY_DISPLAY_SET_CONTRACTS) or set(manifest) != {'contract', 'files'}:
+    if contract not in (VAAPI_CONTRACT, VAAPI_INPUT_CONTRACT, CONTRACT, INPUT_CONTRACT, DPI_INPUT_CONTRACT, DPI_V2_INPUT_CONTRACT, DEFERRED_IME_INPUT_CONTRACT, COMPOSITED_INPUT_CONTRACT, NATIVE_IME_INPUT_CONTRACT, SOURCE_PINNED_INPUT_CONTRACT, PRESET_INPUT_CONTRACT, FAILURE_CONTRACT, FAILURE_INPUT_CONTRACT, PINNED_CONTRACT, PINNED_INPUT_CONTRACT, LIFECYCLE_CONTRACT, LIFECYCLE_INPUT_CONTRACT, SOURCE_TIMING_CONTRACT, SOURCE_TIMING_INPUT_CONTRACT, PRE_TIMING_CONTRACT, RECREATE_INPUT_CONTRACT, GEOMETRY_INPUT_CONTRACT, VIRTUAL_TRACE_INPUT_CONTRACT, PADDED_TEXT_INPUT_CONTRACT, TEXT_DIAGNOSTIC_INPUT_CONTRACT, DEFAULT_DISPLAY_INPUT_CONTRACT, META_INPUT_CONTRACT, SETTINGS_INPUT_CONTRACT, GPU_CONFIRM_INPUT_CONTRACT, EMBEDDED_INPUT_CONTRACT, DISPLAY_INPUT_CONTRACT, SERVICE_INPUT_CONTRACT, REVISION_INPUT_CONTRACT, PURE_TEXT_INPUT_CONTRACT, CURSOR_INPUT_CONTRACT, RATE_INPUT_CONTRACT, REFERENCE_CONTRACT, REFERENCE_INPUT_CONTRACT, *LEGACY_DISPLAY_SET_CONTRACTS) or set(manifest) not in ({'contract', 'files'}, {'contract', 'files', 'backend'}):
         raise ValueError('Unreviewed bridge contract')
     # Feature fields are inspected only AFTER exact known-contract matching.
     # This keeps old releases usable without broadening accepted manifests.
@@ -511,6 +536,7 @@ def verify(directory):
                 native_capture_producer_included='capture_producer' in contract,
                 native_main_scripts_included='main_runtime_sources' in contract,
                 encoder_backend=contract.get('encoder_backend', 'nvidia-nvenc'),
+                backend=manifest.get('backend', 'amd' if contract.get('encoder_backend') == 'amd-vaapi' else 'nvidia'),
                 uu_session_tested=False, production_ready=False)
 
 
@@ -530,7 +556,8 @@ REPLACEABLE_COMPONENTS = (
 
 
 def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bridge=None,
-            replace_display_runtime=None, replace_capture_backend=None, replace_components=None):
+            replace_display_runtime=None, replace_capture_backend=None, replace_components=None,
+            backend=None):
     replace_components = dict(replace_components or {})
     if replace_capture_backend is not None:
         replace_components[CAPTURE_BACKEND_COMPONENT] = replace_capture_backend
@@ -566,7 +593,8 @@ def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bri
         stage = Path(temporary) / 'bundle'
         stage.mkdir(mode=0o700)
         inputs = dict(INPUTS, **INPUT_RUNTIME, **PINNED_CAPTURE, **PINNED_MAIN_SCRIPTS) if with_input else dict(INPUTS, **PINNED_CAPTURE)
-        sources = {name: ROOT / source for name, source in inputs.items()}
+        source_inputs = backend_inputs(backend, inputs)
+        sources = {name: ROOT / source for name, source in source_inputs.items()}
         contract = INPUT_CONTRACT if with_input else CONTRACT
         if reuse_runtime_from is not None:
             verify(reuse_runtime_from)
@@ -622,20 +650,22 @@ def package(parent, with_input=False, reuse_runtime_from=None, replace_input_bri
             else:
                 verify_display_set_bridge(sources[INPUT_BRIDGE_COMPONENT])
         marker = ROOT / 'build/encoder-backend'
-        if marker.is_file() and marker.read_text().strip() == 'amd-vaapi':
+        selected_amd = backend == 'amd' or (backend is None and marker.is_file() and marker.read_text().strip() == 'amd-vaapi')
+        if selected_amd:
             if reuse_runtime_from is not None:
                 raise ValueError('AMD transport must be packaged as a complete runtime, not mixed into a reused GPU bundle')
             contract = VAAPI_INPUT_CONTRACT if with_input else VAAPI_CONTRACT
             sources['dxvk.conf'] = ROOT / 'config/dxvk-amd.conf'
         before = {name: digest(source) for name, source in sources.items()}
-        for name, source in inputs.items():
+        for name, source in source_inputs.items():
             destination = stage / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             digest(sources[name])
             shutil.copyfile(sources[name], destination)
             destination.chmod(0o700 if name == 'runtime/uu-native-input' or name in PINNED_CAPTURE else 0o600)
         manifest = dict(contract=contract,
-                        files={name: digest(stage / name) for name in inputs})
+                        files={name: digest(stage / name) for name in source_inputs})
+        manifest['backend'] = backend or ('amd' if selected_amd else 'nvidia')
         after = {name: digest(source) for name, source in sources.items()}
         if manifest['files'] != before or before != after:
             raise ValueError('Bridge artifacts changed while packaging; retry after the build completes')
@@ -663,6 +693,8 @@ if __name__ == '__main__':
     create = commands.add_parser('package')
     create.add_argument('parent', type=Path)
     create.add_argument('--with-input', action='store_true')
+    create.add_argument('--backend', choices=BACKENDS,
+                        help='Select the immutable GPU runtime (default: legacy marker/ NVIDIA)')
     create.add_argument('--reuse-runtime-from', type=Path,
                         help='Copy unchanged native components from a verified compatible bundle, updating only main scripts')
     create.add_argument('--replace-input-bridge', type=Path,
@@ -679,5 +711,6 @@ if __name__ == '__main__':
     print(json.dumps(package(args.parent, args.with_input, args.reuse_runtime_from,
                              args.replace_input_bridge, args.replace_display_runtime,
                              args.replace_capture_backend,
-                             dict(item.split('=', 1) for item in args.replace_component))
+                             dict(item.split('=', 1) for item in args.replace_component),
+                             args.backend)
                    if args.command == 'package' else verify(args.bundle), indent=2))

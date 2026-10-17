@@ -48,26 +48,35 @@ def existing_display_policy(content):
     return '--preserve-display-session' in command[4:]
 
 
-def install(bundle, prefix, restore_state, state_parent, text_socket, cursor_mode=None, preserve_display_session=None):
+def install(bundle, prefix, restore_state, state_parent, text_socket, cursor_mode=None,
+            preserve_display_session=None, backend=None):
     verified = trial.bundle_tools.verify(bundle)
     if not verified.get('native_service_lifetime_included'):
         raise ValueError('Expected a continuous-lifetime capable native bundle')
     for directory in (prefix, restore_state.parent, state_parent, text_socket.parent):
         trial.private_directory(directory)
     # Fixed schema prevents shell/environment injection; never store credentials.
+    selected_backend = backend or verified.get('backend', 'nvidia')
+    if selected_backend not in ('nvidia', 'amd'):
+        raise ValueError('Unknown GPU backend')
     config = dict(schema=1, prefix=str(prefix.resolve()), bundle=str(bundle.resolve()),
                   restore_state=str(restore_state.absolute()), state_parent=str(state_parent.resolve()),
-                  text_socket=str(text_socket.absolute()), cursor_mode=cursor_mode)
+                  text_socket=str(text_socket.absolute()), cursor_mode=cursor_mode,
+                  backend=selected_backend)
     config_dir = Path.home() / '.config/uurb'
     config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     trial.private_directory(config_dir)
     config_path = config_dir / 'native-runtime.json'
     if config_path.exists() or config_path.is_symlink():
         previous = trial.state_tools.read_private(config_path)
-        if set(previous) != set(config) or previous.get('schema') != 1:
+        allowed_old = set(config) - {'backend'}
+        if (set(previous) not in (allowed_old, set(config)) or previous.get('schema') != 1):
             raise ValueError('Refusing an unrecognized service configuration')
         if cursor_mode is None:
             cursor_mode = previous.get('cursor_mode')
+        if backend is None and previous.get('backend') in ('nvidia', 'amd'):
+            selected_backend = previous['backend']
+            config['backend'] = selected_backend
     elif cursor_mode is None:
         cursor_mode = 'metadata'
     if (cursor_mode not in ('embedded', 'metadata', 'composited') or
@@ -126,6 +135,8 @@ if __name__ == '__main__':
                         help='Keep the saved cursor mode when omitted (fresh install: metadata)')
     parser.add_argument('--preserve-display-session', action=argparse.BooleanOptionalAction, default=None,
                         help='Keep the installed main-unit policy when omitted; explicit enable requires geometry support')
+    parser.add_argument('--backend', choices=('nvidia', 'amd'),
+                        help='Persist the selected GPU backend in the user runtime config')
     args = parser.parse_args()
     install(args.bundle, args.prefix, args.restore_state, args.state_parent, args.text_socket, args.cursor_mode,
-            args.preserve_display_session)
+            args.preserve_display_session, args.backend)

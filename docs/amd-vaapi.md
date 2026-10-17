@@ -1,8 +1,9 @@
 # AMD VA-API compatibility backend
 
-This optional backend adds AMD VA-API encoding while keeping the original
-NVIDIA source and build path. The AMD runtime needs no CUDA headers or NVIDIA
-driver.
+The release package carries this AMD VA-API runtime beside the NVIDIA runtime.
+The installer probes NVIDIA first and selects AMD when its H.264/HEVC probe
+passes. A source checkout can still build the backend manually; it needs no
+CUDA headers or NVIDIA driver.
 
 ## Architecture and limits
 
@@ -42,9 +43,9 @@ Wayland, and WineHQ 11.0; other hardware remains unverified.
 
 ## Build
 
-Install the upstream `uuway` package first; its existing patched DXVK, input,
-display and terminal artifacts are reused. This build does not overwrite
-`/usr/lib/uuway`. WineHQ 11.0 must be at `/opt/wine-stable`.
+For a release install, install the `uuway` package and run `uuway setup`; no
+manual build is needed. For a source build, WineHQ 11.0 must be at
+`/opt/wine-stable` and the common patched artifacts are reused.
 
 ```bash
 sudo apt install gcc gcc-mingw-w64-x86-64 libwine-dev libavcodec-dev libavutil-dev \
@@ -56,7 +57,6 @@ python3 scripts/test-amd-runtime.py
 
 The build fetches the pinned upstream NVENC interface headers, not NVIDIA
 drivers. It writes `build/encoder-backend` only after compilation succeeds.
-The AMD and NVIDIA runtime outputs should use separate checkouts/build trees.
 
 ## Setup and use
 
@@ -70,7 +70,7 @@ bash scripts/uuway-amd.sh open
 Log in to UU when prompted, completely quit its tray application, then grant
 the GNOME screen-sharing prompt and remember the selected display. The normal
 UUWay user services and console are used. Setup checks actual hardware encoding
-instead of `nvidia-smi` when the AMD runtime marker is present.
+instead of relying on `nvidia-smi` when AMD is selected.
 
 `open` starts the Windows service bootstrap needed by UU 4.42 for login
 when the bridge is stopped. With the bridge running, `open` reports how to
