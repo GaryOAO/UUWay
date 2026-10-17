@@ -28,7 +28,7 @@ packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq c
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev glslang-tools
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev libfcitx5utils-dev
           libei-dev fcitx5-modules-dev xvfb xclip python3-gi python3-dbus gir1.2-gtk-3.0 gir1.2-atspi-2.0
-          libavcodec-dev libavutil-dev libswscale-dev libva-dev libva-utils)
+          libavcodec-dev libavutil-dev libswscale-dev libva-dev libva-utils libwine-dev)
 
 usage() {
     cat <<'EOF'

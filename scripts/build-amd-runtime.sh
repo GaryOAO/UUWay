@@ -24,7 +24,12 @@ fi
 bash "$repo_dir/scripts/build-uu-native-bootstrap.sh"
 common=(-std=c11 -O2 -Wall -Wextra -Werror -DUURB_VAAPI -I "$headers/include")
 if [[ "${UURB_AMD_TRACE:-0}" == 1 ]]; then common+=(-DUURB_NVENC_TRACE); fi
-win=(-I /usr/include/wine -I /usr/include/wine/wine/windows)
+wine_headers="$repo_dir/build/gpu-relay/wine-dev/usr/include/wine"
+if [[ ! -d "$wine_headers/wine/windows" ]]; then
+    wine_headers=/usr/include/wine
+fi
+[[ -d "$wine_headers/wine/windows" ]] || { echo "Missing Wine development headers" >&2; exit 1; }
+win=(-I "$wine_headers" -I "$wine_headers/wine/windows")
 native=(-lavcodec -lavutil -lswscale -lvulkan -lva -ldl -pthread)
 for source in native_vaapi_encoder native_vaapi_query native_gpu_frame_channel native_host_frame; do
     gcc "${common[@]}" -fPIC -c "$repo_dir/src/$source.c" -o "$stage/$source.o"
