@@ -10,7 +10,7 @@ set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 output_dir="${1:-$repo_dir/build/helpers}"
 common=(-std=c11 -O2 -Wall -Wextra -Werror)
-pe_link=(-Wl,--no-insert-timestamp)
+pe_link=('-Wl,--no-insert-timestamp')
 mkdir -p "$output_dir"
 
 x86_64-w64-mingw32-gcc "${common[@]}" "${pe_link[@]}" -I "$repo_dir/src" \

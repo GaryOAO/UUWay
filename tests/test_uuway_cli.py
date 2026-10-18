@@ -161,6 +161,35 @@ class HelperSyncTests(CliCase):
 
 
 class RuntimeStepTests(CliCase):
+    def test_same_api_runtime_upgrade_also_reloads_display_fixes(self):
+        old, new = self.home / 'old-runtime', self.home / '.local/share/uuway/releases/abc'
+        for bundle in (old, new):
+            bundle.mkdir(parents=True)
+            (bundle / 'manifest.json').write_text(json.dumps({'contract': {'virtual_display_emulation': True}}))
+        ctx = self.run_runtime(config={'bundle': str(old)}, bridge_active=True)
+        self.assertTrue(ctx.restart_display)
+
+    def test_packaging_failure_preserves_the_running_bridge(self):
+        ctx = self.record_commands(self.context())
+        self.active.add('uu-native-bridge')
+        with patch.object(cli, 'package_bundle', side_effect=cli.SetupError('invalid runtime')):
+            with self.assertRaises(cli.SetupError):
+                self.quiet(cli.runtime_run, ctx)
+        self.assertFalse(any('stop' in command for command in self.commands))
+
+    def test_upgrade_to_virtual_display_api_restarts_only_display_before_bridge(self):
+        bundle = self.home / '.local/share/uuway/releases/abc'
+        bundle.mkdir(parents=True)
+        (bundle / 'manifest.json').write_text(json.dumps({'contract': {'virtual_display_emulation': True}}))
+        ctx = self.run_runtime(config={'bundle': str(self.home / 'old-runtime'), 'cursor_mode': 'composited'},
+                               bridge_active=True)
+        self.assertTrue(ctx.restart_display)
+        with patch.object(cli.time, 'sleep'):
+            self.quiet(cli.start_run, ctx)
+        restarts = [command[-1] for command in self.commands if 'restart' in command]
+        self.assertEqual(restarts, ['uu-native-display.service', 'uu-native-bridge.service'])
+        self.assertFalse(ctx.restart_display)
+
     def run_runtime(self, config=None, bridge_active=False, text_backend=None):
         ctx = self.record_commands(self.context())
         if config:
@@ -313,6 +342,13 @@ class RuntimeStepTests(CliCase):
 
 
 class StartStepTests(CliCase):
+    def test_explicit_restart_is_not_skipped_when_every_service_is_active(self):
+        self.active.update(cli.SERVICES)
+        self.assertTrue(cli.start_done(self.record_commands(self.context())))
+        for options in ({'restart_display': True}, {'restart_services': True}):
+            with self.subTest(options=options):
+                self.assertFalse(cli.start_done(self.record_commands(self.context(**options))))
+
     def start(self, **options):
         ctx = self.record_commands(self.context(**options))
         ctx.restart_bridge = True
@@ -488,6 +524,18 @@ class LauncherAndUninstallTests(CliCase):
 
 
 class StepSelectionTests(CliCase):
+    def test_packaged_refresh_retires_source_menu_but_source_refresh_keeps_it(self):
+        for packaged in (True, False):
+            with self.subTest(packaged=packaged):
+                seen = []
+                with patch.object(cli, 'ROOT', self.root), \
+                        patch.object(cli, 'DEB_ROOT', self.root if packaged else self.root / 'package'), \
+                        patch.object(cli, 'check_environment'), patch.object(cli, 'unit_active', return_value=False), \
+                        patch.object(cli, 'run_steps', side_effect=lambda ctx, only, force: seen.append(only)):
+                    args = cli.build_parser().parse_args(['refresh', '--yes', '--prefix', str(self.prefix)])
+                    self.quiet(cli.command_refresh, args)
+                self.assertEqual('launchers' in seen[0], packaged)
+
     def test_unknown_steps_are_rejected_with_the_valid_names(self):
         with self.assertRaises(cli.SetupError) as raised:
             cli.parse_steps("wine,nonsense")
@@ -736,6 +784,15 @@ class UpdateCase(CliCase):
 
 
 class UpdateCheckTests(UpdateCase):
+    def test_gui_check_json_is_structured_and_does_not_start_an_install(self):
+        ctx,args=self.update_context('check');args.json=True
+        code,output=self.quiet(cli.update_check,ctx,args)
+        value=json.loads(output)
+        self.assertTrue(value['available'])
+        self.assertTrue(value['installable'])
+        self.assertEqual(value['latest'],'1.2.1')
+        self.assertEqual(self.commands,[])
+
     def check(self):
         ctx, args = self.update_context("check")
         return ctx, self.quiet(cli.update_check, ctx, args)
@@ -1215,6 +1272,13 @@ class UpdateFollowTests(UpdateCase):
 
 
 class UpdateStatusTests(UpdateCase):
+    def test_gui_status_json_preserves_the_update_result(self):
+        self.result(outcome='rolled_back')
+        ctx,args=self.update_context('status');args.json=True
+        code,output=self.quiet(cli.update_status,ctx,args)
+        value=json.loads(output)
+        self.assertFalse(value['busy'])
+        self.assertEqual(value['result']['outcome'],'rolled_back')
     def result(self, **fields):
         data = dict(outcome="success", message="m", finished=time.time(), from_version="1.2.0", to_version="1.2.1")
         data.update(fields)

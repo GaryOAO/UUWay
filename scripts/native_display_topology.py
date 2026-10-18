@@ -1,7 +1,7 @@
 """Explicit-output Mutter transactions; no automatic screen selection or creation.
 
-This candidate backend retains every other logical output when changing one
-non-mirrored output. The installed single-output guardian is unchanged. Connector
+This backend retains every other logical output when changing one
+non-mirrored output. Connector
 selection must come from a separately established screen identity, never list
 order or an assumed virtual-monitor name. EDID identity fields are not retained.
 """
@@ -88,7 +88,14 @@ def decode_selected(reply, connector):
                 selected = decode_state((serial,
                     [(specification, entry['entries'], props)],
                     [(0, 0, scale, 0, True, [specification], {})], properties))
-        layouts.append(dict(x=x, y=y, scale=float(scale), transform=transform,
+        active = next(mode for mode in physical[outputs[0][0]]['entries']
+                      if mode[0] == physical[outputs[0][0]]['mode'])
+        width, height = active[1:3]
+        if transform & 1:
+            width, height = height, width
+        if properties.get('layout-mode', 1) == 2:
+            width, height = round(width / scale), round(height / scale)
+        layouts.append(dict(x=x, y=y, scale=float(scale), transform=transform, size=[width, height],
                             primary=primary, monitors=sorted(members, key=lambda m: m['connector'])))
     if selected is None or sum(item['primary'] for item in layouts) != 1:
         raise ValueError('Selected output is inactive/missing or primary is ambiguous')
@@ -106,6 +113,8 @@ def planned_topology(state, target):
         raise ValueError('Invalid selected output target')
     topology = copy.deepcopy(state['topology'])
     matches = 0
+    selected_layout = None
+    previous_size = None
     for logical in topology['logical']:
         for monitor in logical['monitors']:
             if monitor['connector'] != state['connector']:
@@ -114,9 +123,29 @@ def planned_topology(state, target):
                 raise ValueError('Cannot mutate one mirrored output member')
             monitor['mode'] = target['mode']
             logical['scale'] = float(target['scale'])
+            selected_layout, previous_size = logical, logical['size'][:]
+            mode = next((item for item in state['modes'] if item['id'] == target['mode']), None)
+            if mode is None:
+                raise ValueError('Selected output mode is no longer advertised')
+            width, height = mode['width'], mode['height']
+            if logical['transform'] & 1:
+                width, height = height, width
+            if state['layout_mode'] == 2:
+                width, height = round(width / target['scale']), round(height / target['scale'])
+            logical['size'] = [width, height]
             matches += 1
     if matches != 1:
         raise ValueError('Selected output identity is no longer unique')
+    # Keep adjacent rows/columns attached after a resize. Preserving a second
+    # screen's old x after shrinking the first leaves a gap Mutter rejects;
+    # growing the first would overlap it. Modes, scale and rotation stay intact.
+    for logical in topology['logical']:
+        if logical is selected_layout:
+            continue
+        if logical['x'] >= selected_layout['x'] + previous_size[0]:
+            logical['x'] += selected_layout['size'][0] - previous_size[0]
+        if logical['y'] >= selected_layout['y'] + previous_size[1]:
+            logical['y'] += selected_layout['size'][1] - previous_size[1]
     if topology['global_scale_required'] and any(
             abs(item['scale'] - target['scale']) > 0.00001 for item in topology['logical']):
         raise ValueError('Requested DPI requires changing other outputs')

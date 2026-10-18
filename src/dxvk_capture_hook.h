@@ -40,6 +40,17 @@ static BOOL CALLBACK load(PINIT_ONCE, PVOID, PVOID *) {
   create_endpoint = endpoint;
   return TRUE;
 }
+static int display_number(const wchar_t *name) {
+  static const wchar_t prefix[] = L"\\\\.\\DISPLAY";
+  if (!name || std::wcsncmp(name, prefix, 11)) return -1;
+  int value = 0, digits = 0;
+  for (const wchar_t *p = name + 11; *p; ++p) {
+    if (*p < L'0' || *p > L'9' || digits >= 2) return -1;
+    value = value * 10 + int(*p - L'0');
+    ++digits;
+  }
+  return digits ? value : -1;
+}
 static HRESULT duplicate(IDXGIOutput *output, IUnknown *device, UINT flags, UINT count,
     const DXGI_FORMAT *formats, IDXGIOutputDuplication **out) {
   if (!out) return E_INVALIDARG;
@@ -72,8 +83,15 @@ static HRESULT duplicate(IDXGIOutput *output, IUnknown *device, UINT flags, UINT
   length = GetEnvironmentVariableW(L"UURB_DXGI_CAPTURE_OUTPUT", target, CCHDEVICENAME);
   if (!length || length >= CCHDEVICENAME) return E_INVALIDARG;
   DXGI_OUTPUT_DESC description = {};
-  if (FAILED(output->GetDesc(&description)) || !description.AttachedToDesktop ||
-      std::wcscmp(description.DeviceName, target)) return DXGI_ERROR_UNSUPPORTED;
+  if (FAILED(output->GetDesc(&description)) || !description.AttachedToDesktop) {
+    return DXGI_ERROR_UNSUPPORTED;
+  }
+  int number = display_number(description.DeviceName);
+  int target_match = !std::wcscmp(description.DeviceName, target);
+  if (number < 1 || number > 8) return DXGI_ERROR_UNSUPPORTED;
+  /* The inherited-FD mode is single-output; the endpoint mode lets the broker
+   * select any native display by name (the request carries DeviceName). */
+  if (!target_match && !endpoint_length) return DXGI_ERROR_UNSUPPORTED;
 
   ID3D11Device *d3d = nullptr;
   IDXGIDevice *dxgi = nullptr;

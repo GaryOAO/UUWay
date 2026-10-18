@@ -1,11 +1,11 @@
 #ifndef UURB_NATIVE_DISPLAY_TRACE_WIN_H
 #define UURB_NATIVE_DISPLAY_TRACE_WIN_H
-#include "uu_native_virtual_trace_win.h"
 #include "uu_native_terminal_trace_win.h"
 /* Observe standard display boundaries without changing their behavior.
  * Bounded numeric diagnostics only: never log device names/serials or pointers.
  * Originals, return values, output buffers and thread last-error are preserved.
  */
+static BOOL (WINAPI *display_devices)(LPCWSTR, DWORD, DISPLAY_DEVICEW *, DWORD);
 static BOOL (WINAPI *display_enum)(LPCWSTR, DWORD, DEVMODEW *);
 static BOOL (WINAPI *display_enum_ex)(LPCWSTR, DWORD, DEVMODEW *, DWORD);
 static LONG (WINAPI *display_change)(LPCWSTR, DEVMODEW *, HWND, DWORD, LPVOID);
@@ -40,8 +40,10 @@ static BOOL display_primary(LPCWSTR device)
            bytes == sizeof(copy) && copy[ARRAYSIZE(copy) - 1] == 0 && !_wcsicmp(copy, primary);
 }
 #include "uu_native_display_adapter_win.h"
+#include "uu_native_display_multi_win.h"
 #include "uu_native_display_geometry_win.h"
 #include "uu_native_display_set_win.h"
+#include "uu_native_virtual_trace_win.h"
 static void display_mode_trace(unsigned api, DWORD flags, LONG result, const DEVMODEW *mode, LPCWSTR device)
 {
     DWORD saved = GetLastError();
@@ -55,32 +57,47 @@ static void display_mode_trace(unsigned api, DWORD flags, LONG result, const DEV
         fields & DM_DISPLAYFREQUENCY ? copy.dmDisplayFrequency : 0, fields, display_primary(device));
     SetLastError(saved);
 }
+static BOOL WINAPI traced_display_devices(LPCWSTR device, DWORD index, DISPLAY_DEVICEW *output, DWORD flags)
+{
+    int multi = native_multi_enum_devices_w(device, index, output, flags);
+    if (multi >= 0) return multi != 0;
+    return display_devices ? display_devices(device, index, output, flags) : FALSE;
+}
 static BOOL WINAPI traced_display_enum(LPCWSTR name, DWORD index, DEVMODEW *mode)
 {
-    BOOL result = native_display_adapter_enabled ? native_display_enum_mode(name, index, mode, 0) : display_enum(name, index, mode);
+    int multi = native_multi_enum_mode(name, index, mode, 0);
+    BOOL result = multi >= 0 ? multi != 0 :
+        (native_display_adapter_enabled ? native_display_enum_mode(name, index, mode, 0) : display_enum(name, index, mode));
     display_mode_trace(0, index, result, result ? mode : NULL, name);
     return result;
 }
 static BOOL WINAPI traced_display_enum_ex(LPCWSTR name, DWORD index, DEVMODEW *mode, DWORD flags)
 {
-    BOOL result = native_display_adapter_enabled ? native_display_enum_mode(name, index, mode, flags) : display_enum_ex(name, index, mode, flags);
+    int multi = native_multi_enum_mode(name, index, mode, flags);
+    BOOL result = multi >= 0 ? multi != 0 :
+        (native_display_adapter_enabled ? native_display_enum_mode(name, index, mode, flags) : display_enum_ex(name, index, mode, flags));
     display_mode_trace(1, flags, result, result ? mode : NULL, name);
     return result;
 }
 static LONG WINAPI traced_display_change(LPCWSTR name, DEVMODEW *mode, HWND window, DWORD flags, LPVOID extra)
 {
-    LONG result = native_display_adapter_enabled ? native_display_change_mode(name, mode, window, flags, extra) : display_change(name, mode, window, flags, extra);
+    int multi = native_multi_change_mode(name, mode, window, flags, extra);
+    LONG result = multi != UURB_MULTI_NOT_APPLICABLE ? (LONG)multi :
+        (native_display_adapter_enabled ? native_display_change_mode(name, mode, window, flags, extra) : display_change(name, mode, window, flags, extra));
     display_mode_trace(2, flags, result, mode, name);
     return result;
 }
 static LONG WINAPI traced_display_query(UINT32 flags, UINT32 *paths, DISPLAYCONFIG_PATH_INFO *path,
                                         UINT32 *modes, DISPLAYCONFIG_MODE_INFO *mode, DISPLAYCONFIG_TOPOLOGY_ID *topology)
 {
-    LONG result = display_query(flags, paths, path, modes, mode, topology);
-    DWORD saved = GetLastError();
-    if (result == ERROR_SUCCESS && native_display_adapter_enabled)
-        result = native_display_query_geometry(flags, *paths, path, *modes, mode);
-    SetLastError(saved);
+    LONG result = 0;
+    if (native_multi_query_config(flags, paths, path, modes, mode, topology, &result) < 0) {
+        result = display_query(flags, paths, path, modes, mode, topology);
+        DWORD saved = GetLastError();
+        if (result == ERROR_SUCCESS && native_display_adapter_enabled)
+            result = native_display_query_geometry(flags, *paths, path, *modes, mode);
+        SetLastError(saved);
+    }
     display_trace(3, flags, result, 0, 0, 0, 0, FALSE);
     return result;
 }
@@ -95,6 +112,7 @@ static void *native_display_hook_for(uintptr_t original)
 {
     if (!original) return NULL;
 #define MAP(original_fn, hook_fn) if (original == (uintptr_t)original_fn) return (void *)&hook_fn
+    MAP(display_devices, traced_display_devices);
     MAP(display_enum, traced_display_enum);
     MAP(display_enum_ex, traced_display_enum_ex);
     MAP(display_change, traced_display_change);
@@ -111,7 +129,11 @@ static FARPROC WINAPI traced_display_getproc(HMODULE module, LPCSTR name)
 {
     FARPROC original = display_getproc(module, name);
     DWORD saved = GetLastError();
-    void *replacement = native_display_hook_for((uintptr_t)original);
+    HMODULE caller = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                      (LPCWSTR)__builtin_return_address(0), &caller);
+    void *replacement = native_cursor_hook_for((uintptr_t)original, native_cursor_is_capture_module(caller));
+    if (!replacement) replacement = native_display_hook_for((uintptr_t)original);
     SetLastError(saved);
     return replacement ? (FARPROC)replacement : original;
 }
@@ -123,6 +145,7 @@ static void native_display_trace_initialize(void)
     HMODULE module = GetModuleHandleW(L"user32.dll");
     display_getproc = (void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetProcAddress");
 #define GET(variable, name) variable = (void *)GetProcAddress(module, name)
+    GET(display_devices, "EnumDisplayDevicesW");
     GET(display_enum, "EnumDisplaySettingsW");
     GET(display_enum_ex, "EnumDisplaySettingsExW");
     GET(display_change, "ChangeDisplaySettingsExW");

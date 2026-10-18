@@ -21,6 +21,7 @@
 #include "native_gpu_frame_channel.h"
 #include "native_cursor_metadata.h"
 #include "native_capture_status.h"
+#include "native_display_api.h"
 #include <sys/stat.h>
 #include <time.h>
 
@@ -350,7 +351,8 @@ static const struct spa_pod *offer(struct spa_pod_builder *builder,
             &SPA_RECTANGLE(1920,1080), &SPA_RECTANGLE(1,1), &SPA_RECTANGLE(8192,8192)), 0);
     spa_pod_builder_add(builder,
         SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(
-            &SPA_FRACTION(60,1), &SPA_FRACTION(0,1), &SPA_FRACTION(120,1)), 0);
+            &SPA_FRACTION(max_fps ? max_fps : 60,1), &SPA_FRACTION(0,1),
+            &SPA_FRACTION(UURB_DISPLAY_MAX_REFRESH_HZ,1)), 0);
     if (max_fps) spa_pod_builder_add(builder, SPA_FORMAT_VIDEO_maxFramerate,
         SPA_POD_Fraction(&SPA_FRACTION(max_fps, 1)), 0);
     return spa_pod_builder_pop(builder, &object);
@@ -395,8 +397,8 @@ int main(int argc, char **argv)
     }
     unsigned long requested_max_fps = 0;
     const char *fps_setting = getenv("UURB_CAPTURE_MAX_FPS");
-    if (fps_setting && (!number(fps_setting, 120, &requested_max_fps) || !requested_max_fps)) {
-        fprintf(stderr, "UURB_CAPTURE_MAX_FPS must be an integer from 1 to 120\n"); return 2;
+    if (fps_setting && (!number(fps_setting, UURB_DISPLAY_MAX_REFRESH_HZ, &requested_max_fps) || !requested_max_fps)) {
+        fprintf(stderr, "UURB_CAPTURE_MAX_FPS must be an integer from 1 to %u\n", UURB_DISPLAY_MAX_REFRESH_HZ); return 2;
     }
     unsigned long fd, node;
     int import_check = argc == 4 && strcmp(argv[3], "--vulkan-import") == 0;

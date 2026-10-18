@@ -100,13 +100,38 @@ static int integer(struct json_object *object, const char *name, uint32_t *value
     if (v < 0 || v > UINT32_MAX) return 0;
     *value = (uint32_t)v; return 1;
 }
+int uurb_native_virtual_control(const char *path, uint32_t code, const void *input, uint32_t bytes)
+{
+    if (bytes > 1024 || (bytes && !input) ||
+        (code != 0 && code != UURB_VIRTUAL_TOPOLOGY_CONTROL &&
+         (code < 0x30c004 || code > 0x30c014 || (code & 3))))
+        return UURB_DISPLAY_INVALID;
+    struct json_object *request = json_object_new_object();
+    struct json_object *payload = json_object_new_array();
+    if (!request || !payload) {
+        if (request) json_object_put(request);
+        if (payload) json_object_put(payload);
+        return UURB_DISPLAY_FAILED;
+    }
+    json_object_object_add(request, "version", json_object_new_int(1));
+    json_object_object_add(request, "op", json_object_new_string("virtual-control"));
+    json_object_object_add(request, "code", json_object_new_int64(code));
+    for (uint32_t i = 0; i < bytes; ++i)
+        json_object_array_add(payload, json_object_new_int(((const unsigned char *)input)[i]));
+    json_object_object_add(request, "payload", payload);
+    struct json_object *reply = NULL;
+    int status = exchange(path, json_object_to_json_string_ext(request, JSON_C_TO_STRING_PLAIN), &reply);
+    json_object_put(request);
+    if (reply) json_object_put(reply);
+    return status;
+}
 static int mode(struct json_object *object, struct uurb_display_mode *value, int current)
 {
     double refresh, scale = 0;
     if (!object || json_object_get_type(object) != json_type_object ||
         !integer(object, "width", &value->width) || !integer(object, "height", &value->height) ||
         value->width < 2 || value->height < 2 || value->width > 4096 || value->height > 4096 ||
-        value->width % 2 || value->height % 2 || !number(object, "refresh", 1, 120, &refresh) ||
+        value->width % 2 || value->height % 2 || !number(object, "refresh", 1, UURB_DISPLAY_MAX_REFRESH_HZ, &refresh) ||
         (current && !number(object, "scale", 0.5, 4, &scale))) return 0;
     value->refresh_millihz = (uint32_t)(refresh * 1000 + 0.5);
     value->scale_milli = (uint32_t)(scale * 1000 + 0.5);
@@ -181,6 +206,121 @@ int uurb_native_display_query_v2(const char *path, struct uurb_display_snapshot 
 done:
     json_object_put(reply); return status;
 }
+static int signed_integer(struct json_object *object, const char *name, int32_t *value)
+{
+    struct json_object *item;
+    if (!object || !value || !json_object_object_get_ex(object, name, &item) ||
+        json_object_get_type(item) != json_type_int) return 0;
+    int64_t number = json_object_get_int64(item);
+    if (number < INT32_MIN || number > INT32_MAX) return 0;
+    *value = (int32_t)number;
+    return 1;
+}
+
+static int boolean_field(struct json_object *object, const char *name, int *value)
+{
+    struct json_object *item;
+    if (!object || !value || !json_object_object_get_ex(object, name, &item) ||
+        json_object_get_type(item) != json_type_boolean) return 0;
+    *value = json_object_get_boolean(item);
+    return 1;
+}
+
+static int string_field(struct json_object *object, const char *name, char *buffer, size_t size)
+{
+    struct json_object *item;
+    if (!object || !buffer || size < 2 || !json_object_object_get_ex(object, name, &item) ||
+        json_object_get_type(item) != json_type_string) return 0;
+    const char *value = json_object_get_string(item);
+    size_t length = (size_t)json_object_get_string_len(item);
+    if (!value || !length || length >= size) return 0;
+    for (size_t i = 0; i < length; ++i)
+        if ((unsigned char)value[i] < 0x20) return 0;
+    memcpy(buffer, value, length); buffer[length] = 0;
+    return 1;
+}
+
+int uurb_native_display_topology(const char *path, struct uurb_display_topology *output, uint32_t output_bytes)
+{
+    if (!output || output_bytes != sizeof(*output)) return UURB_DISPLAY_INVALID;
+    struct json_object *reply = NULL;
+    int status = exchange(path, "{\"version\":1,\"op\":\"inspect\"}", &reply);
+    if (status) return status;
+    status = UURB_DISPLAY_FAILED;
+    struct uurb_display_topology temporary = {.version = UURB_DISPLAY_TOPOLOGY_VERSION};
+    struct json_object *monitors = NULL;
+    if (!integer(reply, "serial", &temporary.serial) ||
+        !json_object_object_get_ex(reply, "monitors", &monitors) ||
+        json_object_get_type(monitors) != json_type_array) goto done;
+    size_t count = json_object_array_length(monitors);
+    if (!count || count > UURB_DISPLAY_MAX_MONITORS) goto done;
+    temporary.monitor_count = (uint32_t)count;
+    uint32_t mode_total = 0, primary_count = 0;
+    for (size_t i = 0; i < count; ++i) {
+        struct json_object *item = json_object_array_get_idx(monitors, i);
+        if (!item || json_object_get_type(item) != json_type_object) goto done;
+        uint32_t index, width, height;
+        int32_t x, y;
+        double refresh, scale;
+        int primary = 0, virtual = 0;
+        if (!integer(item, "index", &index) || index != i ||
+            !signed_integer(item, "x", &x) || !signed_integer(item, "y", &y) ||
+            x < -32768 || x > 32767 || y < -32768 || y > 32767 ||
+            !integer(item, "width", &width) || !integer(item, "height", &height) ||
+            width < 2 || height < 2 || width > 4096 || height > 4096 || width % 2 || height % 2 ||
+            !number(item, "refresh", 1, UURB_DISPLAY_MAX_REFRESH_HZ, &refresh) ||
+            !number(item, "scale", 0.5, 4, &scale) ||
+            !boolean_field(item, "primary", &primary) || !boolean_field(item, "virtual", &virtual)) goto done;
+        struct uurb_display_monitor *monitor = &temporary.monitors[i];
+        if (!string_field(item, "gdi_name", monitor->gdi_name, sizeof(monitor->gdi_name)) ||
+            strncmp(monitor->gdi_name, "\\\\.\\DISPLAY", 10) ||
+            !string_field(item, "friendly", monitor->friendly, sizeof(monitor->friendly)) ||
+            !string_field(item, "device_path", monitor->device_path, sizeof(monitor->device_path))) goto done;
+        for (size_t previous = 0; previous < i; ++previous)
+            if (!strcmp(temporary.monitors[previous].gdi_name, monitor->gdi_name)) goto done;
+        monitor->index = index;
+        monitor->flags = (primary ? UURB_DISPLAY_MONITOR_PRIMARY : 0) |
+                         (virtual ? UURB_DISPLAY_MONITOR_VIRTUAL : 0);
+        monitor->x = x; monitor->y = y; monitor->width = width; monitor->height = height;
+        monitor->refresh_millihz = (uint32_t)(refresh * 1000 + 0.5);
+        monitor->scale_milli = (uint32_t)(scale * 1000 + 0.5);
+        monitor->mode_offset = mode_total;
+        struct json_object *modes = NULL;
+        if (!json_object_object_get_ex(item, "modes", &modes) ||
+            json_object_get_type(modes) != json_type_array) goto done;
+        size_t mode_count = json_object_array_length(modes);
+        if (!mode_count || mode_count > UURB_DISPLAY_MAX_MONITOR_MODES ||
+            mode_total + mode_count > UURB_DISPLAY_MAX_MONITORS * UURB_DISPLAY_MAX_MONITOR_MODES) goto done;
+        monitor->mode_count = (uint32_t)mode_count;
+        int found_current = 0;
+        for (size_t j = 0; j < mode_count; ++j) {
+            struct json_object *mode_item = json_object_array_get_idx(modes, j);
+            struct uurb_display_mode *destination = &temporary.modes[mode_total];
+            if (!mode(mode_item, destination, 0)) goto done;
+            if (destination->width == width && destination->height == height &&
+                destination->refresh_millihz == monitor->refresh_millihz) {
+                uint32_t low, high, mask;
+                if (!mode_scales(mode_item, &low, &high, &mask) ||
+                    (found_current && (low != monitor->scale_min_milli ||
+                                       high != monitor->scale_max_milli || mask != monitor->scale_mask)))
+                    goto done;
+                monitor->scale_min_milli = low; monitor->scale_max_milli = high; monitor->scale_mask = mask;
+                found_current = 1;
+            }
+            ++mode_total;
+        }
+        if (!found_current || monitor->scale_milli < monitor->scale_min_milli ||
+            monitor->scale_milli > monitor->scale_max_milli ||
+            (monitor->scale_mask & ~UURB_DISPLAY_SCALE_MASK)) goto done;
+        primary_count += primary != 0;
+    }
+    if (primary_count != 1 || mode_total > UURB_DISPLAY_MAX_MONITORS * UURB_DISPLAY_MAX_MONITOR_MODES) goto done;
+    temporary.mode_count = mode_total;
+    *output = temporary; status = UURB_DISPLAY_OK;
+done:
+    json_object_put(reply); return status;
+}
+
 int uurb_native_display_default(const char *path, struct uurb_display_mode *output)
 {
     if (!output) return UURB_DISPLAY_INVALID;
@@ -194,21 +334,25 @@ int uurb_native_display_default(const char *path, struct uurb_display_mode *outp
 }
 int uurb_native_display_change(const char *path, const struct uurb_display_request *request, struct uurb_display_reply *output)
 {
-    if (!request || !output || request->version != 1 || (request->reserved & ~UURB_DISPLAY_FORCE_RESET) ||
+    if (!request || !output || request->version != 1 ||
+        (request->reserved & ~(UURB_DISPLAY_FORCE_RESET | UURB_DISPLAY_OUTPUT_SELECTED | UURB_DISPLAY_OUTPUT_MASK)) ||
+        ((request->reserved & UURB_DISPLAY_OUTPUT_MASK) && !(request->reserved & UURB_DISPLAY_OUTPUT_SELECTED)) ||
         request->operation < UURB_DISPLAY_VERIFY || request->operation > UURB_DISPLAY_APPLY_GLOBAL_DEFAULT ||
-        (request->operation == UURB_DISPLAY_VERIFY && request->reserved) ||
+        (request->operation == UURB_DISPLAY_VERIFY && (request->reserved & UURB_DISPLAY_FORCE_RESET)) ||
         request->width < 2 || request->height < 2 || request->width > 4096 || request->height > 4096 ||
-        request->width % 2 || request->height % 2 || request->refresh_millihz > 120000 ||
+        request->width % 2 || request->height % 2 || request->refresh_millihz > UURB_DISPLAY_MAX_REFRESH_MILLIHZ ||
         (request->scale_milli && (request->scale_milli < 500 || request->scale_milli > 4000))) return UURB_DISPLAY_INVALID;
-    char packet[384], scale[48] = "";
+    char packet[384], scale[48] = "", selected[32] = "";
+    if (request->reserved & UURB_DISPLAY_OUTPUT_SELECTED)
+        snprintf(selected, sizeof(selected), ",\"output\":%u", (request->reserved & UURB_DISPLAY_OUTPUT_MASK) >> UURB_DISPLAY_OUTPUT_SHIFT);
     if (request->scale_milli) snprintf(scale, sizeof(scale), ",\"scale\":%u.%03u", request->scale_milli / 1000, request->scale_milli % 1000);
-    snprintf(packet, sizeof(packet), "{\"version\":1,\"op\":\"%s\",\"serial\":%u,\"width\":%u,\"height\":%u,\"refresh\":%u.%03u%s%s%s%s}",
+    snprintf(packet, sizeof(packet), "{\"version\":1,\"op\":\"%s\",\"serial\":%u,\"width\":%u,\"height\":%u,\"refresh\":%u.%03u%s%s%s%s%s}",
         request->operation == UURB_DISPLAY_VERIFY ? "verify" : "apply", request->serial, request->width, request->height,
         request->refresh_millihz / 1000, request->refresh_millihz % 1000, scale,
         request->operation != UURB_DISPLAY_VERIFY ? ",\"confirmation\":\"gpu_frame\"" : "",
         request->operation == UURB_DISPLAY_APPLY_USER_DEFAULT ? ",\"default_scope\":\"user\"" :
         request->operation == UURB_DISPLAY_APPLY_GLOBAL_DEFAULT ? ",\"default_scope\":\"global\"" : "",
-        request->reserved & UURB_DISPLAY_FORCE_RESET ? ",\"force_reset\":true" : "");
+        request->reserved & UURB_DISPLAY_FORCE_RESET ? ",\"force_reset\":true" : "", selected);
     struct json_object *reply = NULL;
     int status = exchange(path, packet, &reply);
     if (status) return status;

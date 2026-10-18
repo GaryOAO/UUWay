@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import struct
 from pathlib import Path
@@ -18,6 +19,149 @@ spec.loader.exec_module(broker)
 
 
 class BrokerCleanupTests(unittest.TestCase):
+    def test_two_tracks_use_explicit_outputs_and_resize_only_retires_selected_track(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix='uurb-capture-reset-test-', dir='/tmp') as temporary:
+            directory = Path(temporary)
+            endpoint = directory / 'capture.sock'
+            broker.state_tools.write_private(directory / 'restore.json', {})
+            with tempfile.TemporaryFile() as output:
+                process = subprocess.Popen(['/usr/bin/python3',
+                    str(root / 'tests/probes/native_capture_reset_fixture.py'),
+                    str(directory), '--multi'], stdout=output, stderr=output)
+                peers = []
+
+                def connect(index):
+                    peer = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+                    peers.append(peer)
+                    peer.settimeout(4)
+                    peer.connect(str(endpoint))
+                    peer.send(struct.pack('<III32s', 0x43525555, 1, 0,
+                                          (r'\\.\DISPLAY' + str(index + 1)).encode()))
+                    self.assertEqual(peer.recv(64), b'UURB_FIXTURE_READY')
+                    return peer
+
+                try:
+                    deadline = time.monotonic() + 4
+                    while not endpoint.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertIsNone(process.poll())
+                    self.assertTrue(endpoint.exists())
+                    primary, secondary = connect(0), connect(1)
+                    # Both tracks stay usable while the other is connected.
+                    for peer in (primary, secondary):
+                        peer.send(b'ping')
+                        self.assertEqual(peer.recv(64), b'UURB_FIXTURE_ALIVE')
+                    requested = time.monotonic_ns()
+                    broker.state_tools.write_private(directory / 'display-transaction.json',
+                        dict(output=0, pending=dict(observed={}, requested_ns=requested)))
+                    self.assertEqual(primary.recv(64), b'')
+                    secondary.send(b'ping')
+                    self.assertEqual(secondary.recv(64), b'UURB_FIXTURE_ALIVE')
+                    replacement = connect(0)
+                    replacement.send(b'ack')
+                    self.assertEqual(replacement.recv(64), b'UURB_FIXTURE_ALIVE')
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if b'"event": "capture_frame_accepted"' in os.pread(output.fileno(), 65536, 0):
+                            break
+                        time.sleep(0.01)
+                    replacement.send(b'ping')
+                    self.assertEqual(replacement.recv(64), b'UURB_FIXTURE_ALIVE')
+                finally:
+                    for peer in peers:
+                        peer.close()
+                    process.terminate()
+                    try:
+                        process.wait(timeout=8)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=3)
+                output.seek(0)
+                records = [json.loads(line) for line in output if line.startswith(b'{')]
+                self.assertEqual(process.returncode, 0)
+                accepted = [value for value in records if value.get('event') == 'capture_frame_accepted']
+                self.assertEqual(len(accepted), 1)
+                self.assertEqual(accepted[0]['screen_id'], 0)
+                self.assertGreaterEqual(accepted[0]['capture_started_ns'], requested)
+                self.assertFalse(endpoint.exists())
+
+    def test_desktop_cursor_merges_outputs_for_user32_with_global_coordinates(self):
+        with tempfile.TemporaryDirectory(prefix='uurb-cursor-merge-') as temporary:
+            directory = Path(temporary)
+            target = broker.CursorState(directory / 'cursor.state')
+            states = [broker.CursorState(directory / ('cursor.%d.state' % i)) for i in range(2)]
+            merge = broker.DesktopCursor(target)
+            sources = {i: (state, dict(x=i * 1920, y=-100 if i else 0))
+                       for i, state in enumerate(states)}
+
+            def write(index, visible, x, generation=1, color=255):
+                header = (0x43525555, 1, 10, generation, 1, visible, 1, 2, 2, 1, 1, x, 200, 0, 0, 0)
+                os.pwrite(states[index].fd, struct.pack('<9I4i3I', *header), 0)
+                os.pwrite(states[index].fd, bytes([color, 0, 0, 255]) * 4, 64)
+
+            def read():
+                value = struct.unpack('<9I4i3I', os.pread(target.fd, 64, 0))
+                self.assertEqual(value[2] & 1, 0)
+                return value
+
+            try:
+                write(0, 1, 123)
+                write(1, 0, 321, color=128)
+                with patch.object(broker, 'event'):
+                    merge.update(sources)
+                    value = read()
+                    self.assertEqual(value[4:6], (1, 1))
+                    self.assertEqual(value[11:13], (123, 200))
+                    first_serial = value[6]
+                    before = os.pread(target.fd, target.SIZE, 0)
+                    merge.update(sources)
+                    self.assertEqual(os.pread(target.fd, target.SIZE, 0), before)
+                    # Both producers start at serial 1: the desktop reader
+                    # still needs a new serial and the second stream's pixels.
+                    write(0, 0, 123)
+                    write(1, 1, 321, color=128)
+                    merge.update(sources)
+                    value = read()
+                    self.assertEqual(value[11:13], (2241, 100))
+                    self.assertNotEqual(value[6], first_serial)
+                    self.assertEqual(os.pread(target.fd, 4, 64), bytes([128, 0, 0, 255]))
+                    # A new producer can reuse serial 1 with a different image.
+                    second_serial = value[6]
+                    write(1, 1, 400, generation=2, color=64)
+                    merge.update(sources)
+                    self.assertNotEqual(read()[6], second_serial)
+                    self.assertEqual(os.pread(target.fd, 4, 64), bytes([64, 0, 0, 255]))
+                    # A toolkit hides with an empty bitmap. Publish its
+                    # hidden state and position while keeping cached pixels
+                    # available for the next visible update.
+                    visible = read()
+                    write(1, 0, 425, generation=2, color=64)
+                    hidden = list(struct.unpack('<9I4i3I', os.pread(states[1].fd, 64, 0)))
+                    hidden[7:11] = [0, 0, 0, 0]
+                    os.pwrite(states[1].fd, struct.pack('<9I4i3I', *hidden), 0)
+                    merge.update({1: sources[1]})
+                    self.assertEqual(read()[4:6], (1, 0))
+                    self.assertEqual(read()[11:13], (2345, 100))
+                    self.assertEqual(read()[6], visible[6])
+                    self.assertEqual(os.pread(target.fd, 4, 64), bytes([64, 0, 0, 255]))
+                    write(1, 1, 430, generation=2, color=64)
+                    merge.update({1: sources[1]})
+                    self.assertEqual(read()[4:6], (1, 1))
+                    self.assertEqual(read()[11:13], (2350, 100))
+                    self.assertEqual(read()[6], visible[6])
+                    # Never publish a writer's uncommitted bitmap.
+                    before = os.pread(target.fd, target.SIZE, 0)
+                    os.pwrite(states[1].fd, struct.pack('<I', 11), 8)
+                    merge.update({1: sources[1]})
+                    self.assertEqual(os.pread(target.fd, target.SIZE, 0), before)
+                    merge.update({})
+                    self.assertFalse(read()[4])
+            finally:
+                for state in states:
+                    state.close()
+                target.close()
+
     def test_target_reset_is_generation_fenced_and_waits_for_pending_first_ack(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'reset.json'

@@ -1,6 +1,64 @@
 #ifndef UURB_NATIVE_DISPLAY_SET_WIN_H
 #define UURB_NATIVE_DISPLAY_SET_WIN_H
 #define UURB_DISPLAY_SET_IMPLEMENTATION_VERSION 1u
+/* UU enters Super Screen by submitting only its virtual CCD paths, and
+ * exits by replaying the physical paths saved before entry. Keep the full
+ * mode array: unused physical modes remain in UU's one-path request. */
+static LONG native_virtual_set_topology(UINT32 paths, DISPLAYCONFIG_PATH_INFO *path,
+    UINT32 count, DISPLAYCONFIG_MODE_INFO *modes, UINT32 flags)
+{
+    UINT32 allowed = SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_APPLY | SDC_VALIDATE |
+        SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE | SDC_FORCE_MODE_ENUMERATION;
+    if (!(flags & SDC_USE_SUPPLIED_DISPLAY_CONFIG) ||
+        !!(flags & SDC_APPLY) == !!(flags & SDC_VALIDATE) || (flags & ~allowed) ||
+        !paths || paths > 8 || !path || !modes || !count || count > 24 ||
+        !native_virtual_control_api || !native_display_reconfigure_enabled) return ERROR_NOT_SUPPORTED;
+    struct uurb_display_topology topology;
+    if (!native_multi_snapshot(&topology, TRUE)) return ERROR_GEN_FAILURE;
+    UINT32 packet[3 + 8 * 6] = {topology.serial, !!(flags & SDC_VALIDATE), paths};
+    for (UINT32 i = 0; i < paths; ++i) {
+        DISPLAYCONFIG_PATH_INFO item;
+        DISPLAYCONFIG_MODE_INFO source;
+        SIZE_T bytes;
+        if (!ReadProcessMemory(GetCurrentProcess(), path + i, &item, sizeof(item), &bytes) || bytes != sizeof(item) ||
+            !(item.flags & DISPLAYCONFIG_PATH_ACTIVE) || (item.flags & ~DISPLAYCONFIG_PATH_ACTIVE) ||
+            !native_multi_same_luid(item.sourceInfo.adapterId, native_multi_luid()) ||
+            !native_multi_same_luid(item.targetInfo.adapterId, native_multi_luid()) ||
+            item.sourceInfo.id < 1 || item.sourceInfo.id > 8 ||
+            item.targetInfo.id != UURB_MULTI_TARGET_BASE + item.sourceInfo.id - 1 ||
+            item.sourceInfo.modeInfoIdx >= count || item.targetInfo.rotation != DISPLAYCONFIG_ROTATION_IDENTITY ||
+            item.targetInfo.scaling != DISPLAYCONFIG_SCALING_IDENTITY ||
+            !ReadProcessMemory(GetCurrentProcess(), modes + item.sourceInfo.modeInfoIdx, &source, sizeof(source), &bytes) ||
+            bytes != sizeof(source) || source.infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE ||
+            source.id != item.sourceInfo.id || !native_multi_same_luid(source.adapterId, native_multi_luid()) ||
+            source.sourceMode.pixelFormat != DISPLAYCONFIG_PIXELFORMAT_32BPP) return ERROR_INVALID_PARAMETER;
+        DISPLAYCONFIG_RATIONAL rate = item.targetInfo.refreshRate;
+        if (item.targetInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) {
+            DISPLAYCONFIG_MODE_INFO target;
+            if (item.targetInfo.modeInfoIdx >= count ||
+                !ReadProcessMemory(GetCurrentProcess(), modes + item.targetInfo.modeInfoIdx, &target, sizeof(target), &bytes) ||
+                bytes != sizeof(target) || target.infoType != DISPLAYCONFIG_MODE_INFO_TYPE_TARGET ||
+                target.id != item.targetInfo.id || !native_multi_same_luid(target.adapterId, native_multi_luid()))
+                return ERROR_INVALID_PARAMETER;
+            rate = target.targetMode.targetVideoSignalInfo.vSyncFreq;
+        }
+        if (!rate.Denominator || !rate.Numerator) return ERROR_INVALID_PARAMETER;
+        UINT64 refresh = ((UINT64)rate.Numerator * 1000 + rate.Denominator / 2) / rate.Denominator;
+        if (refresh < 1000 || refresh > UURB_DISPLAY_MAX_REFRESH_MILLIHZ) return ERROR_BAD_CONFIGURATION;
+        UINT32 *entry = packet + 3 + i * 6;
+        entry[0] = item.sourceInfo.id - 1;
+        entry[1] = source.sourceMode.width; entry[2] = source.sourceMode.height;
+        entry[3] = (UINT32)refresh;
+        entry[4] = (UINT32)source.sourceMode.position.x; entry[5] = (UINT32)source.sourceMode.position.y;
+    }
+    DWORD status = native_virtual_control_api(native_display_endpoint, UURB_VIRTUAL_TOPOLOGY_CONTROL,
+                                              packet, (3 + paths * 6) * sizeof(UINT32));
+    if (!status) {
+        AcquireSRWLockExclusive(&native_multi_lock); native_multi_time = 0; ReleaseSRWLockExclusive(&native_multi_lock);
+        if (flags & SDC_APPLY) SendNotifyMessageW(HWND_BROADCAST, WM_DISPLAYCHANGE, 32, 0);
+    }
+    return !status ? ERROR_SUCCESS : status == UURB_DISPLAY_BAD_MODE ? ERROR_BAD_CONFIGURATION : ERROR_GEN_FAILURE;
+}
 /* Explicit supplied single-path SetDisplayConfig, using the native guardian.
  * No topology/database emulation or Wine desktop mode changes. Included after
  * the geometry adapter. Identity comes from the real active Windows path. */
@@ -51,7 +109,7 @@ static LONG native_display_plan_set(UINT32 paths, const DISPLAYCONFIG_PATH_INFO 
     if ((!rate.Numerator)!=(!rate.Denominator)) return ERROR_INVALID_PARAMETER;
     if (!rate.Numerator && (signal || scan!=DISPLAYCONFIG_SCANLINE_ORDERING_UNSPECIFIED)) return ERROR_INVALID_PARAMETER;
     UINT64 millihz=rate.Denominator ? ((UINT64)rate.Numerator*1000+rate.Denominator/2)/rate.Denominator : 0;
-    if (rate.Denominator && (millihz<1000 || millihz>120000)) return ERROR_BAD_CONFIGURATION;
+    if (rate.Denominator && (millihz<1000 || millihz>UURB_DISPLAY_MAX_REFRESH_MILLIHZ)) return ERROR_BAD_CONFIGURATION;
     if (scan!=DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE &&
         scan!=DISPLAYCONFIG_SCANLINE_ORDERING_UNSPECIFIED) return ERROR_NOT_SUPPORTED;
     if (target_present && !(flags&SDC_ALLOW_CHANGES)) {
@@ -106,7 +164,15 @@ static BOOL native_display_set_rate_safe(const struct uurb_display_snapshot *sna
 static LONG native_display_set_config(UINT32 paths, DISPLAYCONFIG_PATH_INFO *path,
     UINT32 count, DISPLAYCONFIG_MODE_INFO *modes, UINT32 flags)
 {
-    if (paths!=1 || count<1 || count>3 || !path || !modes || !display_query || !geometry_device_info)
+    if (flags & SDC_SAVE_TO_DATABASE)
+        return native_virtual_set_topology(paths, path, count, modes, flags);
+    /* The installed guardian owns exactly one output.  A supplied multi-output
+     * configuration must never be collapsed into that single-path view. */
+    struct uurb_display_topology topology;
+    BOOL native_topology = native_multi_active(&topology);
+    if (native_topology && topology.monitor_count > 1) return ERROR_NOT_SUPPORTED;
+    if (paths!=1 || count<1 || count>3 || !path || !modes ||
+        (!native_topology && (!display_query || !geometry_device_info)))
         return ERROR_NOT_SUPPORTED;
     DISPLAYCONFIG_PATH_INFO copied,current;
     DISPLAYCONFIG_MODE_INFO copied_modes[3],current_modes[3];SIZE_T bytes;
@@ -115,12 +181,17 @@ static LONG native_display_set_config(UINT32 paths, DISPLAYCONFIG_PATH_INFO *pat
         return ERROR_INVALID_PARAMETER;
     UINT32 current_paths=1,current_count=3;
     UINT32 query_flags=QDC_ONLY_ACTIVE_PATHS|((flags&SDC_VIRTUAL_MODE_AWARE) ? QDC_VIRTUAL_MODE_AWARE : 0);
-    LONG result=display_query(query_flags,&current_paths,&current,&current_count,current_modes,NULL);
+    LONG result;
+    if (native_topology) {
+        if (native_multi_query_config(query_flags,&current_paths,&current,&current_count,current_modes,NULL,&result) != 1)
+            return ERROR_NOT_SUPPORTED;
+    } else result=display_query(query_flags,&current_paths,&current,&current_count,current_modes,NULL);
     if (result || current_paths!=1 || !current.targetInfo.targetAvailable ||
         !(current.flags&DISPLAYCONFIG_PATH_ACTIVE)) return ERROR_NOT_SUPPORTED;
     DISPLAYCONFIG_SOURCE_DEVICE_NAME name={.header={.type=DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
         .size=sizeof(name),.adapterId=current.sourceInfo.adapterId,.id=current.sourceInfo.id}};
-    if (geometry_device_info(&name.header) || !display_primary(name.viewGdiDeviceName)) return ERROR_NOT_SUPPORTED;
+    if (!native_topology && (geometry_device_info(&name.header) || !display_primary(name.viewGdiDeviceName)))
+        return ERROR_NOT_SUPPORTED;
     struct uurb_display_request request;
     result=native_display_plan_set(paths,&copied,count,copied_modes,flags,&current,&request);
     if (result) return result;

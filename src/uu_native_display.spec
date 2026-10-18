@@ -2,3 +2,5 @@
 @ stdcall UurbDisplayQueryV2(str ptr long)
 @ stdcall UurbDisplayChange(str ptr ptr)
 @ stdcall UurbDisplayDefault(str ptr)
+@ stdcall UurbDisplayTopology(str ptr long)
+@ stdcall UurbVirtualControl(str long ptr long)

@@ -15,6 +15,17 @@ def reply():
             [(0, 0, 1., 0, True, [spec], {})], {'layout-mode': 1})
 
 
+def multi_reply(virtual_size=(1280, 720), virtual_serial=''):
+    spec = ('DP-fixture', 'private-vendor', 'private-product', 'private-serial')
+    virtual = ('Meta-0', 'MetaVendor', 'Virtual remote monitor', '0x000001')
+    return (8, [(spec, [('1080p', 1920, 1080, 60., 1., [1.], {'is-current': True}),
+                        ('4k17', 3840, 2160, 17., 1., [1.], {})], {}),
+                (virtual, [('virtual', virtual_size[0], virtual_size[1], 60., 1., [1.],
+                            {'is-current': True})], {'display-name': 'Virtual ' + virtual_serial})],
+            [(0, 0, 1., 0, True, [spec], {}),
+             (1920, 0, 1., 0, False, [virtual], {})], {'layout-mode': 1})
+
+
 class FakeBackend:
     def __init__(self):
         self.state = display.decode_state(reply())
@@ -35,6 +46,41 @@ class FakeBackend:
 
 
 class DisplayTests(unittest.TestCase):
+    def test_144_hz_current_mode_remains_visible_and_selectable(self):
+        data = copy.deepcopy(reply())
+        modes = data[1][0][1]
+        modes[0] = ('1080p144', 1920, 1080, 144., 1., [1., 2.], {'is-current': True})
+        state = display.decode_state(data)
+        self.assertEqual(display.choose(state, 1920, 1080, 144)['refresh'], 144.)
+        self.assertEqual(display.decode_monitors(data)[0]['refresh'], 144.)
+        modes[0] = ('1080p145', 1920, 1080, 145., 1., [1.], {'is-current': True})
+        with self.assertRaises(ValueError):
+            display.decode_state(data)
+
+    def test_extra_output_is_visible_but_never_rewritten_by_single_output_backend(self):
+        state = display.decode_state(multi_reply())
+        self.assertTrue(state['multi_output'])
+        self.assertEqual(state['connector'], 'DP-fixture')
+        self.assertEqual(len(state['topology']), 2)
+        self.assertEqual(state['topology'][1]['connector'], 'Meta-0')
+        monitors = display.decode_monitors(multi_reply())
+        self.assertEqual([item['gdi_name'] for item in monitors], ['\\\\.\\DISPLAY1', '\\\\.\\DISPLAY2'])
+        self.assertEqual([item['index'] for item in monitors], [0, 1])
+        self.assertEqual(monitors[1]['connector'], 'Meta-0')
+        self.assertTrue(monitors[1]['virtual'])
+        self.assertEqual((monitors[1]['x'], monitors[1]['y']), (1920, 0))
+        self.assertNotIn('private-serial', str(monitors))
+        self.assertTrue(monitors[0]['modes'])
+        self.assertNotIn('is-current', monitors[0]['modes'][0])
+        backend = display.MutterDisplay.__new__(display.MutterDisplay)
+        with self.assertRaises(ValueError):
+            backend.configure(state, dict(mode='4k17', scale=1.), True)
+        # Adding/removing the second output invalidates an in-flight
+        # transaction, but decoding the origin output still succeeds.
+        other = display.decode_state(multi_reply(virtual_size=(1920, 1080)))
+        self.assertNotEqual(display.signature(state), display.signature(other))
+        self.assertEqual(display.decode_state(multi_reply())['connector'], 'DP-fixture')
+
     def test_real_advertised_rates_and_scales_only_no_serial_export(self):
         state = display.decode_state(reply())
         self.assertNotIn('private-serial', str(state))

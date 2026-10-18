@@ -56,11 +56,19 @@ class NativePipewireProbeTests(unittest.TestCase):
 
     @unittest.skipUnless(BINARY.is_file(), 'Build the native PipeWire probe first')
     def test_invalid_capture_rate_rejected_before_gpu_initialization(self):
-        for rate in ['', '0', '-1', '121', '60/1', '60x']:
+        for rate in ['', '0', '-1', '145', '60/1', '60x']:
             result = subprocess.run([str(BINARY)], env=dict(os.environ, UURB_CAPTURE_MAX_FPS=rate),
                                     capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 2)
             self.assertIn('UURB_CAPTURE_MAX_FPS', result.stderr)
+
+    @unittest.skipUnless(BINARY.is_file(), 'Build the native PipeWire probe first')
+    def test_144_hz_reaches_fd_validation_instead_of_rejecting_the_refresh(self):
+        result = subprocess.run([str(BINARY)], env=dict(os.environ, UURB_CAPTURE_MAX_FPS='144'),
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('usage:', result.stderr)
+        self.assertNotIn('UURB_CAPTURE_MAX_FPS', result.stderr)
 
     def test_source_timing_handles_jitter_discontinuities_and_large_timestamps(self):
         with tempfile.TemporaryDirectory() as temporary:

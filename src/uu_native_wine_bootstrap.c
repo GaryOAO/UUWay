@@ -81,14 +81,14 @@ static DWORD launch(const WCHAR *executable, PROCESS_INFORMATION *child)
     return CreateProcessW(executable, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startup, child) ? 0 : GetLastError();
 }
 
-static DWORD server_pid(void)
+static DWORD named_process_pid(const WCHAR *name)
 {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) return 0;
     PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
     DWORD pid = 0;
     if (Process32FirstW(snapshot, &entry)) do {
-        if (!_wcsicmp(entry.szExeFile, L"GameViewerServer.exe")) {
+        if (!_wcsicmp(entry.szExeFile, name)) {
             if (pid) { pid = 0; break; } /* ambiguous target is not safe */
             pid = entry.th32ProcessID;
         }
@@ -96,6 +96,9 @@ static DWORD server_pid(void)
     CloseHandle(snapshot);
     return pid;
 }
+
+static DWORD server_pid(void) { return named_process_pid(L"GameViewerServer.exe"); }
+static DWORD service_pid(void) { return named_process_pid(L"GameViewerService.exe"); }
 
 static DWORD attach_input(const WCHAR *folder, DWORD pid)
 {
@@ -195,6 +198,22 @@ int wmain(int argc, WCHAR **argv)
     if (cursor_length >= 32768) return 2;
     if (cursor_length)
         settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UURB_CURSOR_STATE_PATH", cursor_path};
+    /* CreateEnvironmentBlock in the UU service rebuilds the Windows
+     * environment from this registry key. Carry the per-output directory too;
+     * otherwise DXGI silently opens the inactive legacy cursor.state. */
+    WCHAR cursor_directory[32768];
+    DWORD cursor_directory_length = GetEnvironmentVariableW(L"UURB_CURSOR_STATE_DIR", cursor_directory,
+                                                            ARRAYSIZE(cursor_directory));
+    if (cursor_directory_length >= ARRAYSIZE(cursor_directory)) return 2;
+    if (cursor_directory_length)
+        settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UURB_CURSOR_STATE_DIR", cursor_directory};
+    WCHAR cursor_presentation[16];
+    DWORD cursor_presentation_length = GetEnvironmentVariableW(L"UURB_CURSOR_PRESENTATION", cursor_presentation,
+                                                               ARRAYSIZE(cursor_presentation));
+    if (cursor_presentation_length >= ARRAYSIZE(cursor_presentation) ||
+        (cursor_presentation_length && wcscmp(cursor_presentation, L"client"))) return 2;
+    if (cursor_presentation_length)
+        settings[count++] = (struct setting){HKEY_LOCAL_MACHINE, env_key, L"UURB_CURSOR_PRESENTATION", cursor_presentation};
     WCHAR display_socket[108];
     DWORD display_length = GetEnvironmentVariableW(L"UURB_DISPLAY_SOCKET", display_socket, ARRAYSIZE(display_socket));
     if (display_length >= ARRAYSIZE(display_socket) || (display_length && display_socket[0] != L'/')) return 2;
@@ -273,10 +292,27 @@ int wmain(int argc, WCHAR **argv)
     event("gui_started", status);
     if (!status && !native_input) WaitForSingleObject(stop, INFINITE);
     if (!status && native_input) {
+        /* The Super Screen UI and its RPC client live in the GUI process on
+         * some UU releases, while older releases issue the same IDD calls
+         * from GameViewerServer.exe.  Hook both, plus the Windows service
+         * when it exposes the device boundary.  A GUI/service hook failure
+         * is diagnostic-only; the server hook remains the readiness gate for
+         * the existing input path. */
+        DWORD attached_service = 0;
+        if (gui.dwProcessId) {
+            DWORD hook_status = attach_input(folder, gui.dwProcessId);
+            event("native_gui_hook_ready", hook_status);
+        }
         DWORD attached = 0;
         ULONGLONG missing_since = GetTickCount64();
         while (WaitForSingleObject(stop, 250) == WAIT_TIMEOUT) {
             if (WaitForSingleObject(input.hProcess, 0) == WAIT_OBJECT_0) { status = ERROR_BROKEN_PIPE; break; }
+            DWORD service = service_pid();
+            if (service && service != attached_service) {
+                DWORD hook_status = attach_input(folder, service);
+                event("native_service_hook_ready", hook_status);
+                if (!hook_status) attached_service = service;
+            }
             DWORD target = server_pid();
             if (!target) {
                 if (GetTickCount64() - missing_since > 15000) { status = ERROR_PROCESS_ABORTED; break; }

@@ -16,6 +16,31 @@ confirmation = importlib.util.module_from_spec(spec); spec.loader.exec_module(co
 
 
 class ConfirmationTests(unittest.TestCase):
+    def test_selected_screen_confirmation_rejects_other_screen_and_older_frame(self):
+        record, topology, evidence = self.values()
+        record['output'] = 1
+        record['pending']['requested_ns'] = evidence['accepted_ns'] - 1
+        selected = dict(evidence, screen_id=1, capture_started_ns=evidence['accepted_ns'])
+        expected = dict(version=1, op='confirm', output=1, serial=8, transaction='a' * 32)
+        self.assertEqual(confirmation.confirmation_request(record, {}, selected, evidence['accepted_ns']), expected)
+        self.assertIsNone(confirmation.confirmation_request(record, topology, evidence, evidence['accepted_ns']))
+        record['pending']['requested_ns'] = evidence['accepted_ns'] + 1
+        self.assertIsNone(confirmation.confirmation_request(record, {}, selected, evidence['accepted_ns']))
+
+    def test_concurrent_screen_generations_do_not_overwrite_each_other(self):
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            instance, evidence = self.make(directory)
+            second = confirmation.DisplayConfirmation(directory, directory / 'prefix', directory / 'server.exe',
+                directory / 'bundle', {}, lambda unused: {}, screen_id=1)
+            self.log(directory, dict(event='capture_started', generation=2, screen_id=0), evidence,
+                     dict(event='capture_started', generation=3, screen_id=1),
+                     dict(evidence, generation=3, screen_id=1))
+            instance.consume(); second.consume()
+            self.assertEqual(instance.evidence, evidence)
+            self.assertEqual(second.evidence['screen_id'], 1)
+            self.assertEqual(second.generation, 3)
+
     def test_changed_pixels_recover_early_new_ack_but_not_previous_observation(self):
         with tempfile.TemporaryDirectory() as name:
             directory=Path(name);instance,evidence=self.make(directory)

@@ -50,8 +50,11 @@ class ConsoleInteractionTests(unittest.TestCase):
         self.snapshot = dict(runtime=self.runtime, display=self.display, display_error=None, mappings=[],
                              download=Path("/fixture/Downloads"),
                              services={"uu-native-bridge.service": dict(ActiveState="active")})
-        snapshot_patch = patch.object(console, "_collect_snapshot", side_effect=lambda: copy.deepcopy(self.snapshot))
+        snapshot_patch = patch.object(console, "_collect_snapshot", side_effect=lambda connector=None: copy.deepcopy(self.snapshot))
         snapshot_patch.start(); self.addCleanup(snapshot_patch.stop)
+        update_patch = patch.object(console, '_update_command', return_value=dict(
+            installed=None, installable=False, busy=False, progress=[]))
+        update_patch.start(); self.addCleanup(update_patch.stop)
         self.ui = console.Console(Gtk, GLib, Gio)
         self.ui._async = self.inline
         self.ui.build(self.app)
@@ -125,6 +128,179 @@ class ConsoleInteractionTests(unittest.TestCase):
         self.assertEqual(self.ui.display_modes.get_active(), 0)
         self.assertFalse(self.ui.display_apply_button.get_sensitive())
 
+    def test_secondary_output_is_pinned_through_apply_and_confirmation(self):
+        monitors = [dict(index=0, connector='screen-a', friendly='A'),
+                    dict(index=1, connector='screen-b', friendly='B')]
+        self.snapshot['display'] = dict(self.display, monitors=monitors)
+        requests = []
+        selected = dict(self.display, monitors=monitors, output=1)
+        def snapshot(connector=None):
+            value = copy.deepcopy(self.snapshot)
+            if connector == 'screen-b':
+                value['display'] = copy.deepcopy(selected)
+            return value
+        def request(runtime, payload):
+            requests.append(payload)
+            if payload['op'] == 'apply':
+                selected.update(serial=2, pending=True, width=2560, height=1440)
+                return dict(transaction='secondary-trial', confirmation_seconds=30)
+            selected['pending'] = False
+            return dict(ok=True)
+        with patch.object(console, '_collect_snapshot', side_effect=snapshot), \
+                patch.object(console, '_display_request', side_effect=request), \
+                patch.object(self.ui, '_confirm', return_value=True):
+            self.ui.refresh()
+            self.ui.display_outputs.set_active_id('screen-b')
+            self.assertEqual(self.ui.display_output, 1)
+            self.ui.display_modes.set_active(1)
+            self.ui.display_apply()
+            self.assertEqual(requests[0]['output'], 1)
+            self.assertFalse(self.ui.display_outputs.get_sensitive())
+            self.ui.keep_button.clicked()
+            self.assertEqual(requests[1], dict(version=1, op='confirm', output=1,
+                                              transaction='secondary-trial', serial=2))
+
+    def test_super_screen_controls_use_service_and_do_not_restart_bridge(self):
+        self.snapshot['display'] = dict(self.display, virtual_displays=dict(supported=True, screens=[]))
+        self.ui.refresh()
+        self.ui.virtual_resolution.set_active(1)
+        requests = []
+        def request(runtime, payload):
+            requests.append(payload)
+            return dict(ok=True, created=True, slot=0, connector='Meta-fixture')
+        with patch.object(console, '_display_request', side_effect=request), \
+                patch.object(console.subprocess, 'run') as run:
+            self.ui.virtual_create_button.clicked()
+            run.assert_not_called()
+        self.assertEqual(requests[0]['op'], 'virtual-create')
+        self.assertEqual(requests[0]['modes'][0], [2560, 1440, 60])
+        self.assertEqual(requests[0]['slot'], 0)
+        self.ui.display_transaction = 'pending-trial'
+        self.ui.virtual_action()
+        self.assertEqual(len(requests), 1)
+
+    def test_update_manual_check_and_auto_switch_never_install(self):
+        latest = dict(installed='1.2.0',latest='1.3.0',available=True,installable=True,checked_at=100,
+                      url='https://github.com/GaryOAO/UUWay/releases/tag/v1.3.0')
+        with patch.object(console, '_update_command', return_value=latest) as command:
+            self.ui.update_check_button.clicked()
+            command.assert_called_once_with('check')
+            self.assertTrue(self.ui.update_install_button.get_sensitive())
+            self.assertIn('1.3.0',self.ui.update_version.get_text())
+            self.ui.update_auto.set_active(False)
+            self.assertFalse(console._read_json(self.config/'console-updates.json')['auto_check'])
+            self.ui.update_auto.set_active(True)
+            self.assertTrue(console._read_json(self.config/'console-updates.json')['auto_check'])
+            self.assertEqual(command.call_count,1)
+
+    def test_update_install_requires_the_gui_confirmation(self):
+        self.ui.latest_update=dict(available=True,installable=True)
+        with patch.object(self.ui,'_confirm',return_value=False), patch.object(console,'_update_command') as command:
+            self.ui.install_update()
+            command.assert_not_called()
+        with patch.object(self.ui,'_confirm',return_value=True), patch.object(console,'_update_command',return_value='done') as command, \
+                patch.object(self.ui,'refresh_update_status'):
+            self.ui.install_update()
+            command.assert_called_once_with('install',machine=False,install=True)
+
+    def test_automatic_new_version_prompts_once_and_cancel_never_installs(self):
+        latest = dict(installed='1.2.0',latest='1.3.0',tag='v1.3.0',available=True,installable=True)
+        with patch.object(console,'_update_command',return_value=latest) as command, \
+                patch.object(self.ui,'_confirm',return_value=False) as confirm:
+            self.ui.check_update(automatic=True)
+            self.ui.check_update(automatic=True)
+            self.assertEqual([c.args[0] for c in command.call_args_list],['check','check'])
+            confirm.assert_called_once()
+            self.assertIn('1.3.0',confirm.call_args.args[0])
+        self.assertEqual(console._read_json(self.config/'console-updates.json')['notified_tag'],'v1.3.0')
+
+    def test_automatic_update_starts_only_after_accepting_the_notice(self):
+        latest = dict(installed='1.2.0',latest='1.3.0',tag='v1.3.0',available=True,installable=True)
+        with patch.object(console,'_update_command',side_effect=[latest,'started']) as command, \
+                patch.object(self.ui,'_confirm',return_value=True) as confirm, \
+                patch.object(self.ui,'refresh_update_status'):
+            self.ui.check_update(automatic=True)
+            self.assertEqual([c.args[0] for c in command.call_args_list],['check','install'])
+            confirm.assert_called_once()
+
+    def test_external_update_disables_actions_until_it_finishes(self):
+        self.ui.latest_update = dict(installed='1.2.0', latest='1.3.0', available=True, installable=True)
+        with patch.object(console, '_update_command', return_value=dict(
+                busy=True, installed='1.2.0', installable=True, progress=['正在安装'])):
+            self.ui.refresh_update_status()
+        self.assertFalse(self.ui.update_install_button.get_sensitive())
+        self.assertFalse(self.ui.update_check_button.get_sensitive())
+        with patch.object(console, '_update_command') as command:
+            self.ui.install_update()
+            self.ui.check_update()
+            command.assert_not_called()
+        with patch.object(console, '_update_command', return_value=dict(
+                busy=False, installed='1.3.0', installable=True, progress=[], result=dict(outcome='success'))):
+            self.ui.refresh_update_status()
+        self.assertIn('1.3.0', self.ui.update_version.get_text())
+        self.assertTrue(self.ui.update_check_button.get_sensitive())
+        self.assertFalse(self.ui.update_install_button.get_sensitive())
+
+    def test_auto_check_obeys_preference_interval_and_failed_attempt_backoff(self):
+        now = time.time()
+        latest = dict(installed='1.2.0', latest='1.3.0', available=True, installable=True, checked_at=now)
+        self.ui.latest_update = dict(latest)
+        with patch.object(self.ui, 'refresh_update_status'), patch.object(console, '_update_command', return_value=latest) as command:
+            self.ui._poll_updates()
+            command.assert_not_called()
+            self.ui.latest_update['checked_at'] = now - console.UPDATE_INTERVAL - 10
+            self.ui.update_auto.set_active(False)
+            self.ui._poll_updates()
+            command.assert_not_called()
+            self.ui.update_auto.set_active(True)
+            command.side_effect = ValueError('offline')
+            self.ui._poll_updates()
+            command.assert_called_once_with('check')
+            self.ui._poll_updates()
+            self.assertEqual(command.call_count, 1)
+        self.assertIn('检查失败', self.ui.update_result.get_text())
+
+    def test_rollback_uses_existing_updater_after_confirmation(self):
+        self.ui.update_rollback_available = True
+        with patch.object(self.ui, '_confirm', return_value=True), \
+                patch.object(console, '_update_command', return_value='done') as command, \
+                patch.object(self.ui, 'refresh_update_status'):
+            self.ui.install_update(rollback=True)
+            command.assert_called_once_with('rollback', machine=False, install=True)
+
+    def test_auto_check_switch_reverts_if_preference_cannot_be_saved(self):
+        self.assertTrue(self.ui.update_auto.get_active())
+        with patch.object(console, '_write_json', side_effect=OSError('full')):
+            self.ui.update_auto.set_active(False)
+        self.assertTrue(self.ui.update_auto.get_active())
+
+    def test_corrupt_update_preferences_and_cache_do_not_prevent_startup(self):
+        console._write_json(self.config / 'console-update-cache.json', ['broken'])
+        console._write_json(self.config / 'console-updates.json', ['broken'])
+        other = console.Console(Gtk, GLib, Gio)
+        other._async = self.inline
+        try:
+            other.build(self.app)
+            self.assertTrue(other.update_auto.get_active())
+            self.assertFalse(other.update_install_button.get_sensitive())
+        finally:
+            other.window.destroy()
+
+    def test_output_reset_releases_super_screens_and_disables_old_test_outputs(self):
+        outputs=[dict(connector='DP-1',enabled=True,kind='physical',managed=False),
+                 dict(connector='Virtual-1',enabled=True,kind='vkms',managed=False),
+                 dict(connector='Meta-0',enabled=True,kind='super_screen',managed=True,slot=0)]
+        self.snapshot['display']=dict(self.display, virtual_displays=dict(supported=True,outputs=outputs,
+                                        screens=[dict(slot=0,connector='Meta-0')]))
+        self.ui.refresh()
+        self.assertEqual(len(self.ui.output_list.get_children()),3)
+        requests=[]
+        with patch.object(console,'_display_request',side_effect=lambda runtime,request: requests.append(request) or dict(ok=True)):
+            self.ui.virtual_reset_button.clicked()
+        self.assertEqual([r['op'] for r in requests],['virtual-release','virtual-output'])
+        self.assertEqual(requests[1]['connector'],'Virtual-1')
+        self.assertFalse(requests[1]['enabled'])
+
     def test_unavailable_display_disables_stale_apply(self):
         self.ui.display_modes.set_active(1)
         self.snapshot["display"] = None
@@ -192,7 +368,13 @@ class ConsoleInteractionTests(unittest.TestCase):
             self.ui.navigate(name)
             settle(.25)
             x, y = widget.translate_coordinates(self.ui.window, 0, 0)
-            self.assertLessEqual(x + widget.get_allocated_width(), 780, name)
+            # GTK's CSD shadows can add 102 px on each side under Xvfb.
+            # Child coordinates include that shadow; compare to the actual
+            # content edge, rather than treating it as usable window space.
+            content = self.ui.window.get_child()
+            origin, _ = content.translate_coordinates(self.ui.window, 0, 0)
+            self.assertLessEqual(x + widget.get_allocated_width(), origin + content.get_allocated_width(), name)
+            self.assertEqual(self.ui.window.get_size().width, 780)
         self.assertLess(self.ui.sidebar.get_allocated_width(), 100)
         self.assertFalse(self.ui.nav_labels[0].get_visible())
         self.ui.window.resize(1120, 800)

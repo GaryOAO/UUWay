@@ -539,7 +539,12 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
     trial.private_directory(config_path.parent)
     config = trial.state_tools.read_private(config_path)
     names = {'schema', 'prefix', 'bundle', 'restore_state', 'state_parent', 'text_socket', 'cursor_mode'}
-    if set(config) != names or config['schema'] != 1 or config['cursor_mode'] not in ('metadata', 'embedded', 'composited'):
+    # The installer records the GPU backend for the package/console.  Keep the
+    # key optional so a rollback to an older source-only bundle, which did not
+    # write it, still starts.
+    if (set(config) not in (names, names | {'backend'}) or config['schema'] != 1 or
+            config['cursor_mode'] not in ('metadata', 'embedded', 'composited') or
+            config.get('backend') not in (None, 'nvidia', 'amd')):
         raise ValueError('Unreviewed native service configuration')
     for name in names - {'schema', 'cursor_mode'}:
         if not isinstance(config[name], str) or not Path(config[name]).is_absolute():

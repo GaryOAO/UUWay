@@ -12,6 +12,7 @@ StartLimitBurst=5
 Type=notify
 NotifyAccess=main
 ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-display-service.py" --config "%h/.config/uurb/native-runtime.json"
+ExecStopPost=/usr/bin/python3 "@ROOT@/scripts/uu-native-display-service.py" --config "%h/.config/uurb/native-runtime.json" --recover
 Restart=on-failure
 RestartSec=2
 WatchdogSec=30
@@ -21,8 +22,8 @@ KillMode=mixed
 UMask=0077
 NoNewPrivileges=yes
 LimitCORE=0
-MemoryMax=256M
-TasksMax=32
+MemoryMax=512M
+TasksMax=128
 
 [Install]
 WantedBy=graphical-session.target

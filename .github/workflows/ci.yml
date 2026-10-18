@@ -18,10 +18,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-pytest python3-gi python3-dbus \
             gir1.2-gtk-3.0 gir1.2-atspi-2.0 xvfb xclip x11-utils build-essential libjson-c-dev \
-            libx11-dev libxfixes-dev shellcheck
+            libx11-dev libxfixes-dev shellcheck dbus-daemon fonts-noto-cjk librsvg2-common
       # The suites that need a GPU, a Wine prefix or a live session skip themselves.
       - name: Unit tests
-        run: /usr/bin/python3 -m pytest tests -q -p no:cacheprovider
+        run: env -u WAYLAND_DISPLAY GDK_BACKEND=x11 UUWAY_UI_TESTS=1 xvfb-run -a dbus-run-session -- /usr/bin/python3 -m pytest tests -q -p no:cacheprovider
       - name: Shell scripts
         run: |
           shellcheck -S warning install.sh packaging/*.sh packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm \

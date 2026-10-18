@@ -4,6 +4,8 @@
 #define UURB_DISPLAY_VERSION 1u
 #define UURB_DISPLAY_SNAPSHOT_VERSION 2u
 #define UURB_DISPLAY_MAX_MODES 256u
+#define UURB_DISPLAY_MAX_REFRESH_HZ 144u
+#define UURB_DISPLAY_MAX_REFRESH_MILLIHZ (UURB_DISPLAY_MAX_REFRESH_HZ * 1000u)
 #define UURB_DISPLAY_SCALE_COUNT 12u
 #define UURB_DISPLAY_SCALE_MASK ((1u << UURB_DISPLAY_SCALE_COUNT) - 1u)
 static inline uint32_t uurb_display_scale_milli(unsigned index)
@@ -18,7 +20,28 @@ static inline int uurb_display_scale_index(uint32_t milli)
         if (uurb_display_scale_milli(i) == milli) return (int)i;
     return -1;
 }
+#define UURB_DISPLAY_TOPOLOGY_VERSION 1u
+#define UURB_DISPLAY_MAX_MONITORS 8u
+#define UURB_DISPLAY_MAX_MONITOR_MODES 64u
+#define UURB_DISPLAY_MONITOR_PRIMARY 1u
+#define UURB_DISPLAY_MONITOR_VIRTUAL 2u
+#define UURB_VIRTUAL_TOPOLOGY_CONTROL 0x55520001u
 struct uurb_display_mode { uint32_t width, height, refresh_millihz, scale_milli; };
+struct uurb_display_monitor {
+    uint32_t index, flags;
+    uint32_t x, y, width, height, refresh_millihz, scale_milli;
+    uint32_t mode_offset, mode_count;
+    uint32_t scale_min_milli, scale_max_milli, scale_mask;
+    /* UTF-8; the Win32 adapter converts these to UTF-16.  No EDID serial. */
+    char gdi_name[16];
+    char friendly[128];
+    char device_path[192];
+};
+struct uurb_display_topology {
+    uint32_t version, serial, monitor_count, mode_count, reserved;
+    struct uurb_display_monitor monitors[UURB_DISPLAY_MAX_MONITORS];
+    struct uurb_display_mode modes[UURB_DISPLAY_MAX_MONITORS * UURB_DISPLAY_MAX_MONITOR_MODES];
+};
 struct uurb_display_snapshot {
     uint32_t version, serial, count, pending;
     struct uurb_display_mode current, modes[UURB_DISPLAY_MAX_MODES];
@@ -34,12 +57,20 @@ struct uurb_display_reply { uint32_t version, serial, changed, reserved; };
 enum { UURB_DISPLAY_VERIFY = 1, UURB_DISPLAY_APPLY = 2,
        UURB_DISPLAY_APPLY_USER_DEFAULT = 3, UURB_DISPLAY_APPLY_GLOBAL_DEFAULT = 4 };
 #define UURB_DISPLAY_FORCE_RESET 1u /* request.reserved, apply operations only */
+/* Optional output selector in the existing sized request ABI. The topology
+ * serial pins this index to the enumeration the caller used. */
+#define UURB_DISPLAY_OUTPUT_SELECTED 0x100u
+#define UURB_DISPLAY_OUTPUT_SHIFT 16u
+#define UURB_DISPLAY_OUTPUT_MASK (7u << UURB_DISPLAY_OUTPUT_SHIFT)
 enum { UURB_DISPLAY_OK, UURB_DISPLAY_INVALID, UURB_DISPLAY_TRANSPORT, UURB_DISPLAY_BAD_MODE, UURB_DISPLAY_FAILED,
        UURB_DISPLAY_DEFAULT_FAILED };
 /* The unsized historical Query had both 4128- and 4136-byte consumers.
  * Retain its symbol only as a no-write failure; never guess caller capacity. */
 int uurb_native_display_query(const char *, void *);
 int uurb_native_display_query_v2(const char *, struct uurb_display_snapshot *, uint32_t);
+int uurb_native_display_topology(const char *, struct uurb_display_topology *, uint32_t);
 int uurb_native_display_default(const char *, struct uurb_display_mode *);
 int uurb_native_display_change(const char *, const struct uurb_display_request *, struct uurb_display_reply *);
+/* Reviewed IDD control messages only; input is copied by the Win32 adapter. */
+int uurb_native_virtual_control(const char *, uint32_t, const void *, uint32_t);
 #endif

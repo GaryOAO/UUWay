@@ -278,7 +278,8 @@ if should_run 5; then
     if [[ -s "$restore_state" ]]; then
         ok "屏幕共享已授权（$restore_state）"
     else
-        info "接下来会弹出屏幕共享对话框：请选择要串流给手机的显示器，并勾选「记住」。"
+        info "接下来会检查屏幕共享：请选择一块显示器，并勾选「记住」。"
+        info "运行后，UU 可切换当前 GNOME 会话的所有活动显示器，包括之后创建的超级屏。"
         run "$python" "$repo_dir/scripts/probe-wayland-portal.py" --capture-check --restore-state "$restore_state"
         ((dry_run)) || [[ -s "$restore_state" ]] || die "没有保存屏幕共享授权，请重新运行本步骤并勾选「记住」。"
         ok "屏幕共享已授权"
@@ -299,16 +300,20 @@ if should_run 6; then
         [[ -d "$bundle" ]] || die "打包没有产生运行时目录。"
     fi
     ok "运行时：$bundle"
-    run "$python" scripts/install-uu-native-service.py \
-        --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
-        --state-parent "$state_dir" --text-socket "$state_dir/text.sock" --cursor-mode metadata \
-        --preserve-display-session --backend "$gpu_backend"
-
-    # Apply Wine's Linux path view while the bridge is stopped.  Keeping this
-    # out of the long-lived service avoids racing Wine initialization on boot.
     if systemctl --user is-active --quiet uu-native-bridge 2>/dev/null; then
         run systemctl --user stop uu-native-bridge
     fi
+    service_options=()
+    if [[ ! -f "$config_dir/native-runtime.json" ]]; then
+        service_options=(--cursor-mode metadata --preserve-display-session)
+    fi
+    run "$python" scripts/install-uu-native-service.py \
+        --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
+        --state-parent "$state_dir" --text-socket "$state_dir/text.sock" \
+        "${service_options[@]}" --backend "$gpu_backend"
+
+    # Apply Wine's Linux path view while the bridge is stopped. Keeping this
+    # out of the long-lived service avoids racing Wine initialization on boot.
     run "$python" scripts/configure-uu-wine-mappings.py \
         --prefix "$prefix" --config-directory "$config_dir"
     # The registry command starts a short-lived Wine server.  Reap it fully
@@ -330,6 +335,8 @@ if should_run 6; then
     fi
 
     run systemctl --user daemon-reload
+    info "加载多屏与超级屏显示服务（移除现有超级屏，保留文字服务）"
+    run systemctl --user restart uu-native-display
     run systemctl --user enable --now uu-native-display uu-native-text uu-native-bridge
     # A re-run brings in the new runtime.
     run systemctl --user restart uu-native-bridge
@@ -347,6 +354,7 @@ if should_run 7 && ((with_console)); then
     step_title 7 "安装控制台"
     run "$python" "$repo_dir/scripts/install-uu-settings.py"
     ok "已添加到应用菜单：UUWay 控制台"
+    info "显示页可管理多屏/超级屏；软件更新页可手动或自动检查更新（源码安装不支持 OTA 安装）"
 fi
 
 trap - ERR

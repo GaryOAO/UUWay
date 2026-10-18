@@ -35,6 +35,58 @@ assert GuardedDisplaySnapshot.canary.offset == SNAPSHOT_BYTES, 'canary must imme
 
 
 class ClientTests(unittest.TestCase):
+    def test_virtual_control_transports_only_bounded_reviewed_requests(self):
+        endpoint = self.directory / 'display.sock'
+        received = []
+        control = self.library.uurb_native_virtual_control
+        control.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+        control.restype = ctypes.c_int
+        payload = (ctypes.c_uint32 * 6)(1, 0, 0, 0, 0, 0)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as server:
+            server.bind(str(endpoint)); endpoint.chmod(0o600); server.listen(1); server.settimeout(3)
+            def reply():
+                with server.accept()[0] as client:
+                    client.settimeout(3)
+                    received.append(json.loads(client.recv(2048)))
+                    client.sendall(b'{"ok":true,"completed":true}')
+            worker = threading.Thread(target=reply); worker.start()
+            try:
+                status = control(str(endpoint).encode(), 0x30c004, payload, ctypes.sizeof(payload))
+            finally:
+                worker.join(timeout=4); endpoint.unlink()
+        self.assertEqual(status, 0)
+        self.assertEqual(received, [dict(version=1, op='virtual-control', code=0x30c004,
+                                        payload=list(bytes(payload)))])
+        for code, size in ((0xffffffff, 0), (0x30c005, 0), (0x30c004, 1025)):
+            self.assertEqual(control(str(endpoint).encode(), code, payload, size), 1)
+
+    def test_output_selector_survives_the_native_wire(self):
+        endpoint = self.directory / 'display.sock'
+        received = []
+        change = self.library.uurb_native_display_change
+        change.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p]
+        change.restype = ctypes.c_int
+        request = (ctypes.c_uint32 * 8)(1, 4, 7, 1280, 720, 0, 0, 0x101 | (1 << 16))
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as server:
+            server.bind(str(endpoint)); endpoint.chmod(0o600); server.listen(1); server.settimeout(3)
+            def reply():
+                with server.accept()[0] as client:
+                    client.settimeout(3)
+                    received.append(json.loads(client.recv(2048)))
+                    client.sendall(b'{"ok":true,"serial":8,"changed":true}')
+            worker = threading.Thread(target=reply); worker.start()
+            output = (ctypes.c_uint32 * 4)()
+            try:
+                status = change(str(endpoint).encode(), request, output)
+            finally:
+                worker.join(timeout=4); endpoint.unlink()
+        self.assertEqual(status, 0)
+        self.assertEqual(received, [dict(version=1, op='apply', output=1, serial=7, width=1280, height=720,
+                                         refresh=0, confirmation='gpu_frame', default_scope='global', force_reset=True)])
+        self.assertEqual(list(output), [1, 8, 1, 0])
+        request[7] = 1 << 16  # An index without its explicit selector is invalid.
+        self.assertEqual(change(str(endpoint).encode(), request, output), 1)
+
     @classmethod
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory(prefix='uurb-display-client-')
@@ -103,6 +155,18 @@ class ClientTests(unittest.TestCase):
             actual, output = self.exchange(json.dumps(dict(ok=False, error_type=kind)).encode())
             self.assertEqual(actual, status)
             self.assertEqual(output, b'Z' * SNAPSHOT_BYTES)
+
+    def test_144_hz_snapshot_roundtrips_without_silently_clamping_the_rate(self):
+        mode = dict(width=3840, height=2160, refresh=144, scales=[1])
+        value = dict(mode, ok=True, serial=7, scale=1., pending=False, modes=[mode])
+        status, output = self.exchange(json.dumps(value).encode())
+        self.assertEqual(status, 0)
+        snapshot = DisplaySnapshot.from_buffer_copy(output)
+        self.assertEqual(snapshot.current.refresh_millihz, 144000)
+        self.assertEqual(snapshot.modes[0].refresh_millihz, 144000)
+        status, output = self.exchange(json.dumps(dict(value, refresh=145)).encode())
+        self.assertNotEqual(status, 0)
+        self.assertEqual(output, b'Z' * SNAPSHOT_BYTES)
 
     def test_query_size_and_unsized_legacy_fail_without_writing(self):
         output = GuardedDisplaySnapshot()

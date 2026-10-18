@@ -63,6 +63,20 @@ def confirmation_request(record, topology, evidence, now_ns):
         return None
     if not 0 <= now_ns - evidence['accepted_ns'] <= 5_000_000_000:
         return None
+    if 'output' in record:
+        output = record['output']
+        requested_ns = pending.get('requested_ns')
+        started_ns = evidence.get('capture_started_ns')
+        if (type(output) is not int or not 0 <= output < 8 or evidence.get('screen_id', 0) != output or
+                type(requested_ns) is not int or requested_ns <= 0 or
+                type(started_ns) is not int or not requested_ns <= started_ns <= evidence['accepted_ns'] or
+                observed.get('mode') != target.get('mode') or observed.get('scale') != target.get('scale') or
+                any(evidence[key] != target.get(key) for key in ('width', 'height'))):
+            return None
+        # The selected guardian checks the complete observed topology and its
+        # serial again during confirm. A frame from any other screen cannot
+        # confirm this transaction, even if both happen to have the same size.
+        return dict(version=1, op='confirm', output=output, transaction=identifier, serial=observed['serial'])
     if (len(topology['modes']) != 1 or len(topology['layout']) != 1 or
             topology['generation'] != observed.get('serial') or observed.get('mode') != target.get('mode') or
             observed.get('scale') != target.get('scale')):
@@ -95,7 +109,7 @@ def confirm_rpc(endpoint, request):
 
 
 class DisplayConfirmation:
-    def __init__(self, directory, prefix, server, bundle, topology, read_private):
+    def __init__(self, directory, prefix, server, bundle, topology, read_private, screen_id=0):
         self.directory, self.prefix, self.server = directory, prefix, server
         self.capture_dll = bundle / 'app/bin/dxgi.dll'
         self.topology, self.read_private = topology, read_private
@@ -105,6 +119,7 @@ class DisplayConfirmation:
         self.generation = None
         self.evidence = None
         self.accepted_after_ns = 0
+        self.screen_id = screen_id
 
     def reset_for_topology(self, topology, after_ns=None):
         # Old accepted-frame records must not confirm a new mode, including
@@ -152,15 +167,27 @@ class DisplayConfirmation:
             if not isinstance(value, dict):
                 continue
             event = value.get('event')
+            # Each output has its own generation and confirmation journal.
+            screen = value.get('screen_id', 0)
+            if type(screen) is not int or screen < 0:
+                continue
             if event == 'capture_started':
+                if screen != self.screen_id:
+                    continue
                 generation = value.get('generation')
                 self.generation = generation if type(generation) is int and generation > 0 else None
                 self.evidence = None
-            elif event == 'capture_ended' and value.get('generation') == self.generation:
+            elif event == 'capture_ended' and screen == self.screen_id and value.get('generation') == self.generation:
                 self.generation = self.evidence = None
             elif event == 'capture_frame_accepted':
+                if screen != self.screen_id:
+                    continue
                 keys = {'generation', 'peer_pid', 'peer_start_ticks', 'width', 'height', 'sequence', 'accepted_ns'}
-                if (set(value) != keys | {'event'} or any(type(value[k]) is not int or value[k] <= 0 for k in keys) or
+                extra = set(value) - keys - {'event', 'screen_id', 'capture_started_ns'}
+                if (extra or not keys <= set(value) or
+                        any(type(value[k]) is not int or value[k] <= 0 for k in keys) or
+                        ('capture_started_ns' in value and (type(value['capture_started_ns']) is not int or
+                                                           not 0 < value['capture_started_ns'] <= value['accepted_ns'])) or
                         value['generation'] != self.generation or value['sequence'] != 1 or
                         value['accepted_ns'] < self.accepted_after_ns or
                         not 2 <= value['width'] <= 4096 or not 2 <= value['height'] <= 4096):
@@ -174,12 +201,16 @@ class DisplayConfirmation:
         self.consume()
         if not ready or not self.evidence:
             return None
-        evidence, self.evidence = self.evidence, None
+        evidence = self.evidence
         try:
-            record = self.read_private(endpoint.parent / 'display-transaction.json')
+            name = 'display-transaction.json' if self.screen_id == 0 else 'display-transaction.%d.json' % self.screen_id
+            record = self.read_private(endpoint.parent / name)
             request = confirmation_request(record, self.topology, evidence, time.monotonic_ns())
             if request is None:
+                if time.monotonic_ns() - evidence['accepted_ns'] > 5_000_000_000:
+                    self.evidence = None
                 return None
+            self.evidence = None  # An ambiguous RPC reply is never replayed.
             # Keep the process identity pinned for this one RPC. An already-dead
             # process, PID reuse, local fixture or other release cannot qualify.
             pidfd = os.pidfd_open(evidence['peer_pid'])
@@ -193,4 +224,17 @@ class DisplayConfirmation:
             finally:
                 os.close(pidfd)
         except (OSError, ValueError, KeyError, TypeError):
+            self.evidence = None
             return 'confirmation_unavailable'
+
+
+class MultiDisplayConfirmation:
+    def __init__(self, *arguments):
+        self.outputs = [DisplayConfirmation(*arguments, screen_id=index) for index in range(8)]
+
+    def reset_for_topology(self, *arguments):
+        self.outputs[0].reset_for_topology(*arguments)
+
+    def tick(self, ready, endpoint):
+        results = [output.tick(ready, endpoint) for output in self.outputs]
+        return next((result for result in results if result), None)

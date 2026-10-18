@@ -1,15 +1,15 @@
-## UUWay 1.3.0
+## 中文
 
-### 中文
+- 多显示器独立采集与模式切换，新增超级屏创建、独占、退出恢复及异常清理。
+- 控制台集中管理显示器和软件更新，支持手动/自动检查；确认后才下载安装。
+- 修复超级屏切换时失效的显示确认事务阻断采集，保留原生光标元数据；超级屏仍可能出现双光标。
+- 清理实验性 GPU 光标抑制和内容追踪，归档旧 VKMS 实验，更新安装流程与中英文文档。
+- 同时提供 NVIDIA NVENC 和 AMD VA-API 后端。Intel 单显卡、镜像布局、旋转及 GDM 登录界面仍不支持。
 
-- **发布包同时携带 NVIDIA 和 AMD 两套后端并自动选择。** 安装时优先验证 NVIDIA NVENC，失败后验证 AMD VA-API H.264/HEVC；首次成功的后端会写入用户运行时配置，刷新不会因环境短暂变化悄悄切换。可用 `UURB_BACKEND=nvidia|amd` 做诊断覆盖。
-- AMD 使用 host-memory copy 路径，Intel 仍不支持。UUWay 只检测驱动和编码能力，不会自动安装或切换显卡驱动。
-- AMD 后端由 [@AliyahZombie](https://github.com/AliyahZombie) 通过 [PR #4](https://github.com/GaryOAO/UUWay/pull/4) 贡献，感谢参与。
-- 发布物没有签名，仍提供同一 Release 内的 `SHA256SUMS`。
+## English
 
-### English
-
-- The package ships both NVIDIA and AMD backends. Setup probes NVIDIA NVENC first, then AMD VA-API H.264/HEVC, and persists the first working choice. Use `UURB_BACKEND=nvidia|amd` for diagnostics.
-- AMD uses a host-memory copy path; Intel-only systems are not supported. UUWay detects driver and encoder capability but does not install or switch GPU drivers.
-- The AMD backend was contributed by [@AliyahZombie](https://github.com/AliyahZombie) in [PR #4](https://github.com/GaryOAO/UUWay/pull/4).
-- The release is unsigned; `SHA256SUMS` is included for integrity checks.
+- Independent multi-display capture and mode changes, with Super Screen creation, exclusive mode, restoration and crash cleanup.
+- Console display management and manual/automatic update checks; installation always requires confirmation.
+- Fix stale display confirmations blocking capture after Super Screen transitions. Preserve native cursor metadata; duplicate Super Screen cursors remain a known issue.
+- Remove experimental GPU cursor suppression and content tracing, archive the old VKMS experiment, and update setup and documentation.
+- Includes NVIDIA NVENC and AMD VA-API. Intel-only encoding, mirroring, rotation and GDM capture remain unsupported.

@@ -418,6 +418,10 @@ __declspec(dllexport) DWORD WINAPI UurbInputBridgeDisplayDpiV2Version(void)
 {
     return UURB_DISPLAY_SNAPSHOT_VERSION;
 }
+__declspec(dllexport) DWORD WINAPI UurbInputBridgeVirtualVersion(void)
+{
+    return 1;
+}
 static BOOL native_image_range(BYTE *base, DWORD size, DWORD rva, size_t bytes)
 {
     MEMORY_BASIC_INFORMATION region;
@@ -448,10 +452,15 @@ static unsigned patch_native_module(HMODULE module)
     if (!directory.VirtualAddress || !native_image_range(base, size, directory.VirtualAddress, directory.Size)) return 0;
     IMAGE_IMPORT_DESCRIPTOR *table = (IMAGE_IMPORT_DESCRIPTOR *)(base + directory.VirtualAddress);
     unsigned patched = 0;
+    BOOL capture_cursor_module = native_cursor_is_capture_module(module);
+    unsigned cursor_patched = 0;
     for (DWORD i = 0; i < directory.Size / sizeof(*table) && table[i].Name; ++i) {
         if ((!native_image_string(base, size, table[i].Name, "user32.dll") &&
              !native_image_string(base, size, table[i].Name, "setupapi.dll") &&
+             !native_image_string(base, size, table[i].Name, "newdev.dll") &&
              !native_image_string(base, size, table[i].Name, "advapi32.dll") &&
+             !native_image_string(base, size, table[i].Name, "shell32.dll") &&
+             !native_image_string(base, size, table[i].Name, "netapi32.dll") &&
              !native_image_string(base, size, table[i].Name, "kernel32.dll") &&
              !native_image_string(base, size, table[i].Name, "kernelbase.dll")) || !table[i].FirstThunk) continue;
         for (DWORD offset = 0; offset <= size && sizeof(IMAGE_THUNK_DATA) <= size - offset;
@@ -469,13 +478,10 @@ static unsigned patch_native_module(HMODULE module)
             BOOL display_slot = FALSE;
             BOOL terminal_slot = native_terminal_hook_for((uintptr_t)slot->u1.Function) != NULL;
             void *display_hook = native_display_hook_for((uintptr_t)slot->u1.Function);
-            if (native_get_cursor_info && (uintptr_t)slot->u1.Function == native_get_cursor_info) {
-                original = native_get_cursor_info;
-                replacement = (void *)&native_cursor_info;
-                cursor_slot = TRUE;
-            } else if (!native_cursor_video_embedded && native_get_cursor_pos && (uintptr_t)slot->u1.Function == native_get_cursor_pos) {
-                original = native_get_cursor_pos;
-                replacement = (void *)&native_cursor_pos;
+            void *cursor_hook = native_cursor_hook_for((uintptr_t)slot->u1.Function, capture_cursor_module);
+            if (cursor_hook) {
+                original = (uintptr_t)slot->u1.Function;
+                replacement = cursor_hook;
                 cursor_slot = TRUE;
             } else if (display_hook || (display_getproc && (uintptr_t)slot->u1.Function == (uintptr_t)display_getproc)) {
                 original = (uintptr_t)slot->u1.Function;
@@ -491,10 +497,18 @@ static unsigned patch_native_module(HMODULE module)
             if (previous == (void *)original) {
                 if (terminal_slot) InterlockedIncrement(&native_terminal_import_slots);
                 else if (display_slot) InterlockedIncrement(&native_display_import_slots);
-                else if (cursor_slot) InterlockedIncrement(&native_cursor_import_slots);
+                else if (cursor_slot) { InterlockedIncrement(&native_cursor_import_slots); ++cursor_patched; }
                 else ++patched;
             }
         }
+    }
+    if (cursor_patched) {
+        char message[256];
+        snprintf(message, sizeof(message), "UURB_NATIVE_CURSOR {\"event\":\"module_bound\",\"pid\":%lu,"
+                 "\"role\":\"%s\",\"slots\":%u,\"capture_suppressed\":%s}\r\n",
+                 (unsigned long)GetCurrentProcessId(), capture_cursor_module ? "capture" : "client",
+                 cursor_patched, "false");
+        write_log(message);
     }
     return patched;
 }
@@ -555,14 +569,20 @@ static DWORD WINAPI initialize_bridge(void *unused)
         InterlockedExchange(&native_ready, 2);
         return 1;
     }
+    native_version_capability_enabled = native_display_adapter_enabled &&
+        native_display_reconfigure_enabled && native_virtual_control_api != NULL;
     int cursor_status = native_cursor_initialize();
     if (cursor_status < 0) {
         write_log("UURB_NATIVE_CURSOR {\"initialization_failed\":true}\r\n");
         InterlockedExchange(&native_ready, 2);
         return 1;
     }
+    /* DriverHelper.exe is launched by UU to perform the IDD SetupAPI
+     * handshake and has no SendInput import.  Display hooks still need to be
+     * installed in that child, so patch vendor modules independently of the
+     * input path. */
+    unsigned additional = patch_native_vendor_modules();
     if (input_patched && original_send_input) {
-        unsigned additional = patch_native_vendor_modules();
         char message[128];
         snprintf(message, sizeof(message), "UURB_NATIVE_IMPORTS {\"additional_sendinput_slots\":%u}\r\n", additional);
         write_log(message);
@@ -596,6 +616,7 @@ static DWORD WINAPI initialize_bridge(void *unused)
      * slots are untouched, including unrelated third-party hooks. */
     if (input_patched && original_send_input) for (;;) {
         Sleep(500);
+        native_multi_poll_changes();
         LONG cursor_before = native_cursor_import_slots;
         unsigned additional = patch_native_vendor_modules();
         if (native_cursor_import_slots != cursor_before) {

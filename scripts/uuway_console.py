@@ -33,6 +33,7 @@ MAX_JSON = 65536
 MAX_IMAGE = 16 * 1024 * 1024
 MAX_DESKTOP_SEND_FILES = 256
 MAX_DESKTOP_SEND_PATH = 4096
+UPDATE_INTERVAL = 6 * 3600
 SERVICE_NAMES = {
     "uu-native-bridge.service": "远程连接",
     "uu-native-text.service": "文字兼容服务",
@@ -68,6 +69,27 @@ def _optional_json(path):
         return None
 
 
+def _optional_object(path):
+    value = _optional_json(path)
+    return value if isinstance(value, dict) else {}
+
+
+def _update_info(value):
+    """Only retain bounded UI fields from the local cache or CLI response."""
+    if not isinstance(value, dict):
+        return {}
+    result = {key: value[key] for key in ('installed', 'latest', 'tag', 'published')
+              if isinstance(value.get(key), str) and len(value[key]) <= 128}
+    result.update({key: value.get(key) is True for key in ('available', 'installable')})
+    checked = value.get('checked_at', 0)
+    if type(checked) in (int, float) and 0 < checked <= time.time() + 300:
+        result['checked_at'] = checked
+    url = value.get('url')
+    if isinstance(url, str) and url.startswith('https://github.com/GaryOAO/UUWay/releases/') and len(url) <= 512:
+        result['url'] = url
+    return result
+
+
 def _write_json(path, value):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     _private_dir(path.parent)
@@ -100,11 +122,49 @@ def _runtime():
     if not isinstance(value, dict) or value.get("schema") != 1:
         return None
     names = {"schema", "prefix", "bundle", "restore_state", "state_parent", "text_socket", "cursor_mode"}
-    if set(value) != names or value.get("cursor_mode") not in {"embedded", "metadata", "composited"}:
+    # New installers persist the selected encoder backend in the same private
+    # handoff. Keep older configs valid while allowing the console to report a
+    # running runtime instead of treating the extra capability field as a
+    # malformed configuration.
+    if not set(value).issubset(names | {"backend"}) or not names.issubset(value) or \
+            value.get("cursor_mode") not in {"embedded", "metadata", "composited"} or \
+            ("backend" in value and value["backend"] not in {"nvidia", "amd"}):
         return None
     if any(not isinstance(value[name], str) or not Path(value[name]).is_absolute()
            for name in names - {"schema", "cursor_mode"}):
         return None
+    return value
+
+
+def _cli_command():
+    saved = _optional_object(CONFIG_DIR / 'console-tools.json')
+    # The console's own tree wins for package installs. Immutable user copies
+    # need the source installer mapping before any unrelated system package.
+    candidates = [ROOT / 'scripts/uuway_cli.py']
+    if isinstance(saved.get('cli'), str):
+        candidates.append(Path(saved['cli']))
+    candidates.append(Path('/usr/lib/uuway/scripts/uuway_cli.py'))
+    for candidate in candidates:
+        if candidate.is_absolute() and candidate.is_file():
+            return ['/usr/bin/python3', '-u', str(candidate)]
+    raise ValueError('没有找到 UUWay 更新工具，请重新安装控制台')
+
+
+def _update_command(action, *, machine=True, install=False):
+    command = _cli_command() + ['update', action]
+    if machine:
+        command.append('--json')
+    if install:
+        command += ['--yes', '--allow-no-recovery']
+    result = subprocess.run(command, capture_output=True, text=True, timeout=1800 if install else 70,
+                            stdin=subprocess.DEVNULL)
+    if result.returncode:
+        raise ValueError((result.stderr or result.stdout or '更新命令未完成')[-2000:].strip())
+    if not machine:
+        return result.stdout[-16000:]
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise ValueError('更新工具返回了无效状态，请更新控制台')
     return value
 
 
@@ -308,13 +368,26 @@ def _connection_state(runtime, services):
     }.get(state, ("暂时无法读取状态", "请刷新状态，或到诊断页查看本机服务。", "warning", None))
 
 
-def _collect_snapshot():
+def _collect_snapshot(connector=None):
     runtime = _runtime()
     result = {"runtime": runtime, "services": _service_properties(),
               "mappings": _mapping_rows(runtime), "download": _configured_download_directory(),
               "display": None, "display_error": None}
     try:
         result["display"] = _display_request(runtime, {"version": 1, "op": "inspect"})
+        # Super screens belong to the live UU native bridge lifetime.  Keep
+        # this marker in the console snapshot so the UI cannot create an
+        # orphaned Mutter session while the remote service is stopped.
+        result["display"]["connection_bound"] = (
+            result["services"].get("uu-native-bridge.service", {}).get("ActiveState") == "active")
+        catalogue = result["display"]
+        selected = next((item for item in catalogue.get("monitors", [])
+                         if item.get("connector") == connector), None)
+        if selected and selected["index"]:
+            result["display"] = _display_request(runtime, {"version": 1, "op": "inspect", "output": selected["index"]})
+            result["display"]["output"] = selected["index"]
+            result["display"]["connection_bound"] = (
+                result["services"].get("uu-native-bridge.service", {}).get("ActiveState") == "active")
     except (OSError, ValueError, KeyError, TypeError) as error:
         result["display_error"] = str(error)
     return result
@@ -344,7 +417,7 @@ def _display_request(runtime, request):
         raise ValueError("显示服务接口不可核实")
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | getattr(socket, "SOCK_CLOEXEC", 0))
     try:
-        sock.settimeout(3)
+        sock.settimeout(15 if request.get("op", "").startswith("virtual-") else 3)
         sock.connect(str(path))
         sock.send(json.dumps(request, separators=(",", ":")).encode())
         response = json.loads(sock.recv(65536))
@@ -408,6 +481,10 @@ def collect_status():
         try:
             display = _display_request(runtime, {"version": 1, "op": "inspect"})
             lines.append(f"  显示：{display['width']} × {display['height']} · {display['refresh']:.2f} Hz · 缩放 {display['scale'] * 100:.0f}%")
+            monitors = display.get('monitors', [])
+            lines.append(f"  多屏：{len(monitors) or 1} 块活动显示器")
+            virtual = display.get('virtual_displays', {})
+            lines.append(f"  超级屏：{'可用' if virtual.get('supported') else '需更新显示服务'} · {len(virtual.get('screens', []))} 块已创建")
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
             lines.append("  显示：显示回滚服务尚未提供可核实状态")
     else:
@@ -429,6 +506,19 @@ class Console:
         self.display_state = self.display_transaction = None
         self.display_deadline = 0
         self.display_generation = 0
+        self.display_output = 0
+        self.display_connector = None
+        self.display_monitors = []
+        self.updating_outputs = False
+        self.virtual_busy = False
+        self.update_checking = self.update_installing = self.update_status_busy = False
+        self.update_external_busy = self.update_rollback_available = False
+        self.update_auto_saved = True
+        self.update_auto_reverting = False
+        self.update_notified_tag = None
+        self.last_update_result = None
+        self.latest_update = _update_info(_optional_json(CONFIG_DIR / 'console-update-cache.json'))
+        self.update_attempt_at = 0
         self.display_dirty = self.updating_display = False
         self.input_original = None
         self.restart_reasons = set()
@@ -557,6 +647,7 @@ class Console:
         self.refreshing = True
         self.refresh_button.set_sensitive(False)
         generation = self.display_generation
+        connector = self.display_connector
         def done(value, error):
             self.refreshing = False
             self.refresh_button.set_sensitive(True)
@@ -597,7 +688,7 @@ class Console:
                 self._show_display(value["display"], force_display)
             self.stop_button.set_sensitive(not self.service_busy and operation == "restart")
             self.restart_button.set_sensitive(not self.service_busy and bool(value["runtime"]))
-        self._async(_collect_snapshot, done)
+        self._async(lambda: _collect_snapshot(connector), done)
 
     def _update_mapping_label(self, rows=None):
         if rows is None:
@@ -847,15 +938,149 @@ class Console:
     def display_inspect(self, *_):
         self.refresh(force_display=True)
 
+    def display_select(self, *_):
+        if self.updating_outputs:
+            return
+        connector = self.display_outputs.get_active_id()
+        if not connector or connector == self.display_connector:
+            return
+        if self.display_busy or self.display_transaction:
+            self.updating_outputs = True
+            self.display_outputs.set_active_id(self.display_connector)
+            self.updating_outputs = False
+            return
+        self.display_connector = connector
+        self.display_generation += 1
+        self.display_state = None
+        self.display_dirty = False
+        self.refresh(force_display=True)
+
+    def _show_outputs(self, value):
+        self.display_monitors = value.get("monitors", [])
+        self.display_output = value.get("output", 0)
+        selected = next((item for item in self.display_monitors if item["index"] == self.display_output), None)
+        self.display_connector = selected["connector"] if selected else None
+        self.updating_outputs = True
+        self.display_outputs.remove_all()
+        for item in self.display_monitors:
+            label = f"显示器 {item['index'] + 1} · {item.get('friendly') or item['connector']}"
+            self.display_outputs.append(item["connector"], label)
+        if self.display_connector:
+            self.display_outputs.set_active_id(self.display_connector)
+        self.updating_outputs = False
+        self.display_outputs.set_sensitive(len(self.display_monitors) > 1 and not self.display_busy and
+                                           not value.get("pending") and not self.display_transaction)
+        virtual = value.get("virtual_displays", {})
+        self.output_catalogue = virtual.get('outputs', [])
+        for child in self.output_list.get_children():
+            self.output_list.remove(child)
+        kind_names = {'physical': '物理显示器', 'vkms': 'VKMS 测试屏', 'mutter': '外部 Mutter 虚拟屏',
+                      'super_screen': 'UU 超级屏'}
+        for output in self.output_catalogue:
+            row = self.box(False, 12)
+            details = self.box(spacing=3)
+            details.pack_start(self.label(f"{output['connector']} · {kind_names.get(output.get('kind'), '显示器')}",
+                                          'row-title'), False, False, 0)
+            geometry = (f"{output.get('width')} × {output.get('height')} · {output.get('refresh', 0):.1f} Hz"
+                        if output.get('enabled') and output.get('refresh') else '已停用')
+            details.pack_start(self.label(geometry, 'muted'), False, False, 0)
+            row.pack_start(details, True, True, 0)
+            operation = self.button('移除' if output.get('managed') else '停用' if output.get('enabled') else '启用',
+                                    lambda _, item=dict(output): self.output_action(item))
+            operation.set_sensitive(not self.virtual_busy and not value.get('pending'))
+            row.pack_end(operation, False, False, 0)
+            self.output_list.pack_start(row, False, False, 0)
+        self.output_list.show_all()
+        screens = virtual.get("screens", [])
+        self.virtual_screens = screens
+        self.virtual_remove_select.remove_all()
+        for screen in screens:
+            self.virtual_remove_select.append(str(screen["slot"]), f"超级屏 {screen['slot'] + 1} · {screen['connector']}")
+        self.virtual_remove_select.set_active(0 if screens else -1)
+        enabled = (virtual.get("supported", False) and value.get("connection_bound", True) and
+                   not self.virtual_busy and not value.get("pending"))
+        self.virtual_create_button.set_sensitive(enabled and len(self.display_monitors) < 8)
+        self.virtual_remove_button.set_sensitive(bool(enabled and screens))
+        self.virtual_reset_button.set_sensitive(bool(not self.virtual_busy and
+            (screens or any(o.get('enabled') and o.get('kind') in ('vkms','mutter') for o in self.output_catalogue))))
+        self.virtual_hint.set_text((f"超级屏独占显示中，其余显示器已临时关闭；退出后恢复。" if virtual.get('exclusive') else
+                                  f"已创建 {len(screens)} 块超级屏，可在 UU 中切换；断线后自动回收。") if screens else
+                                  "无需额外的显示器或诱骗器，即可扩展远程工作区域。" if enabled else
+                                  ("请先启动 UU 远程服务，超级屏会在断线或服务退出后自动清理。"
+                                   if virtual.get("supported", False) and not value.get("connection_bound", True)
+                                   else "请启动或更新显示服务，以使用超级屏。"))
+
+    def output_action(self, output=None):
+        if self.virtual_busy or self.display_busy or self.display_transaction:
+            return
+        self.virtual_busy = True
+        runtime = _runtime()
+        def work():
+            if output is None:
+                result = _display_request(runtime, dict(version=1, op='virtual-release'))
+                if result.get('failed'):
+                    raise ValueError('部分超级屏尚未移除，请查看诊断日志')
+                for item in self.output_catalogue:
+                    if item.get('enabled') and item.get('kind') in ('vkms','mutter') and not item.get('managed'):
+                        _display_request(runtime, dict(version=1,op='virtual-output',connector=item['connector'],enabled=False))
+                return result
+            if output.get('managed'):
+                return _display_request(runtime, dict(version=1,op='virtual-remove',slot=output['slot']))
+            return _display_request(runtime, dict(version=1,op='virtual-output',connector=output['connector'],
+                                                  enabled=not output.get('enabled')))
+        def done(value, error):
+            self.virtual_busy = False
+            self.display_connector = None
+            self.message(f'显示器操作未完成：{error}' if error else '显示器状态已更新，原有屏幕已保留。',
+                         'error' if error else 'success')
+            self.refresh(force_display=True)
+        self._async(work, done)
+
+    def virtual_action(self, remove=False):
+        if self.virtual_busy or self.display_busy or self.display_transaction:
+            return
+        if remove:
+            slot = self.virtual_remove_select.get_active_id()
+            if slot is None:
+                return
+            request = {"version": 1, "op": "virtual-remove", "slot": int(slot)}
+        else:
+            slots = {item["slot"] for item in self.virtual_screens}
+            slot = next((index for index in range(8) if index not in slots), None)
+            index = self.virtual_resolution.get_active()
+            if slot is None or not 0 <= index < len(self.virtual_presets):
+                return
+            first = self.virtual_presets[index]
+            modes = [first] + [mode for mode in self.virtual_presets if mode != first]
+            request = {"version": 1, "op": "virtual-create", "slot": slot, "modes": modes}
+        self.virtual_busy = True
+        self.virtual_create_button.set_sensitive(False)
+        self.virtual_remove_button.set_sensitive(False)
+        self.message("正在移除超级屏…" if remove else "正在创建超级屏…", "warning")
+        def done(value, error):
+            self.virtual_busy = False
+            self.display_connector = None if remove else value.get("connector") if value else self.display_connector
+            self.display_generation += 1
+            self.display_state = None
+            self.display_dirty = False
+            self.message(f"超级屏操作未完成：{error}" if error else
+                         "超级屏已移除。" if remove else "超级屏已创建，请在 UU 中选择新增显示器。",
+                         "error" if error else "success")
+            self.refresh(force_display=True)
+        self._async(lambda: _display_request(_runtime(), request), done)
+
     def _show_display(self, value, force=False):
         if value is None:
             self.display_state = None
             self.display_current.set_text("暂时无法读取显示器")
             self.display_summary.set_text("未就绪")
-            self.display_detail.set_text("启动远程服务后重试；多显示器或未登录桌面也可能导致模式不可用。")
+            self.display_detail.set_text("请启动显示服务，并确认 GNOME Wayland 桌面已登录。")
             self.display_modes.set_sensitive(False)
             self.display_scales.set_sensitive(False)
             self.display_apply_button.set_sensitive(False)
+            self.display_outputs.set_sensitive(False)
+            self.virtual_create_button.set_sensitive(False)
+            self.virtual_remove_button.set_sensitive(False)
             return
         self.display_current.set_text(f"{value['width']} × {value['height']}")
         self.display_detail.set_text(f"{value['refresh']:g} Hz  ·  {value['scale'] * 100:g}% 缩放")
@@ -863,6 +1088,7 @@ class Console:
         if self.display_transaction and not value.get("pending"):
             self.display_transaction = None
             self.confirm_revealer.set_reveal_child(False)
+        self._show_outputs(value)
         if not force and value == self.display_state:
             self._display_changed()
             return
@@ -941,10 +1167,13 @@ class Console:
         self._display_operation(request, done)
 
     def _display_operation(self, request, success):
+        if self.display_output:
+            request = dict(request, output=self.display_output)
         self.display_busy = True
         self.display_generation += 1
         self.display_state = None
-        for item in (self.display_apply_button, self.display_modes, self.display_scales, self.keep_button, self.revert_button):
+        for item in (self.display_outputs, self.display_apply_button, self.display_modes, self.display_scales,
+                     self.keep_button, self.revert_button, self.virtual_create_button, self.virtual_remove_button):
             item.set_sensitive(False)
         runtime = _runtime()
         def done(value, error):
@@ -1042,6 +1271,7 @@ class Console:
                  ("display", "显示与外观", "video-display-symbolic"),
                  ("input", "鼠标与输入", "input-mouse-symbolic"),
                  ("files", "文件传输", "folder-symbolic"),
+                 ("updates", "软件更新", "software-update-available-symbolic"),
                  ("diagnostics", "诊断", "utilities-system-monitor-symbolic"))
         for name, title, icon in pages:
             row = Gtk.ListBoxRow()
@@ -1061,6 +1291,7 @@ class Console:
         self._build_display()
         self._build_input()
         self._build_files()
+        self._build_updates()
         self._build_diagnostics()
 
         self.restart_revealer = Gtk.Revealer()
@@ -1088,13 +1319,188 @@ class Console:
         self.refresh()
         self.timers.append(self.GLib.timeout_add_seconds(5, self._poll))
         self.timers.append(self.GLib.timeout_add_seconds(1, self._tick_confirmation))
+        self.timers.append(self.GLib.timeout_add_seconds(30, self._poll_updates))
+        self.refresh_update_status()
 
     def _poll(self):
         self.refresh()
         return not self.closed
 
+    def _render_update(self):
+        value = self.latest_update
+        installed = value.get('installed') or '源码构建'
+        self.update_version.set_text(f'当前版本：{installed}' +
+                                     (f" · 最新正式版：{value['latest']}" if value.get('latest') else ''))
+        checked = value.get('checked_at')
+        self.update_checked.set_text('上次检查：' + time.strftime('%Y-%m-%d %H:%M', time.localtime(checked))
+                                     if checked else '尚未检查更新')
+        busy = self.update_checking or self.update_installing or self.update_external_busy
+        self.update_check_button.set_sensitive(not busy)
+        self.update_install_button.set_sensitive(bool(value.get('available') and value.get('installable') and
+                                                      not busy))
+        self.update_rollback_button.set_sensitive(self.update_rollback_available and not busy)
+        self.update_notes.set_uri(value.get('url') or 'https://github.com/GaryOAO/UUWay/releases')
+
+    def check_update(self, automatic=False):
+        if self.update_checking or self.update_installing or self.update_external_busy:
+            return
+        self.update_checking = True
+        self.update_attempt_at = time.time()
+        self.update_result.set_text('正在检查更新…')
+        self._render_update()
+        def done(value, error):
+            self.update_checking = False
+            if error:
+                self.update_result.set_text(f'检查失败：{error}')
+            else:
+                self.latest_update = _update_info(value)
+                try:
+                    _write_json(CONFIG_DIR / 'console-update-cache.json', self.latest_update)
+                except (OSError, ValueError):
+                    pass
+                self.update_result.set_text('发现新版本，可以下载安装。' if value.get('available') else
+                                            '源码构建可查看正式版发布说明。' if not value.get('installable') else
+                                            '当前已是最新版本。')
+            self._render_update()
+            if automatic and not error and self.latest_update.get('available'):
+                tag = self.latest_update.get('tag') or self.latest_update.get('latest')
+                if tag and tag != self.update_notified_tag:
+                    self.update_notified_tag = tag
+                    try:
+                        self._save_update_preferences()
+                    except (OSError, ValueError):
+                        pass
+                    self.navigate('updates')
+                    self.window.present()
+                    self.install_update(automatic=True)
+        self._async(lambda: _update_command('check'), done)
+
+    def _save_update_preferences(self):
+        _write_json(CONFIG_DIR / 'console-updates.json', dict(version=1,
+                    auto_check=self.update_auto.get_active(), notified_tag=self.update_notified_tag))
+
+    def update_auto_changed(self, switch, unused):
+        if self.update_auto_reverting:
+            return
+        try:
+            self._save_update_preferences()
+            self.update_auto_saved = switch.get_active()
+        except (OSError, ValueError) as error:
+            self.update_auto_reverting = True
+            switch.set_active(self.update_auto_saved)
+            self.update_auto_reverting = False
+            self.message(f'更新偏好未保存：{error}', 'error')
+
+    def refresh_update_status(self, manual=False):
+        if self.update_status_busy:
+            return
+        self.update_status_busy = True
+        def done(value, error):
+            self.update_status_busy = False
+            if error:
+                if manual:
+                    self.update_result.set_text(f'无法读取更新状态：{error}')
+            else:
+                self.update_external_busy = value.get('busy') is True
+                self.update_rollback_available = value.get('rollback_available') is True
+                if 'installed' in value:
+                    if self.latest_update.get('installed') != value['installed']:
+                        self.latest_update['available'] = False
+                    self.latest_update['installed'] = value['installed']
+                    self.latest_update['installable'] = value.get('installable') is True
+                result = value.get('result')
+                result = result if isinstance(result, dict) else {}
+                outcome = {'success':'更新成功', 'rolled_back':'更新未成功，已回滚',
+                           'not_started':'更新未开始', 'rollback_failed':'更新失败，回滚未完成', 'failed':'更新失败'}
+                if value.get('busy'):
+                    self.update_result.set_text('更新正在后台进行，重连后可在这里查看结果。')
+                elif result and (manual or result != self.last_update_result) and not (self.update_checking or self.update_installing):
+                    title = ('已回滚到之前的版本' if result.get('outcome') == 'rolled_back' and result.get('manual') else
+                             outcome.get(result.get('outcome'), '上次更新已结束'))
+                    self.update_result.set_text(title +
+                                                ('：' + str(result.get('message','')) if result.get('message') else ''))
+                    self.last_update_result = result
+                progress = value.get('progress', [])
+                self.update_progress.get_buffer().set_text('\n'.join(line for line in progress if isinstance(line, str))[-12000:]
+                                                            if isinstance(progress, list) else '')
+            self._render_update()
+        self._async(lambda: _update_command('status'), done)
+
+    def install_update(self, rollback=False, automatic=False):
+        if self.update_installing or self.update_checking or self.update_external_busy:
+            return
+        if rollback:
+            if not self.update_rollback_available:
+                return
+        elif not self.latest_update.get('available') or not self.latest_update.get('installable'):
+            return
+        detail = ('将恢复更新前的版本和配置，当前连接会断开几分钟。' if rollback else
+                  f"当前版本：{self.latest_update.get('installed') or '未知'}；新版本：{self.latest_update.get('latest') or '最新正式版'}。"
+                  '确认后下载安装，备份并重启远程服务，当前连接会断开几分钟。失败时自动回滚。')
+        title = ('回滚 UUWay？' if rollback else f"发现 UUWay 新版本 {self.latest_update.get('latest', '')}"
+                 if automatic else '安装 UUWay 更新？')
+        if not self._confirm(title,
+                detail + '若未设置桌面自动恢复且桌面崩溃，需要在本机重新登录。是否继续？',
+                '回滚版本' if rollback else '下载安装'):
+            return
+        self.update_installing = True
+        self.update_result.set_text('正在准备回滚，随后会请求管理员授权…' if rollback else
+                                    '正在下载并校验更新，随后会请求管理员授权…')
+        self._render_update()
+        def done(value, error):
+            self.update_installing = False
+            if error:
+                self.update_result.set_text(f'更新未完成：{error}')
+            self._render_update()
+            self.refresh_update_status()
+        self._async(lambda: _update_command('rollback' if rollback else 'install', machine=False, install=True), done)
+
+    def _poll_updates(self):
+        if self.closed:
+            return False
+        self.refresh_update_status()
+        last = max(self.latest_update.get('checked_at', 0), self.update_attempt_at)
+        if self.update_auto.get_active() and time.time() - last >= UPDATE_INTERVAL:
+            self.check_update(automatic=True)
+        return True
+
+    def _build_updates(self):
+        Gtk = self.Gtk
+        page = self.page('updates', '软件更新', '检查 UUWay 正式版；安装时保留备份，失败自动回滚。')
+        card = self.card('版本与更新', '自动检查仅查询版本，下载安装需要你点击确认。')
+        self.update_version = self.label('正在读取版本…', 'row-title')
+        card.pack_start(self.update_version, False, False, 0)
+        self.update_checked = self.label('尚未检查更新', 'muted')
+        card.pack_start(self.update_checked, False, False, 0)
+        self.update_result = self.label('点击检查更新，或开启自动检查。', 'body')
+        card.pack_start(self.update_result, False, False, 0)
+        self.update_check_button = self.button('检查更新', lambda *_: self.check_update(), 'primary')
+        self.update_install_button = self.button('下载安装', lambda *_: self.install_update())
+        self.update_notes = Gtk.LinkButton.new_with_label('https://github.com/GaryOAO/UUWay/releases', '查看更新说明')
+        card.pack_start(self.actions(self.update_check_button, self.update_install_button, self.update_notes), False, False, 0)
+        self.update_auto = Gtk.Switch()
+        prefs = _optional_object(CONFIG_DIR / 'console-updates.json')
+        self.update_auto.set_active(prefs.get('auto_check', True) is True)
+        self.update_auto_saved = self.update_auto.get_active()
+        self.update_notified_tag = prefs.get('notified_tag') if isinstance(prefs.get('notified_tag'), str) else None
+        self.update_auto.connect('notify::active', self.update_auto_changed)
+        self.setting_row(card, '自动检查更新', '打开期间每 6 小时检查；发现新版本弹出提示，确认后才安装', self.update_auto)
+        page.pack_start(card, False, False, 0)
+        progress = self.card('更新进度与结果', '安装任务在后台运行，关闭控制台或远程断线不会停止已启动的安装。')
+        self.update_progress = Gtk.TextView()
+        self.update_progress.set_editable(False)
+        self.update_progress.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        scroll = Gtk.ScrolledWindow(); scroll.set_min_content_height(150)
+        scroll.add(self.update_progress)
+        progress.pack_start(scroll, True, True, 0)
+        self.update_rollback_button = self.button('回滚版本', lambda *_: self.install_update(rollback=True))
+        progress.pack_start(self.actions(self.button('刷新进度', lambda *_: self.refresh_update_status(manual=True), 'quiet'),
+                                         self.update_rollback_button), False, False, 0)
+        page.pack_start(progress, True, True, 0)
+        self._render_update()
+
     def _resize(self, window, allocation):
-        compact = allocation.width < 960
+        compact = window.get_size().width < 960
         if compact == self.compact:
             return
         self.compact = compact
@@ -1168,6 +1574,13 @@ class Console:
         Gtk = self.Gtk
         page = self.page("display", "显示与外观", "让远程画面和这台设备一样，恰到好处。")
         modes = self.card("显示器", "选择本机支持的模式；试用后确认，超时自动恢复。")
+        self.display_outputs = Gtk.ComboBoxText()
+        self.display_outputs.set_size_request(246, -1)
+        from gi.repository import Pango
+        self.display_outputs.get_cells()[0].set_property("ellipsize", Pango.EllipsizeMode.END)
+        self.display_outputs.get_cells()[0].set_property("max-width-chars", 20)
+        self.display_outputs.connect("changed", self.display_select)
+        self.setting_row(modes, "选择显示器", "仅调整所选屏幕", self.display_outputs)
         current = self.box(False, 16, "display-readout")
         icon = Gtk.Image.new_from_icon_name("video-display-symbolic", Gtk.IconSize.DIALOG)
         current.pack_start(icon, False, False, 0)
@@ -1200,6 +1613,34 @@ class Console:
         self.confirm_revealer.add(confirm)
         modes.pack_start(self.confirm_revealer, False, False, 0)
         page.pack_start(modes, False, False, 0)
+
+        virtual = self.card("超级屏", "创建 Linux 虚拟显示器，也可通过 UU 的超级屏入口管理。")
+        self.virtual_presets = [[1920, 1080, 60], [2560, 1440, 60], [3840, 2160, 60], [1280, 720, 60]]
+        self.virtual_screens = []
+        self.virtual_resolution = Gtk.ComboBoxText()
+        for width, height, refresh in self.virtual_presets:
+            self.virtual_resolution.append_text(f"{width} × {height} · {refresh} Hz")
+        self.virtual_resolution.set_active(0)
+        self.setting_row(virtual, "初始显示模式", "创建后可在显示器设置中调整", self.virtual_resolution)
+        self.virtual_create_button = self.button("创建超级屏", lambda *_: self.virtual_action(), "primary")
+        virtual.pack_start(self.actions(self.virtual_create_button), False, False, 0)
+        self.virtual_hint = self.label("正在检查超级屏能力…", "muted")
+        virtual.pack_start(self.virtual_hint, False, False, 0)
+        self.virtual_remove_select = Gtk.ComboBoxText()
+        self.virtual_remove_select.get_cells()[0].set_property("ellipsize", Pango.EllipsizeMode.END)
+        self.virtual_remove_select.get_cells()[0].set_property("max-width-chars", 20)
+        self.setting_row(virtual, "已创建的超级屏", "移除后窗口回到其他屏幕", self.virtual_remove_select)
+        self.virtual_remove_button = self.button("移除所选超级屏", lambda *_: self.virtual_action(True))
+        virtual.pack_start(self.actions(self.virtual_remove_button), False, False, 0)
+        self.virtual_reset_button = self.button('恢复原屏并清理虚拟屏', lambda *_: self.output_action())
+        virtual.pack_start(self.actions(self.virtual_reset_button), False, False, 0)
+        page.pack_start(virtual, False, False, 0)
+
+        outputs = self.card('显示器状态', '查看物理屏、超级屏和外部测试屏；至少保留一个活动输出。')
+        self.output_catalogue = []
+        self.output_list = self.box(spacing=12)
+        outputs.pack_start(self.output_list, False, False, 0)
+        page.pack_start(outputs, False, False, 0)
 
         cover = self.card("设备封面", "在 UU 客户端中显示的桌面缩略图。")
         self.image_preview = Gtk.Image()

@@ -88,6 +88,20 @@ def run():
         if os.path.exists(name):
             os.unlink(name)
     migration = retire_legacy_launchers()
+    config = Path.home() / '.config/uurb'
+    _safe_directory(config)
+    tools = config / 'console-tools.json'
+    if tools.is_symlink():
+        raise ValueError('Refusing a symlinked console tools configuration')
+    import json
+    fd, temporary = tempfile.mkstemp(prefix='.console-tools-', dir=config)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(dict(version=1, cli=str(ROOT / 'scripts/uuway_cli.py')), stream)
+        os.replace(temporary, tools)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     print("UUWay 控制台已安装；菜单入口：UUWay 控制台；未重启服务")
     if migration["changed"]:
         print("旧 UU 入口已停用并备份：" + migration["backup"])

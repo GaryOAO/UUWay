@@ -1,7 +1,7 @@
 """Durable, independently timed rollback for native display transactions."""
 import secrets
 import time
-from native_display_config import DisplayTransaction
+from native_display_config import DisplayTransaction, MAX_REFRESH_HZ
 from native_runtime_state import read_private, write_private
 
 
@@ -31,6 +31,8 @@ class DisplayGuardian:
             self.registry_default = self.valid_default(record.get('registry_default'))
             if record.get('identity') != self.identity:
                 # Never restore a pre-reboot or another compositor's layout.
+                if getattr(backend, 'ephemeral', False):
+                    self.registry_default = None
                 self.save(None)
             elif record.get('pending') is not None:
                 self.transaction.pending = record['pending']
@@ -47,7 +49,7 @@ class DisplayGuardian:
         if (not isinstance(value, dict) or set(value) != {'width', 'height', 'refresh', 'scale', 'scope'} or
             any(type(value[k]) is not int or not 2 <= value[k] <= 4096 or value[k] % 2 for k in ('width', 'height')) or
             any(type(value[k]) not in (int, float) or not math.isfinite(value[k]) for k in ('refresh', 'scale')) or
-            not 1 <= value['refresh'] <= 120 or not 0.5 <= value['scale'] <= 4 or value['scope'] not in ('user', 'global')):
+            not 1 <= value['refresh'] <= MAX_REFRESH_HZ or not 0.5 <= value['scale'] <= 4 or value['scope'] not in ('user', 'global')):
             raise ValueError('Unreviewed UU display default')
         return dict(value)
 
@@ -82,7 +84,8 @@ class DisplayGuardian:
         try:
             write_private(self.journal, dict(version=1, identity=self.identity, transaction=self.identifier,
                                             confirmation_policy=self.confirmation_policy, pending=pending,
-                                            registry_default=default, registry_candidate=self.registry_candidate if pending is not None else None))
+                                            registry_default=default, registry_candidate=self.registry_candidate if pending is not None else None,
+                                            **({'output': self.backend.output_index} if hasattr(self.backend, 'output_index') else {})))
         except Exception as error:
             if self.registry_candidate is not None:
                 raise DisplayDefaultWriteError('UU display-default checkpoint failed') from error
@@ -98,11 +101,13 @@ class DisplayGuardian:
         if op == 'inspect' and set(request) == {'version', 'op'}:
             state = self.backend.current()
             current = next(m for m in state['modes'] if m['id'] == state['mode'])
+            monitors = self.backend.monitors() if hasattr(self.backend, 'monitors') else []
             return dict(serial=state['serial'], width=current['width'], height=current['height'], refresh=current['refresh'],
                         scale=state['scale'], pending=self.transaction.pending is not None,
                         registry=self.registry_candidate or self.registry_default or
                             dict(width=current['width'], height=current['height'], refresh=current['refresh'], scale=state['scale']),
-                        modes=[{k: m[k] for k in ('width', 'height', 'refresh', 'scales')} for m in state['modes']])
+                        modes=[{k: m[k] for k in ('width', 'height', 'refresh', 'scales')} for m in state['modes']],
+                        monitors=monitors)
         if op in ('verify', 'apply'):
             if set(request) - {'version', 'op', 'serial', 'width', 'height', 'refresh', 'scale', 'confirmation', 'default_scope', 'force_reset'}:
                 raise ValueError('Unexpected display request fields')
@@ -194,3 +199,79 @@ class DisplayGuardian:
         finally:
             self.deadline = time.monotonic() + 5
         return 'rolled_back' if restored else 'later_display_change_preserved'
+
+
+class DisplayRouter:
+    """Resolve a serial-pinned Windows output to one guarded Mutter transaction.
+
+    Transactions are serialized across screens: each journal contains the
+    whole layout, so independent pending changes must not undo each other.
+    """
+    def __init__(self, backend, parent, selected_factory=None):
+        from native_display_topology import SelectedMutterDisplay
+        self.backend, self.parent = backend, parent
+        self.selected_factory = selected_factory or SelectedMutterDisplay
+        self.guardians = {}
+        self.guardian(0)
+        for index in range(1, 8):
+            if self.journal(index).exists():
+                try:
+                    self.guardian(index)
+                except ValueError:
+                    pass  # A disconnected output's journal cannot authorize a different one.
+
+    def journal(self, index):
+        return self.parent / ('display-transaction.json' if index == 0 else 'display-transaction.%d.json' % index)
+
+    def release_inactive_transactions(self, monitors):
+        # An exclusive virtual layout can disable the pending physical output.
+        # That later topology must be preserved: its old selected backend can
+        # no longer observe/roll back the output, and must not block enumeration
+        # when another connector takes its active-list index.
+        active = {item['connector'] for item in monitors}
+        released = {}
+        for index, item in self.guardians.items():
+            if item.transaction.pending is not None and item.backend.connector not in active:
+                item.save(None)
+                item.transaction.pending = None
+                released[index] = 'inactive_output_preserved'
+        return released
+
+    def guardian(self, index):
+        monitors = self.backend.monitors()
+        if type(index) is not int or not 0 <= index < min(len(monitors), 8) or monitors[index]['index'] != index:
+            raise ValueError('Unknown display output')
+        self.release_inactive_transactions(monitors)
+        connector = monitors[index]['connector']
+        previous = self.guardians.get(index)
+        if (previous is not None and previous.backend.connector == connector and
+                previous.backend.identity() == previous.identity):
+            return previous
+        if previous is not None and previous.transaction.pending is not None:
+            raise RuntimeError('Display identity changed during a pending transaction')
+        selected = self.selected_factory(connector)
+        selected.output_index = index
+        result = DisplayGuardian(selected, self.journal(index))
+        self.guardians[index] = result
+        return result
+
+    def request(self, request):
+        if not isinstance(request, dict):
+            raise ValueError('Invalid display request')
+        index = request.get('output', 0)
+        selected = self.guardian(index)
+        if request.get('op') in ('apply', 'verify') and any(
+                item is not selected and item.transaction.pending is not None for item in self.guardians.values()):
+            raise RuntimeError('Another output still requires confirmation')
+        return selected.request({key: value for key, value in request.items() if key != 'output'})
+
+    def expire(self):
+        expired = self.release_inactive_transactions(self.backend.monitors())
+        expired.update({index: result for index, item in self.guardians.items() if (result := item.expire())})
+        return expired or None
+
+    def stop(self):
+        for item in self.guardians.values():
+            if item.transaction.pending is not None:
+                item.deadline = 0
+                item.expire()

@@ -9,6 +9,11 @@ static BOOL (WINAPI *geometry_monitors)(HDC,LPCRECT,MONITORENUMPROC,LPARAM);
 static int (WINAPI *geometry_metrics)(int);
 static LONG (WINAPI *geometry_device_info)(DISPLAYCONFIG_DEVICE_INFO_HEADER *);
 static LONG (WINAPI *geometry_device_set_info)(DISPLAYCONFIG_DEVICE_INFO_HEADER *);
+static LONG (WINAPI *geometry_buffer_sizes)(UINT32,UINT32*,UINT32*);
+static HMONITOR (WINAPI *geometry_monitor_from_point)(POINT,DWORD);
+static HMONITOR (WINAPI *geometry_monitor_from_rect)(const RECT*,DWORD);
+static HMONITOR (WINAPI *geometry_monitor_from_window)(HWND,DWORD);
+static BOOL (WINAPI *geometry_spi)(UINT,UINT,PVOID,DWORD);
 
 /* Windows' source-DPI packets are not present in older Wine headers, but the
  * official UU client uses the observed relative-scale layout: -3=query and
@@ -38,6 +43,8 @@ static BOOL uurb_dpi_source_is_primary(const DISPLAYCONFIG_DEVICE_INFO_HEADER *h
 static LONG WINAPI native_geometry_device_info_common(DISPLAYCONFIG_DEVICE_INFO_HEADER *packet, BOOL is_set)
 {
     LONG (WINAPI *original)(DISPLAYCONFIG_DEVICE_INFO_HEADER *) = is_set ? geometry_device_set_info : geometry_device_info;
+    LONG multi_result = ERROR_NOT_SUPPORTED;
+    if (native_multi_device_info(original, packet, is_set, &multi_result) >= 0) return multi_result;
     /* Trace-only/native-input-only installations have no display endpoint.
      * Preserve the original API even for private packets and invalid pointers. */
     if (!native_display_adapter_enabled) return original ? original(packet) : ERROR_NOT_SUPPORTED;
@@ -110,7 +117,7 @@ static BOOL native_display_current_mode(struct uurb_display_mode *mode)
     if (ok) *mode=native_display_cache.current;
     ReleaseSRWLockExclusive(&native_display_cache_lock);
     return ok && mode->width>=2 && mode->height>=2 && mode->width<=8192 && mode->height<=8192 &&
-        !(mode->width&1) && !(mode->height&1) && mode->refresh_millihz>=1000 && mode->refresh_millihz<=120000;
+        !(mode->width&1) && !(mode->height&1) && mode->refresh_millihz>=1000 && mode->refresh_millihz<=UURB_DISPLAY_MAX_REFRESH_MILLIHZ;
 }
 static RECT native_display_pixel_rect(const struct uurb_display_mode *mode)
 { return (RECT){0,0,(LONG)mode->width,(LONG)mode->height}; }
@@ -127,18 +134,24 @@ static BOOL native_monitor_geometry(LPMONITORINFO output)
 }
 static BOOL WINAPI native_geometry_monitor_w(HMONITOR monitor,LPMONITORINFO output)
 {
+    int multi=native_multi_monitor_info(monitor,output,TRUE,FALSE);
+    if (multi>=0) return multi!=0;
     BOOL result=geometry_monitor_w(monitor,output);DWORD saved=GetLastError();
     if (result && native_display_adapter_enabled && !native_monitor_geometry(output)) return FALSE;
     SetLastError(saved);return result;
 }
 static BOOL WINAPI native_geometry_monitor_a(HMONITOR monitor,LPMONITORINFO output)
 {
+    int multi=native_multi_monitor_info(monitor,output,TRUE,TRUE);
+    if (multi>=0) return multi!=0;
     BOOL result=geometry_monitor_a(monitor,output);DWORD saved=GetLastError();
     if (result && native_display_adapter_enabled && !native_monitor_geometry(output)) return FALSE;
     SetLastError(saved);return result;
 }
 static int WINAPI native_geometry_metrics(int index)
 {
+    int multi_value=0;
+    if (native_multi_metrics(index,&multi_value)>=0) return multi_value;
     if (!native_display_adapter_enabled || (index!=SM_CXSCREEN && index!=SM_CYSCREEN &&
         index!=SM_CXVIRTUALSCREEN && index!=SM_CYVIRTUALSCREEN && index!=SM_XVIRTUALSCREEN && index!=SM_YVIRTUALSCREEN))
         return geometry_metrics(index);
@@ -163,6 +176,8 @@ static BOOL CALLBACK native_geometry_enum_callback(HMONITOR monitor,HDC dc,LPREC
 }
 static BOOL WINAPI native_geometry_monitors(HDC dc,LPCRECT clip,MONITORENUMPROC callback,LPARAM data)
 {
+    int multi=native_multi_enum_monitors(dc,clip,callback,data);
+    if (multi>=0) return multi!=0;
     /* HDC-backed enumeration belongs to an actual Wine drawing surface, not
      * our native capture. Preserve that API's coordinate/clip semantics. */
     if (!native_display_adapter_enabled || dc || !callback) return geometry_monitors(dc,clip,callback,data);
@@ -244,6 +259,40 @@ static LONG native_display_query_geometry(UINT32 flags,UINT32 paths,DISPLAYCONFI
     if (!native_display_current_mode(&geometry)) return ERROR_GEN_FAILURE;
     return native_display_map_path(flags,path,count,modes,&geometry);
 }
+static LONG WINAPI native_geometry_buffer_sizes(UINT32 flags,UINT32 *paths,UINT32 *modes)
+{
+    LONG result=ERROR_NOT_SUPPORTED;
+    if (native_multi_buffer_sizes(flags,paths,modes,&result)>=0) return result;
+    return geometry_buffer_sizes ? geometry_buffer_sizes(flags,paths,modes) : ERROR_NOT_SUPPORTED;
+}
+static HMONITOR WINAPI native_geometry_monitor_from_point(POINT point,DWORD flags)
+{
+    HMONITOR output=NULL;
+    if (native_multi_monitor_from_point(point,flags,&output)>=0) return output;
+    return geometry_monitor_from_point ? geometry_monitor_from_point(point,flags) : NULL;
+}
+static HMONITOR WINAPI native_geometry_monitor_from_rect(const RECT *rectangle,DWORD flags)
+{
+    HMONITOR output=NULL;
+    if (native_multi_monitor_from_rect(rectangle,flags,&output)>=0) return output;
+    return geometry_monitor_from_rect ? geometry_monitor_from_rect(rectangle,flags) : NULL;
+}
+static HMONITOR WINAPI native_geometry_monitor_from_window(HWND window,DWORD flags)
+{
+    HMONITOR output=NULL;
+    if (native_multi_monitor_from_window(window,flags,&output)>=0) return output;
+    return geometry_monitor_from_window ? geometry_monitor_from_window(window,flags) : NULL;
+}
+static BOOL WINAPI native_geometry_spi(UINT action,UINT parameter,PVOID data,DWORD flags)
+{
+    RECT area;
+    if (action==SPI_GETWORKAREA && native_multi_work_area(&area)>=0) {
+        SIZE_T bytes=0;
+        if (!data) return FALSE;
+        return WriteProcessMemory(GetCurrentProcess(),data,&area,sizeof(area),&bytes) && bytes==sizeof(area);
+    }
+    return geometry_spi ? geometry_spi(action,parameter,data,flags) : FALSE;
+}
 static void *native_geometry_hook_for(uintptr_t original)
 {
     if (!original) return NULL;
@@ -254,6 +303,11 @@ static void *native_geometry_hook_for(uintptr_t original)
     GEOMETRY_MAP(geometry_metrics,native_geometry_metrics);
     GEOMETRY_MAP(geometry_device_info,native_geometry_device_info);
     GEOMETRY_MAP(geometry_device_set_info,native_geometry_set_device_info);
+    GEOMETRY_MAP(geometry_buffer_sizes,native_geometry_buffer_sizes);
+    GEOMETRY_MAP(geometry_monitor_from_point,native_geometry_monitor_from_point);
+    GEOMETRY_MAP(geometry_monitor_from_rect,native_geometry_monitor_from_rect);
+    GEOMETRY_MAP(geometry_monitor_from_window,native_geometry_monitor_from_window);
+    GEOMETRY_MAP(geometry_spi,native_geometry_spi);
 #undef GEOMETRY_MAP
     return NULL;
 }
@@ -267,6 +321,11 @@ static void native_geometry_initialize(void)
     GEOMETRY_GET(geometry_metrics,"GetSystemMetrics");
     GEOMETRY_GET(geometry_device_info,"DisplayConfigGetDeviceInfo");
     GEOMETRY_GET(geometry_device_set_info,"DisplayConfigSetDeviceInfo");
+    GEOMETRY_GET(geometry_buffer_sizes,"GetDisplayConfigBufferSizes");
+    GEOMETRY_GET(geometry_monitor_from_point,"MonitorFromPoint");
+    GEOMETRY_GET(geometry_monitor_from_rect,"MonitorFromRect");
+    GEOMETRY_GET(geometry_monitor_from_window,"MonitorFromWindow");
+    GEOMETRY_GET(geometry_spi,"SystemParametersInfoW");
 #undef GEOMETRY_GET
 }
 #endif

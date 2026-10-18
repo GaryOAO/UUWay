@@ -1,6 +1,7 @@
 #ifndef UURB_NATIVE_CURSOR_WIN_H
 #define UURB_NATIVE_CURSOR_WIN_H
 #include "native_cursor_protocol.h"
+#include <wchar.h>
 
 /* USER32 handles are real cursors: GetIconInfo needs no fake handle or patch.
  * Deduplicated handles live for the process lifetime, just like shared system
@@ -18,12 +19,19 @@ static HANDLE native_cursor_file = INVALID_HANDLE_VALUE;
 static SRWLOCK native_cursor_lock = SRWLOCK_INIT;
 static struct uurb_cursor_header native_cursor_cached;
 static HCURSOR native_cursor_handle;
+static struct uurb_cursor_header native_cursor_stable;
+static HCURSOR native_cursor_stable_handle;
+static ULONGLONG native_cursor_stable_tick;
+static BOOL native_cursor_stable_valid;
+static unsigned native_cursor_retry_reused;
 static uint8_t native_cursor_pixels[UURB_CURSOR_PIXEL_BYTES];
 static uintptr_t native_get_cursor_info, native_get_cursor_pos;
 static volatile LONG native_cursor_calls, native_cursor_errors;
 static volatile LONG native_cursor_import_slots;
 static BOOL native_cursor_video_embedded;
 static BOOL native_cursor_video_composited;
+static ULONGLONG native_cursor_trace_tick[2];
+static unsigned native_cursor_trace_count[2];
 
 static BOOL native_cursor_read(void *data, DWORD size, LONGLONG offset)
 {
@@ -106,16 +114,30 @@ static BOOL native_cursor_snapshot(struct uurb_cursor_header *header, HCURSOR *h
                 native_cursor_handle = next;
                 native_cursor_cached = first;
             }
-            /* Apps hide the pointer while typing, and UU stops drawing one
-             * GetCursorInfo calls hidden: keep the last shape showing. */
-            *handle = native_cursor_handle;
+            /* Keep the cached handle private while hidden. Returning it as
+             * showing revives a stale sprite after typing/output changes. */
+            if (first.visible) *handle = native_cursor_handle;
         }
+        native_cursor_stable = *header;
+        native_cursor_stable_handle = *handle;
+        native_cursor_stable_tick = GetTickCount64();
+        native_cursor_stable_valid = TRUE;
+        return TRUE;
+    }
+    /* An odd/changing sequence is a writer in progress, not a hidden cursor
+     * or API failure. Reuse only a recent committed snapshot. Invalid headers
+     * and I/O failures above still fail; a committed hide replaces this cache. */
+    if (native_cursor_stable_valid && GetTickCount64() - native_cursor_stable_tick <= 100) {
+        *header = native_cursor_stable;
+        *handle = native_cursor_stable_handle;
+        if (native_cursor_retry_reused++ < 8)
+            write_log("UURB_NATIVE_CURSOR {\"snapshot_retry\":true,\"recent_commit_reused\":true}\r\n");
         return TRUE;
     }
     return FALSE;
 }
 
-static BOOL WINAPI native_cursor_info(PCURSORINFO info)
+static BOOL native_cursor_query(PCURSORINFO info, BOOL capture)
 {
     if (!info || info->cbSize != sizeof(*info)) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
     if (native_cursor_video_embedded) {
@@ -141,6 +163,22 @@ static BOOL WINAPI native_cursor_info(PCURSORINFO info)
         info->flags = handle ? CURSOR_SHOWING : 0;
         info->hCursor = handle;
         info->ptScreenPos = (POINT){header.x, header.y};
+        ULONGLONG now = GetTickCount64();
+        unsigned role = !!capture;
+        if (native_cursor_trace_count[role] < 64 &&
+            (!native_cursor_trace_tick[role] || now - native_cursor_trace_tick[role] >= 1000)) {
+            char line[384];
+            snprintf(line, sizeof(line), "UURB_NATIVE_CURSOR {\"snapshot\":true,\"role\":\"%s\","
+                     "\"pid\":%lu,\"tid\":%lu,\"showing\":%s,\"capture_suppressed\":%s,"
+                     "\"x\":%ld,\"y\":%ld,\"shape_serial\":%lu,\"width\":%lu,\"height\":%lu}\r\n",
+                     capture ? "capture" : "client", (unsigned long)GetCurrentProcessId(),
+                     (unsigned long)GetCurrentThreadId(), info->flags ? "true" : "false",
+                     "false", (long)header.x, (long)header.y,
+                     (unsigned long)header.shape_serial, (unsigned long)header.width, (unsigned long)header.height);
+            write_log(line);
+            native_cursor_trace_tick[role] = now;
+            ++native_cursor_trace_count[role];
+        }
     }
     ReleaseSRWLockExclusive(&native_cursor_lock);
     if (InterlockedIncrement(&native_cursor_calls) == 1)
@@ -151,6 +189,16 @@ static BOOL WINAPI native_cursor_info(PCURSORINFO info)
             write_log("UURB_NATIVE_CURSOR {\"snapshot_unavailable\":true}\r\n");
     }
     return ok;
+}
+
+static BOOL WINAPI native_cursor_info(PCURSORINFO info)
+{
+    return native_cursor_query(info, FALSE);
+}
+
+static BOOL WINAPI native_cursor_capture_info(PCURSORINFO info)
+{
+    return native_cursor_query(info, TRUE);
 }
 
 static BOOL WINAPI native_cursor_pos(LPPOINT point)
@@ -186,5 +234,26 @@ static int native_cursor_initialize(void)
     native_cursor_video_embedded = header.reserved[0] == UURB_CURSOR_VIDEO_EMBEDDED;
     native_cursor_video_composited = header.reserved[0] == UURB_CURSOR_VIDEO_COMPOSITED;
     return native_get_cursor_info && native_get_cursor_pos ? 1 : -1;
+}
+
+/* Module names identify diagnostics only. The streamer's USER32 reader also
+ * participates in cursor metadata; hiding it would erase legitimate state.
+ * Presentation overrides must not alter this API result. */
+static inline BOOL native_cursor_is_capture_module(HMODULE module)
+{
+    WCHAR path[32768];
+    DWORD length = module ? GetModuleFileNameW(module, path, ARRAYSIZE(path)) : 0;
+    if (!length || length >= ARRAYSIZE(path)) return FALSE;
+    const WCHAR *name = wcsrchr(path, L'\\');
+    return !_wcsicmp(name ? name + 1 : path, L"streamer.dll");
+}
+
+static inline void *native_cursor_hook_for(uintptr_t original, BOOL capture)
+{
+    if (native_get_cursor_info && original == native_get_cursor_info)
+        return capture ? (void *)&native_cursor_capture_info : (void *)&native_cursor_info;
+    if (!native_cursor_video_embedded && native_get_cursor_pos && original == native_get_cursor_pos)
+        return (void *)&native_cursor_pos;
+    return NULL;
 }
 #endif

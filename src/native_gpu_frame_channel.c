@@ -155,8 +155,12 @@ int uurb_gpu_publish(void *opaque, int memory_fd, uint64_t bytes, const unsigned
     s->failed = 1;
     int64_t started = milliseconds();
     const char *stage = NULL;
+    /* A newly selected output may take longer than one frame interval to
+     * reach ReleaseFrame while UU builds its track.  Keep the steady-state
+     * budget tight, but give the first frame a bounded setup window. */
+    unsigned ack_timeout = s->sequence ? 2000 : 10000;
     if (uurb_gpu_channel_send(s->socket_fd, &m, s->sequence ? -1 : memory_fd, 2000)) stage = "send";
-    else if (uurb_gpu_channel_receive(s->socket_fd, &ack, &unexpected, 2000)) stage = "receive";
+    else if (uurb_gpu_channel_receive(s->socket_fd, &ack, &unexpected, ack_timeout)) stage = "receive";
     if (stage) {
         int64_t ended = milliseconds();
         fprintf(stderr, "UURB_GPU_FAILURE {\"stage\":\"%s\",\"sequence\":%llu,\"wait_ms\":%lld}\n",

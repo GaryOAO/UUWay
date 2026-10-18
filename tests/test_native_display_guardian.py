@@ -21,6 +21,20 @@ class Backend(FakeBackend):
 
 
 class GuardianTests(unittest.TestCase):
+    def test_new_virtual_session_does_not_inherit_a_removed_screens_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend, instance = self.make(directory)
+            backend.ephemeral = True
+            result = instance.request(dict(version=1, op='apply', serial=7, width=3840, height=2160,
+                                           default_scope='user'))
+            instance.request(dict(version=1, op='confirm', serial=backend.state['serial'],
+                                  transaction=result['transaction']))
+            self.assertIsNotNone(instance.registry_default)
+            backend.identity = lambda: ['fixture-boot', ':fixture.1', 'new-owned-virtual-session']
+            recovered = guardian.DisplayGuardian(backend, instance.journal)
+            self.assertIsNone(recovered.registry_default)
+            self.assertIsNone(guardian.read_private(instance.journal)['registry_default'])
+
     def test_uu_global_default_is_staged_rolled_back_or_committed_with_transaction(self):
         with tempfile.TemporaryDirectory() as directory:
             backend, instance = self.make(directory)

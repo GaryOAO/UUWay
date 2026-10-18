@@ -129,6 +129,7 @@ class Context:
         self.config_dir = self.home / '.config/uurb'
         self.releases = self.home / '.local/share/uuway/releases'
         self.restart_bridge = False
+        self.restart_display = False
 
     @property
     def app_dir(self):
@@ -671,7 +672,8 @@ def portal_run(ctx):
     if getattr(ctx.args, 'regrant_screen', False) and ctx.restore_state.exists() and not ctx.dry_run:
         backup = ctx.restore_state.with_name(ctx.restore_state.name + f'.before-{int(time.time())}')
         ctx.restore_state.rename(backup)
-    info('接下来会弹出屏幕共享对话框：请选择要串流给手机的显示器，并勾选「记住」。')
+    info('接下来会检查屏幕共享：请选择一块显示器，并勾选「记住」。')
+    info('运行后，UU 可切换本次 GNOME 会话的所有活动显示器，包括之后创建的超级屏。')
     try:
         ctx.run([PYTHON, ROOT / 'scripts/probe-wayland-portal.py', '--capture-check',
                  '--restore-state', ctx.restore_state])
@@ -780,12 +782,19 @@ def ensure_backup(ctx):
 
 def runtime_run(ctx):
     ensure_backup(ctx)
-    if unit_active(ctx, 'uu-native-bridge'):
-        info('先停止 UUWay 桥接服务，写好配置后再启动。')
-        ctx.run(['systemctl', '--user', 'stop', 'uu-native-bridge.service'])
+    previous = read_json(ctx.runtime_config) or {}
     if not getattr(ctx, 'backend', None):
         ctx.backend = backend_for_context(ctx)
     bundle = package_bundle(ctx)
+    new_manifest = read_json(bundle / 'manifest.json') or {}
+    if (new_manifest.get('contract', {}).get('virtual_display_emulation') is True and
+            str(bundle) != previous.get('bundle')):
+        # Reload the independent daemon on every runtime upgrade, including
+        # fixes within the same virtual-display ABI. Text keeps running.
+        ctx.restart_display = True
+    if unit_active(ctx, 'uu-native-bridge'):
+        info('先停止 UUWay 桥接服务，写好配置后再启动。')
+        ctx.run(['systemctl', '--user', 'stop', 'uu-native-bridge.service'])
     ok(f'运行时：{bundle}')
     command = [PYTHON, ROOT / 'scripts/install-uu-native-service.py', '--bundle', bundle,
                '--prefix', ctx.prefix, '--restore-state', ctx.restore_state,
@@ -818,7 +827,10 @@ def runtime_run(ctx):
 # --------------------------------------------------------------------- step: start
 
 def start_done(ctx):
-    return not ctx.restart_bridge and all(unit_active(ctx, name) for name in SERVICES)
+    return (not ctx.restart_bridge and not ctx.restart_display and
+            not getattr(ctx.args, 'restart_display', False) and
+            not getattr(ctx.args, 'restart_services', False) and
+            all(unit_active(ctx, name) for name in SERVICES))
 
 
 def restart_services_confirmed(ctx):
@@ -833,12 +845,20 @@ def restart_services_confirmed(ctx):
 
 
 def start_run(ctx):
+    ctx.restart_bridge |= bool(getattr(ctx.args, 'restart_services', False))
+    restart_display = ctx.restart_display or getattr(ctx.args, 'restart_display', False)
+    if restart_display:
+        if unit_active(ctx, 'uu-native-bridge'):
+            ctx.run(['systemctl', '--user', 'stop', 'uu-native-bridge.service'])
+        info('加载多屏与超级屏显示服务；现有超级屏会移除。')
+        ctx.run(['systemctl', '--user', 'restart', 'uu-native-display.service'])
+        ctx.restart_bridge = True
     ctx.run(['systemctl', '--user', 'enable', '--now', *(name + '.service' for name in SERVICES)])
     if ctx.restart_bridge:
         if getattr(ctx.args, 'restart_services', False) and restart_services_confirmed(ctx):
             ctx.run(['systemctl', '--user', 'restart', 'uu-native-display.service', 'uu-native-text.service'])
         elif not ctx.dry_run:
-            info('文字与显示服务保持运行，不会被隐式重启（会丢失剪贴板所有权）；'
+            info('文字服务保持运行，保留剪贴板所有权；'
                  '空闲时可用 uuway refresh --restart-services 一并重启。')
         ctx.run(['systemctl', '--user', 'restart', 'uu-native-bridge.service'])
     if not ctx.dry_run:
@@ -846,6 +866,7 @@ def start_run(ctx):
         if not unit_active(ctx, 'uu-native-bridge'):
             raise SetupError('uu-native-bridge 没有启动，请查看：journalctl --user -u uu-native-bridge -e')
     ctx.restart_bridge = False
+    ctx.restart_display = False
     ok('服务已启动')
 
 
@@ -1255,7 +1276,12 @@ def command_refresh(args):
     if unit_active(ctx, 'uu-native-bridge') and not ctx.confirm('刷新会重启桥接服务，正在进行的远程会话会断开。继续吗？'):
         return 1
     with setup_lock(ctx):
-        run_steps(ctx, set(REFRESH_STEPS), set())
+        steps = set(REFRESH_STEPS)
+        if ROOT.resolve() == DEB_ROOT:
+            # Remove a source install's immutable per-user menu entry, which
+            # otherwise shadows the console delivered by each package update.
+            steps.add('launchers')
+        run_steps(ctx, steps, set())
     return 0
 
 
@@ -1419,6 +1445,12 @@ def update_busy(ctx):
 def update_check(ctx, args):
     installed = deb_version(ctx)
     latest = latest_known(ctx)
+    if getattr(args, 'json', False):
+        print(json.dumps(dict(installed=installed, latest=latest.version, tag=latest.tag, url=latest.url,
+                              published=latest.published, checked_at=int(time.time()),
+                              available=bool(installed and is_newer(ctx, latest.version, installed)),
+                              installable=bool(installed and not installed.startswith('0.0.0~')))))
+        return 0
     if installed is None:
         info(f'最新正式版：{latest.version}（{latest.url}）')
         warn('这不是用安装包装的 UUWay（源码目录或开发构建），没法比较版本，也不能用 uuway update 安装。')
@@ -1468,6 +1500,18 @@ def result_succeeded(result):
 
 
 def update_status(ctx, args):
+    if getattr(args, 'json', False):
+        installed = deb_version(ctx)
+        result = read_json(UPDATE_STATE / 'last-result.json')
+        result = result if isinstance(result, dict) else None
+        target = result.get('rollback_to') if result else None
+        previous = target.get('deb') if isinstance(target, dict) else None
+        print(json.dumps(dict(installed=installed, installable=bool(installed and not installed.startswith('0.0.0~')),
+                              busy=update_busy(ctx), result=result, progress=read_progress(20),
+                              rollback_available=bool(installed and isinstance(previous, str) and
+                                                      Path(previous).is_absolute() and Path(previous).is_file())),
+                         ensure_ascii=False))
+        return 0
     if update_busy(ctx):
         warn('更新正在进行中，最近的进度：')
         for line in read_progress(12):
@@ -1485,6 +1529,8 @@ def update_recovery_layer(ctx, args):
     timed = timed_state(ctx)
     if timed and timed[0] and timed[1] == getpass.getuser():
         return
+    if getattr(args, 'allow_no_recovery', False):
+        return  # Explicit GUI/CLI consent; never enables autologin implicitly.
     warn('这台机器在桌面崩溃或注销后不会自动重新登录：万一更新让桌面崩溃，没有人在本机登录，UU 就一直离线。')
     info('先开启：uuway autologin on')
     if ctx.assume_yes or not sys.stdin.isatty():
@@ -1765,6 +1811,7 @@ def build_parser():
     setup.add_argument('--login', action='store_true', help='即使已登录也重新打开 UU 登录一次')
     setup.add_argument('--regrant-screen', action='store_true', help='重新授权屏幕共享')
     setup.add_argument('--restart-services', action='store_true', help='同时重启文字与显示服务')
+    setup.add_argument('--restart-display', action='store_true', help='重启显示服务以加载多屏与超级屏更新（移除现有超级屏）')
     setup.set_defaults(handler=command_setup)
 
     launch = commands.add_parser('open', help='打开 UU 窗口（含新版 UU 登录所需的服务引导）')
@@ -1775,6 +1822,7 @@ def build_parser():
     common(refresh)
     refresh.add_argument('--prefix', type=Path)
     refresh.add_argument('--restart-services', action='store_true', help='同时重启文字与显示服务')
+    refresh.add_argument('--restart-display', action='store_true', help='重启显示服务并移除现有超级屏，保留文字服务')
     refresh.set_defaults(handler=command_refresh)
 
     doctor = commands.add_parser('doctor', help='检查环境与安装状态')
@@ -1794,6 +1842,9 @@ def build_parser():
     update.add_argument('--prefix', type=Path)
     update.add_argument('--source', type=Path, help=argparse.SUPPRESS)  # rehearsal: a release staged by hand
     update.add_argument('--tag', help=argparse.SUPPRESS)
+    update.add_argument('--json', action='store_true', help='以 JSON 返回检查结果或更新状态')
+    update.add_argument('--allow-no-recovery', action='store_true',
+                        help='明确允许未配置桌面自动恢复时安装更新；不更改自动登录设置')
     update.add_argument('--reboot-if-stuck', action='store_true',
                         help='回滚后桌面仍然回不来时，自动重启这台机器一次（会中断正在跑的任务）')
     update.set_defaults(handler=command_update)

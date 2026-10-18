@@ -47,6 +47,10 @@ class DxgiDuplicationStateTests(unittest.TestCase):
                              'end', 'disconnect', 'malformed'):
                     self.assertEqual(output.count('STATE ' + case + ' passed'), 3, output[-6000:])
                 self.assertIn('DXGI deterministic state checks passed;', output)
+                self.assertIn('STATE cursor-output-0 passed', output)
+                self.assertIn('STATE cursor-output-1 passed', output)
+                self.assertIn('STATE legacy-cursor-policy-ignored passed', output)
+                self.assertIn('STATE hotplug-cursor passed', output)
             finally:
                 if process is not None and process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)

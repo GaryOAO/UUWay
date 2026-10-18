@@ -18,6 +18,7 @@ import pwd
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import tempfile
@@ -155,7 +156,8 @@ def boot_events(path, cursor=None):
     result = []
     allowed = {'preflight_passed', 'configuration_conflict', 'configuration_applied', 'winlogon_started',
                'service_bootstrap_accepted', 'gui_started', 'configuration_removed', 'bootstrap_exit', 'recovery_finished',
-               'native_input_broker_ready', 'native_input_hook_ready'}
+               'native_input_broker_ready', 'native_input_hook_ready',
+               'native_gui_hook_ready', 'native_service_hook_ready'}
     with path.open(errors='replace') as stream:
         if cursor is not None:
             stream.seek(cursor[0])
@@ -195,6 +197,43 @@ def cleanup_trial(launcher, broker, env, directory, arguments, token, created_al
                   recovery_only=False):
     """Attempt every independent cleanup even if a previous action fails."""
     failures = []
+
+    def release_virtual_displays():
+        """Release virtual outputs before the UU bridge leaves its session.
+
+        The display guardian is intentionally a separate service so a mode
+        change cannot kill the capture worker.  That also means it needs an
+        explicit owner-lifetime boundary when the UU worker exits.  The RPC is
+        same-UID, bounded and idempotent; a missing endpoint is acceptable
+        during first-start or a display-service upgrade.
+        """
+        if not isinstance(env, dict):
+            return
+        endpoint = env.get('UURB_DISPLAY_SOCKET')
+        if not isinstance(endpoint, str) or not endpoint.startswith('/'):
+            return
+        event('virtual_release_begin')
+        request = json.dumps({'version': 1, 'op': 'virtual-release'},
+                             separators=(',', ':')).encode()
+        address = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
+        try:
+            address.settimeout(3)
+            try:
+                address.connect(endpoint)
+            except (FileNotFoundError, ConnectionRefusedError):
+                # Its D-Bus owner is already gone. ExecStopPost/startup
+                # recovery owns the physical baseline during daemon restart.
+                event('virtual_release_owner_already_stopped')
+                return
+            address.send(request)
+            reply = address.recv(65536)
+            value = json.loads(reply)
+            if not isinstance(value, dict) or value.get('ok') is not True:
+                raise RuntimeError('virtual display release rejected')
+            event('virtual_release_complete', released=value.get('released', []),
+                  count=value.get('count', 0))
+        finally:
+            address.close()
 
     def attempt(label, action):
         try:
@@ -243,6 +282,10 @@ def cleanup_trial(launcher, broker, env, directory, arguments, token, created_al
                 finally:
                     attempt('stop_recovery_prefix', stop_server)
         attempt('recover_registry', recover)
+    # Do this before tearing down the capture broker/Wine prefix.  The
+    # virtual output's PipeWire session then has a live Mutter owner while it
+    # is removed, and no stale "super screen" can remain after disconnect.
+    attempt('release_virtual_displays', release_virtual_displays)
     attempt('stop_broker', lambda: end_process(broker))
     if native_input is not None:
         attempt('stop_native_input', lambda: end_process(native_input))
@@ -269,6 +312,25 @@ def cleanup_trial(launcher, broker, env, directory, arguments, token, created_al
         attempt('save_cleanup_report', save_report)
         event('native_trial_stopped', state_directory=str(directory), **report)
     return failures
+
+
+def cursor_environment(environment, directory, mode, embedded_adapter=False):
+    """Use the same cursor API contract for physical and virtual outputs.
+
+    streamer.dll constructs cursor metadata as well as rendering video; it is
+    not a second, optional cursor consumer. Hiding USER32/DXGI from that module
+    also hides the metadata UU uses to select its configured presentation.
+    Preserve the native contract on both output types; presentation experiments
+    must not alter the metadata used by UU's independent cursor channel.
+    """
+    for name in ('UURB_CURSOR_STATE_PATH', 'UURB_CURSOR_STATE_DIR', 'UURB_CURSOR_PRESENTATION'):
+        environment.pop(name, None)
+    if mode in ('metadata', 'composited') or embedded_adapter:
+        path = directory / 'cursor.state'
+        environment['UURB_CURSOR_STATE_PATH'] = winpath(path)
+        environment['UURB_CURSOR_STATE_DIR'] = winpath(directory)
+        return ['--cursor-state', str(path)]
+    return []
 
 
 def recover_interrupted(prefix, state_parent):
@@ -323,6 +385,8 @@ def recover_interrupted(prefix, state_parent):
                UURB_NATIVE_BOOTSTRAP='1', WINEDLLOVERRIDES='mscoree,mshtml=')
     wine_locale(env)
     env.pop('UURB_CURSOR_STATE_PATH', None)
+    env.pop('UURB_CURSOR_STATE_DIR', None)
+    env.pop('UURB_CURSOR_PRESENTATION', None)
     env.pop('UURB_DISPLAY_SOCKET', None)
     env.pop('UURB_DISPLAY_ALLOW_CHANGES', None)
     if journal.get('display_socket') is not None:
@@ -331,8 +395,15 @@ def recover_interrupted(prefix, state_parent):
         env['UURB_DISPLAY_SOCKET'] = journal['display_socket']
     if journal.get('allow_display_reconfigure') is True:
         env['UURB_DISPLAY_ALLOW_CHANGES'] = '1'
-    if journal.get('capture_cursor_mode') in ('metadata', 'composited') or journal.get('embedded_cursor_adapter'):
-        env['UURB_CURSOR_STATE_PATH'] = winpath(directory / 'cursor.state')
+    cursor_environment(env, directory, journal.get('capture_cursor_mode'), journal.get('embedded_cursor_adapter'))
+    # An interrupted older bundle must remove the exact registry values it
+    # installed. This setting is recovery-only; new launches never select it.
+    previous_presentation = journal.get('cursor_presentation',
+                                        'client' if journal.get('capture_cursor_mode') == 'metadata' else None)
+    if previous_presentation == 'client':
+        env['UURB_CURSOR_PRESENTATION'] = 'client'
+    else:
+        env.pop('UURB_CURSOR_PRESENTATION', None)
     if prefix_processes(prefix):
         raise RuntimeError('Recovery requires the owned prefix to remain idle')
     event('native_runtime_recovery_started')
@@ -346,15 +417,42 @@ def recover_interrupted(prefix, state_parent):
 def native_topology():
     # Use the distribution Python owning dbus, independent of the caller's
     # virtualenv. Output only display geometry, never monitor serial numbers.
+    # Track the origin output that the portal session captures.  Additional
+    # outputs are deliberately not part of this single-output signature yet:
+    # adding a screencast/虚拟屏 must not tear down a live stream, and a later
+    # mode transaction still refuses to rewrite a multi-output layout.
     code = '''import dbus,json
 i=dbus.Interface(dbus.SessionBus().get_object('org.gnome.Mutter.DisplayConfig','/org/gnome/Mutter/DisplayConfig'),'org.gnome.Mutter.DisplayConfig')
 s,m,l,p=i.GetCurrentState()
-print(json.dumps(dict(generation=int(s),connectors=[str(v[0][0]) for v in m],layout=[dict(x=int(v[0]),y=int(v[1]),scale=float(v[2]),transform=int(v[3]),outputs=len(v[5])) for v in l],modes=[dict(width=int(t[1]),height=int(t[2])) for v in m for t in v[1] if t[-1].get('is-current')])))
+def current(spec):
+    for v in m:
+        if tuple(v[0])==tuple(spec):
+            return [dict(width=int(t[1]),height=int(t[2])) for t in v[1] if t[-1].get('is-current')]
+    return []
+candidates=[]
+for v in l:
+    x,y,scale,transform,primary,outputs,props=v
+    if len(outputs)==1:
+        candidates.append((bool(primary) and x==0 and y==0, x==0 and y==0, v, outputs[0]))
+selected=None
+for primary_origin,origin,v,spec in candidates:
+    if primary_origin:
+        selected=(v,spec); break
+if selected is None:
+    for primary_origin,origin,v,spec in candidates:
+        if origin:
+            selected=(v,spec); break
+if selected is None and len(candidates)==1:
+    selected=(candidates[0][2],candidates[0][3])
+if selected is None:
+    raise RuntimeError('origin output unavailable')
+v,spec=selected
+print(json.dumps(dict(generation=int(s),connectors=[str(spec[0])],layout=[dict(x=int(v[0]),y=int(v[1]),scale=float(v[2]),transform=int(v[3]),outputs=len(v[5]))],modes=current(spec))))
 '''
     value = json.loads(subprocess.check_output(['/usr/bin/python3', '-c', code], text=True, timeout=5,
                                               env=worker_environment()))
     if len(value['layout']) != 1 or len(value['modes']) != 1:
-        raise RuntimeError('Native input currently requires one physical output')
+        raise RuntimeError('Native input requires one origin output')
     layout = value['layout'][0]
     if layout['outputs'] != 1 or layout['x'] or layout['y'] or layout['transform']:
         raise RuntimeError('Unsupported native input display layout')
@@ -398,6 +496,19 @@ def topology_with_retry(stop_requested=None):
             time.sleep(TOPOLOGY_RETRY_DELAY_SECONDS)
 
 
+def _topology_comparison(value):
+    """Ignore Mutter's serial when the tracked output geometry is unchanged.
+
+    Adding or removing another logical output bumps ``generation`` while the
+    origin output keeps its mode.  That must not recreate video or touch the
+    display transaction; a real mode/layout change still differs in the other
+    fields and is accepted normally.
+    """
+    if isinstance(value, dict) and 'generation' in value:
+        return {key: item for key, item in value.items() if key != 'generation'}
+    return value
+
+
 class TopologyStabilizer:
     """Accept a changed topology only after repeated identical observations."""
 
@@ -412,11 +523,11 @@ class TopologyStabilizer:
         self.accepted_after_ns = 0
 
     def observe(self, value, after_ns=0):
-        if value == self.current:
+        if _topology_comparison(value) == _topology_comparison(self.current):
             self.candidate = None
             self.count = 0
             return None
-        if value != self.candidate:
+        if _topology_comparison(value) != _topology_comparison(self.candidate):
             self.candidate = value
             self.count = 1
             self.candidate_after_ns = after_ns
@@ -431,7 +542,7 @@ class TopologyStabilizer:
         return self.current
 
 
-def can_recreate_display_in_place(before, after):
+def can_recreate_display_in_place(before, after, owned_connectors=()):
     """Conservative first rollout: same output/layout/scale, pixel-mode only.
 
     Native uinput uses an unchanged 0..65535 absolute range. New GPU allocation
@@ -440,7 +551,10 @@ def can_recreate_display_in_place(before, after):
     """
     try:
         connector = before['connectors']
-        if len(connector) != 1 or not isinstance(connector[0], str) or not connector[0] or connector != after['connectors']:
+        if len(connector) != 1 or not isinstance(connector[0], str) or not connector[0]:
+            return False
+        if connector != after['connectors'] and not (len(after['connectors']) == 1 and
+                (connector[0] in owned_connectors or after['connectors'][0] in owned_connectors)):
             return False
         if before['layout'] != after['layout'] or len(after['layout']) != 1:
             return False
@@ -456,6 +570,20 @@ def can_recreate_display_in_place(before, after):
         return True
     except (KeyError, TypeError, IndexError):
         return False
+
+
+def owned_virtual_connectors(endpoint):
+    if endpoint is None:
+        return ()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as client:
+            client.settimeout(1)
+            client.connect(str(endpoint))
+            client.sendall(b'{"version":1,"op":"virtual-inspect"}')
+            value = json.loads(client.recv(4096))
+        return tuple(value.get('managed_connectors', [])) if value.get('ok') else ()
+    except (OSError, ValueError, KeyError):
+        return ()
 
 
 def native_input_ready(path):
@@ -608,7 +736,9 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         journal = dict(version=2, prefix=str(prefix), bundle=str(bundle.resolve()), release_id=verified['release_id'],
                        arguments=arguments, aliases=[dict(path=str(p), target=str(t)) for p, t in aliases],
                        account_files_copied=False, native_input_requested=with_input, initial_topology=topology,
-                       capture_cursor_mode=cursor_mode, native_text_requested=text_socket is not None)
+                       capture_cursor_mode=cursor_mode,
+                       cursor_presentation='native',
+                       native_text_requested=text_socket is not None)
         journal['display_socket'] = str(display_socket) if display_socket is not None else None
         journal['preserve_display_session'] = preserve_display_session
         journal['allow_display_reconfigure'] = allow_display_reconfigure
@@ -634,17 +764,14 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         for name in ('WINEDLLPATH', 'UURB_DXGI_CAPTURE_FD', 'UURB_DXGI_CAPTURE_SOCKET', 'UURB_DXGI_CAPTURE_OUTPUT',
                      'UURB_NVENC_SYNTHETIC_OUTPUT', 'VK_INSTANCE_LAYERS', 'DXVK_CONFIG', 'UURB_NATIVE_INPUT_ENABLED',
                      'UURB_X11_INPUT_PORT', 'UURB_X11_INPUT_TOKEN', 'UURB_X11_INPUT_SEMANTIC_ONLY',
-                     'UURB_CURSOR_STATE_PATH', 'UURB_DISPLAY_SOCKET', 'UURB_DISPLAY_ALLOW_CHANGES'):
+                     'UURB_CURSOR_STATE_PATH', 'UURB_CURSOR_STATE_DIR', 'UURB_CURSOR_PRESENTATION',
+                     'UURB_DISPLAY_SOCKET', 'UURB_DISPLAY_ALLOW_CHANGES'):
             env.pop(name, None)
         if display_socket is not None:
             env['UURB_DISPLAY_SOCKET'] = str(display_socket)
         if allow_display_reconfigure:
             env['UURB_DISPLAY_ALLOW_CHANGES'] = '1'
-        cursor_args = []
-        if cursor_mode in ('metadata', 'composited') or journal['embedded_cursor_adapter']:
-            cursor_path = directory / 'cursor.state'
-            env['UURB_CURSOR_STATE_PATH'] = winpath(cursor_path)
-            cursor_args = ['--cursor-state', str(cursor_path)]
+        cursor_args = cursor_environment(env, directory, cursor_mode, journal['embedded_cursor_adapter'])
         if is_stopping():
             return
         if with_input:
@@ -716,6 +843,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                 '--socket', str(endpoint), '--restore-state', str(restore_state), '--cursor-mode', cursor_mode,
                 '--capture-binary', str(bundle / 'capture/uu-pipewire-native-probe'),
                 *(['--display-reset-state', str(directory / 'display-reset.json')] if preserve_display_session else []),
+                *(['--display-socket', str(display_socket)] if display_socket is not None else []),
                 '--duration-seconds', str(0 if continuous else duration), *cursor_args],
                 stdout=capture_log, stderr=capture_log, start_new_session=True, env=worker_environment())
             deadline = time.monotonic() + 5
@@ -747,7 +875,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             topology_check = time.monotonic()
             topology_observed_ns = time.monotonic_ns()
             topology_stabilizer = TopologyStabilizer(topology)
-            display_confirmation = confirmation_tools.DisplayConfirmation(directory, prefix,
+            display_confirmation = confirmation_tools.MultiDisplayConfirmation(directory, prefix,
                 app / 'bin/GameViewerServer.exe', bundle, topology, state_tools.read_private) if display_socket else None
             while not is_stopping() and time.monotonic() < deadline:
                 for item in boot_events(directory / 'wine.log', cursor):
@@ -782,7 +910,8 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                         else:
                             accepted_topology = topology_stabilizer.observe(observed_topology, observation_ns)
                             if accepted_topology is not None:
-                                if preserve_display_session and can_recreate_display_in_place(topology, accepted_topology):
+                                if preserve_display_session and can_recreate_display_in_place(
+                                        topology, accepted_topology, owned_virtual_connectors(display_socket)):
                                     # Target-aware bounded fallback: UU may already
                                     # have recreated video before this topology poll.
                                     if display_confirmation:

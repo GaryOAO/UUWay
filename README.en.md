@@ -1,203 +1,87 @@
 <div align="center">
 
-<img src="docs/images/hero.en.svg" alt="UUWay: a native Linux host for NetEase UU Remote" width="100%">
+<img src="docs/images/hero.en.svg" alt="UUWay: a Linux host for NetEase UU Remote" width="100%">
 
 [简体中文](README.md) · [English](README.en.md)
 
 ![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)
 ![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
+![AMD VA-API](https://img.shields.io/badge/AMD-VA--API-ED1C24?logo=amd&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
-![Status](https://img.shields.io/badge/status-stable-22c55e)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
 
 </div>
 
-> Release packages include NVIDIA NVENC and AMD VA-API H.264/HEVC. Installation probes NVIDIA first, then verifies AMD; it never installs or switches GPU drivers. AMD uses host-memory copies, so zero-copy and performance claims apply only to NVIDIA.
+UUWay runs the official Windows UU Remote host on Linux so you can control your desktop from a phone or another device. UU's files stay unmodified; native Linux components provide capture, input and display management.
 
-**NetEase UU Remote only ships a Windows host — there is no Linux client.** UUWay runs the official
-host under Wine, with its files unmodified on disk, and serves every Windows interface it depends on
-from a native Linux implementation. Open UU Remote on your phone and drive your Linux desktop just as
-you would a Windows PC.
+## Features
 
-## ✨ Nearly every UU feature works
+- **Streaming and input**: NVIDIA NVENC or AMD VA-API H.264/HEVC, keyboard and mouse, native cursor images, and Fcitx5 text input.
+- **Multiple displays and Super Screen**: independent capture, resolution, refresh rate and scale. Exclusive Super Screen restores the original displays on exit or failure.
+- **Terminal and files**: Linux login shells, persistent terminal sessions, bidirectional text clipboard and file transfer.
+- **Console**: service, input, display, file-directory and update settings. Manual and automatic update checks; installation requires confirmation.
 
-| UU feature | On Linux | Notes |
-| --- | :---: | --- |
-| 🎞️ Screen streaming | ✅ | NVIDIA zero-copy + NVENC, or AMD VA-API through host memory |
-| 🖱️ Pointer | ✅ | The controller draws your real cursor theme, and zoomed views follow it |
-| ⌨️ Keyboard & mouse | ✅ | Including the Super / ⌘ key, injected through libei / uinput |
-| 🀄 Phone IME | ✅ | Chinese text is committed straight into the focused field (Fcitx5) |
-| 🖥️ Resolution · refresh rate · scale | ✅ | Applied to Mutter, rolled back if the new mode never reaches the stream |
-| 💻 **Remote terminal** | ✅ | Opens your Linux login shell; sessions persist and can run side by side |
-| 📋 Clipboard | ✅ | Text in both directions, in real time |
-| 📁 Files: phone → desktop | ✅ | Transferred when you paste; the paste waits for the download |
-| 📁 Files: other device → Linux desktop | ✅ | The receive directory maps to the Linux XDG downloads directory |
-| 📁 Files: desktop → phone | ✅ | Implemented |
-| 🪟 Super Screen (virtual displays) | ❌ | Needs a Windows kernel driver (IddCx) that Wine cannot load |
-| 🔐 GDM login screen | ❌ | It belongs to another system session; UUWay works inside your desktop session. For remote-only use, enable `uuway autologin on`: a crash or a logout returns to the desktop by itself |
-| 📺 1440p / 4K at 60 Hz | ⚠️ | Limited by the refresh rates your display (or dummy plug) advertises |
+## Install
 
-Verified with UU 4.42.0.2770 and no patch at all ([review](docs/releases/4.42.0.2770-native-review.md)).
-UUWay implements public Windows interfaces rather than offsets inside UU, so UU updates rarely matter.
+Requires Ubuntu 24.04, a GNOME 46 **Wayland** desktop, and an NVIDIA GPU with NVENC or an AMD GPU with H.264/HEVC VA-API. Keep the desktop logged in. A machine without a monitor still needs an available desktop output, such as a display dummy plug.
 
-### 💻 Highlight: UU's remote terminal opens a Linux shell
+1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest) and obtain the official Windows UU installer.
+2. Install the package and run setup as your normal user:
 
-On Windows, UU's remote terminal opens PowerShell. With UUWay it opens **your Linux login shell**.
+   ```bash
+   sudo apt install ./uuway_*_amd64.deb
+   uuway setup --installer ~/Downloads/UURemote_Setup.exe
+   ```
 
-- Bytes flow **raw** between the PTY and UU with no console layer in between, so full-screen programs
-  such as vim and htop render correctly and CJK text stays intact.
-- Leave the terminal page and **the session keeps running**; it redraws when you return, and several
-  can run at once.
-- Closing a terminal in UU ends its shell, exactly as on Windows.
+3. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
 
-## 🔧 How it works
+Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
 
-<p align="center">
-  <img src="docs/images/architecture.en.svg" alt="Architecture: every Windows interface the official UU host calls is served by a native Linux implementation" width="100%">
-</p>
-
-UUWay is an **adaptation layer**: UU calls the same APIs it would call on any Windows PC, and each
-call lands on a Linux implementation. UU still handles accounts, relays, and codec and bitrate
-negotiation.
-
-<p align="center">
-  <img src="docs/images/video-pipeline.en.svg" alt="Video path: pixels stay in video memory from compositor to encoder" width="100%">
-</p>
-
-See the [design notes](docs/design.md) for details.
-
-## 🚀 Install
-
-Release packages include both GPU backends. **`uuway setup` and `install.sh` probe NVIDIA NVENC first, then verify AMD VA-API H.264/HEVC, and persist the first working choice.** They never install or switch GPU drivers.
-
-| GPU | Encoding backend | Installation |
-| --- | --- | --- |
-| NVIDIA with NVENC | NVENC, zero-copy GPU path | Selected first |
-| AMD | VA-API H.264/HEVC with host-memory copies | Selected when NVIDIA is unavailable |
-| Intel | No corresponding encoding backend | An Intel-only GPU setup is currently unsupported |
-
-### Install
-
-**You need:**
-
-- Ubuntu 24.04 with a GNOME 46 **Wayland** session that stays logged in (a display dummy plug for
-  headless machines)
-- An **NVIDIA** GPU with NVENC or an **AMD** GPU with H.264/HEVC VA-API and its driver
-- The official UU Remote **Windows** installer and a UU account
-
-**1. Install the package.** Download `uuway_<version>_amd64.deb` from the
-[latest release](https://github.com/GaryOAO/UUWay/releases/latest):
+## Common commands
 
 ```bash
-sudo apt install ./uuway_*_amd64.deb
+uuway doctor                   # Check environment and services
+uuway update                   # Check for updates
+uuway update install           # Install an update
+uuway update status            # View the result
+uuway update rollback          # Roll back an update
+uuway refresh --restart-display # Reload display service; removes Super Screens
 ```
 
-**2. Run the setup wizard** as your normal user (no sudo):
+The console checks for updates every six hours while open; automatic checks can be disabled. Updating briefly disconnects remote sessions. OTA installation requires a `.deb` install; source installations should rebuild from updated source.
+
+For remote-only use, `uuway autologin on` enables GDM login and relogin after the desktop exits. Anyone with physical access can also enter the desktop; consider that before enabling it. Disable with `uuway autologin off`.
+
+To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine prefix and UU login are retained.
+
+## Supported scope
+
+- Validated on Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770. Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+- Up to eight active displays. Mirroring, rotation and Intel-only encoding are unsupported. AMD uses host-memory copies; NVIDIA uses a zero-copy GPU path.
+- Super Screen can still show two cursors. Display modes, drivers and hardware limit resolution, refresh rate and streaming performance; a 144 Hz mode does not guarantee a 144 fps stream.
+- Works inside a logged-in desktop session, not at the GDM login screen. Layout changes are temporary; save permanent layouts in GNOME Settings.
+
+## How it works
+
+UU handles accounts, connections and bitrate negotiation. The zero-copy GPU diagram describes NVIDIA; AMD uses host-memory copies.
+
+<img src="docs/images/architecture.en.svg" alt="UUWay architecture" width="100%">
+
+<img src="docs/images/video-pipeline.en.svg" alt="UUWay video pipeline (NVIDIA)" width="100%">
+
+## Develop
 
 ```bash
-uuway setup --installer ~/Downloads/UURemote_Setup.exe
-```
-
-The wizard checks the system, adds and installs WineHQ stable 11.0 (needs sudo), grants input access
-(needs an administrator prompt), installs UU into its own Wine prefix, grants screen-cast access,
-then writes and starts the user services. Only three things need you: **sign in** in the UU window
-it opens, in the screen-sharing dialog **pick the monitor and tick "remember"**, and click **Allow**
-in the text-service dialog that follows. Then open UU Remote on your phone — this computer is in your
-device list. The wizard's messages are in Chinese.
-
-- The wizard can be run again: finished steps are skipped. `uuway setup --dry-run` only prints what it
-  would run, and `--only STEP` redoes a single step.
-- When something is wrong, run `uuway doctor`; it checks the environment and the installation item by
-  item.
-- **Using it only remotely?** Run `uuway autologin on`: after a reboot or a power cut GDM logs your account in by
-  itself, and after a desktop crash or a manual logout the login screen logs it in again after about 10 seconds, so UU
-  comes back with the desktop (`uuway autologin off` undoes it; turn it off first if you want to stay at the login
-  screen). It is a security setting, so the wizard and `--yes` never turn it on for you; anyone who can reach the
-  machine gets your desktop at boot, so pair it with disk encryption and an automatic screen lock. UU is offline
-  while the GDM login screen is showing, because UUWay's capture and input only exist inside your desktop session;
-  this keeps that window to a few seconds.
-- The wizard pins WineHQ to the 11.0 series (it writes `/etc/apt/preferences.d/uuway-wine`, after you
-  confirm), so that `apt upgrade` cannot move it to a version that breaks screen capture.
-- With Fcitx5, the wizard enables the add-on that phone text input needs; run `fcitx5 -r` once for it
-  to load.
-- Upgrade with `uuway update` (is there a newer release?) and `uuway update install` (download, verify the
-  checksum, install). It then runs `uuway refresh`, waits for the machine to be back online and stable for about
-  90 seconds, and rolls back to the version before the update if it is not. The remote connection drops for a few
-  minutes, but the update runs on its own in the background, so it is safe to start it from UU's own remote
-  terminal; reconnect and run `uuway update status` for the result. If the machine does not log itself back in
-  after a desktop crash (`uuway autologin on`), `--yes` alone will not let it go on. To go back to the version
-  before an update: `uuway update rollback`.
-  `uuway update` contacts GitHub (`api.github.com` and `github.com`) only when you run it; UUWay never checks in
-  the background and never installs anything by itself. An update does not restart the text and display
-  services; when they should run new code, run `uuway refresh --restart-services` while the machine is idle.
-  **1.2.0 is the first release that can update itself, so 1.1.x to 1.2.0 is manual:**
-  `sudo apt install ./uuway_1.2.0_amd64.deb`, then `uuway refresh` (it restarts the bridge service, so a running
-  remote session drops briefly).
-- Uninstall with `uuway uninstall`, then `sudo apt remove uuway`. The Wine prefix, which holds your UU
-  login, is never deleted.
-
-> In daily use on Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770. Other GPUs, drivers
-> and monitor setups are not verified yet; a
-> [compatibility report](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)
-> helps, whether it works or not.
-
-**Building from source** (developers):
-
-```bash
-git clone https://github.com/GaryOAO/UUWay.git && cd UUWay
+git clone https://github.com/GaryOAO/UUWay.git
+cd UUWay
 ./install.sh --installer ~/Downloads/UURemote_Setup.exe
 ```
 
-The script checks the system, installs the dependencies and WineHQ, builds the native runtime and starts
-the services; resume with `./install.sh --from STEP`. For a manual install, the optional 60 FPS pacing
-patch and troubleshooting, see the [build and install guide](docs/build.md).
+[Build and troubleshooting](docs/build.md) · [Design](docs/design.md) · [Super Screen and recovery](docs/super-screen-lifecycle.md) · [AMD backend](docs/amd-vaapi.md)
 
-After installation, open **UUWay Console** from the application menu. It uses the bridge's existing
-Python + GTK stack and exposes service capabilities, input, text backend, display modes, the Linux
-penguin desktop image, and the file receive mapping (XDG Downloads by default).
+## License and credits
 
-### Backend selection
+[GNU AGPL-3.0](LICENSE). UUWay is an independent, unofficial project, unaffiliated with NetEase. It does not distribute UU program files.
 
-Release packages contain both NVIDIA and AMD runtimes. `uuway setup` and `install.sh` probe NVIDIA NVENC
-first, then verify AMD VA-API H.264/HEVC, and persist the first working choice. They never install or switch
-GPU drivers. Use `UURB_BACKEND=nvidia|amd` for an explicit diagnostic override:
-
-```bash
-UURB_BACKEND=amd uuway doctor
-UURB_BACKEND=nvidia uuway doctor
-```
-
-The AMD path copies frames through host memory, so NVIDIA zero-copy performance figures do not apply.
-Intel remains unsupported. Developers building from source can still follow the [AMD guide](docs/amd-vaapi.md).
-
-## 📦 Repository layout
-
-```
-install.sh  build-from-source installer
-packaging/  deb packaging, container build and install tests
-assets/     icons and the desktop image
-src/        native backends (Linux and Windows/Wine sides) and helpers
-scripts/    service, packaging, build, release-audit tooling and Python/GTK console
-patches/    DXVK capture, Mutter pacing, portal session-lifetime patches
-config/     pinned build inputs and the udev rule
-systemd/    user service templates
-tests/      unit tests and probes
-docs/       design notes, build guide, release reviews
-```
-
-## ⚖️ License
-
-UUWay is licensed under [**GNU AGPL-3.0**](https://github.com/GaryOAO/UUWay/blob/main/LICENSE).
-
-## Disclaimer
-
-UUWay is an independent, unofficial project. It is not affiliated with or endorsed by NetEase.
-"UU" and "UU Remote" are trademarks of their respective owners. UUWay distributes no UU program
-files; you install the client yourself from the official source.
-
-## Acknowledgements
-
-UUWay grew out of [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)
-by Lachlan Chen, whose RDP-relay design it replaces with a native Wayland pipeline. It also builds
-on [DXVK](https://github.com/doitsujin/dxvk), [Wine](https://www.winehq.org/), PipeWire and Mutter.
+Derived from [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge), and built on [Wine](https://www.winehq.org/), [DXVK](https://github.com/doitsujin/dxvk), PipeWire and Mutter.

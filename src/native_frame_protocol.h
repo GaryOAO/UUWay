@@ -4,6 +4,15 @@
 /* Cross-process little-endian ABI. Atomic words are 32-bit and aligned.
  * Each slot uses an odd/even sequence; consumers discard a changed sequence.
  * Only the latest slot is published, so slow consumers cannot build a queue. */
+#define UURB_CAPTURE_REQUEST_MAGIC 0x43525555u
+#define UURB_CAPTURE_REQUEST_VERSION 1u
+#define UURB_CAPTURE_DEVICE_BYTES 32u
+/* One SOCK_SEQPACKET request precedes the GPU frame stream.  The device name
+ * is the Win32 GDI name (e.g. "\\\\.\\DISPLAY2"), never a monitor serial. */
+struct uurb_capture_request {
+    uint32_t magic, version, reserved;
+    char device[UURB_CAPTURE_DEVICE_BYTES];
+};
 #define UURB_FRAME_MAGIC 0x46525555u
 #define UURB_FRAME_VERSION 2u
 #define UURB_FRAME_HEADER_BYTES 4096u

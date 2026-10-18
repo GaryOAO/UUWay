@@ -17,6 +17,53 @@ spec.loader.exec_module(package)
 
 
 class PackageIsolationTests(unittest.TestCase):
+    @staticmethod
+    def pe_exports(*names):
+        image = bytearray(PackageIsolationTests.pe_input_bridge())
+        struct.pack_into('<IIIII', image, 0x400 + 20, len(names), len(names), 0x2040, 0x2060, 0x2080)
+        position = 0x490
+        for index, name in enumerate(names):
+            encoded = name + b'\0'
+            struct.pack_into('<I', image, 0x440 + index * 4, 0x1000)
+            struct.pack_into('<I', image, 0x460 + index * 4, 0x2000 + position - 0x400)
+            struct.pack_into('<H', image, 0x480 + index * 2, index)
+            image[position:position + len(encoded)] = encoded
+            position += len(encoded)
+        return bytes(image)
+
+    @staticmethod
+    def elf_virtual_exports():
+        image = bytearray(PackageIsolationTests.elf_query_v2())
+        names = b'\0UurbDisplayQueryV2\0UurbVirtualControl\0'
+        image[0x300:0x300 + len(names)] = names
+        struct.pack_into('<Q', image, 0x100 + 64 + 32, len(names))
+        struct.pack_into('<Q', image, 0x100 + 128 + 32, 72)
+        struct.pack_into('<IBBHQQ', image, 0x340 + 48, len(b'\0UurbDisplayQueryV2\0'), 0x12, 0, 1, 0x110, 1)
+        return bytes(image)
+
+    def test_virtual_capability_requires_three_matching_native_artifacts_and_survives_repack(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            bridge = root / package.INPUT_RUNTIME[package.INPUT_BRIDGE_COMPONENT]
+            loader = root / package.INPUT_RUNTIME['runtime/uurb-native-display-loader.dll']
+            backend = root / package.INPUT_RUNTIME['runtime/uurb-native-display.dll.so']
+            bridge.write_bytes(self.pe_exports(package.DISPLAY_SET_EXPORT, package.DISPLAY_DPI_V2_EXPORT,
+                                              package.VIRTUAL_BRIDGE_EXPORT))
+            loader.write_bytes(self.pe_exports(package.DISPLAY_QUERY_V2_EXPORT, package.VIRTUAL_CONTROL_EXPORT))
+            backend.write_bytes(self.elf_virtual_exports())
+            with patch.object(package, 'ROOT', root):
+                release = package.package(root / 'releases', with_input=True)
+                self.assertTrue(release['native_virtual_display_included'])
+                bundle = Path(release['bundle'])
+                self.assertEqual(json.loads((bundle / 'manifest.json').read_text())['contract']['schema_version'], 40)
+                repacked = package.package(root / 'releases', with_input=True, reuse_runtime_from=bundle)
+                self.assertTrue(repacked['native_virtual_display_included'])
+                loader.write_bytes(self.pe_exports(package.DISPLAY_QUERY_V2_EXPORT))
+                with self.assertRaisesRegex(ValueError, 'Virtual display replacement requires matching'):
+                    package.package(root / 'releases', with_input=True)
+
+
     def test_explicit_amd_bundle_preserves_backend_transport_and_quantization_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -11,8 +11,11 @@ behaviour that shaped it.
 
 - **UU under Wine** on a private Xvfb display. UU's own windows are never shown; the desktop users
   see is the real GNOME session.
-- **Capture broker** — holds the screen-cast session (restored from a saved portal token) and
-  feeds GPU frames and cursor metadata to UU's process.
+- **Capture broker** — owns one concurrent Mutter `RecordMonitor` producer per selected connector
+  and feeds GPU frames and cursor metadata to UU's process. Setup checks portal screen sharing;
+  the legacy single-output path can still restore a portal token. The installed desktop service
+  uses explicit connectors, including the primary output: a token invalidated by a mode change
+  must not leave a remote reconnect waiting for a new consent dialog.
 - **Input worker** — owns `/dev/uinput`/libei on the desktop session.
 - **Terminal broker** and **clipboard bridge** — Linux helpers in `<prefix>/compat`.
 
@@ -36,22 +39,42 @@ UU captures with `IDXGIOutputDuplication` and encodes through the NVENC function
 
 ## Pointer
 
-On Windows, duplicated frames never contain the cursor: DXGI reports the pointer position per frame
-and its image through `GetFramePointerShape`, and the streaming application draws it. UU relies on
-exactly that — it ignores cursor shapes from `GetCursorInfo` and draws a fixed arrow when it has no
-DXGI shape.
+Physical and virtual outputs use the same native cursor contract. Mutter's *metadata* mode
+keeps the pointer out of captured video. USER32 supplies desktop coordinates, visibility and
+a real cursor handle with its hotspot. DXGI supplies monitor-local pointer coordinates and
+the image through `GetFramePointerShape`, following the
+[Desktop Duplication API](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api).
+Both APIs retain the actual image, visibility and movement. Presentation must not
+be implemented by hiding metadata or replacing its image with transparent pixels:
+UU also uses these results in its independent cursor channel.
 
-UUWay therefore captures with the portal's *metadata* cursor mode (no pointer in the video) and
-reports position, visibility and the 32-bit colour shape with its hotspot through DXGI whenever
-they change. The controller draws the pointer locally with your real theme, and zoomed views
-follow it. Alternative policies that composite the pointer into the video remain available but
-cannot drive UU's follow-the-pointer view.
+`streamer.dll` constructs cursor metadata as well as supporting video rendering. Treating all
+of its USER32 queries as an extra GPU sprite, or reporting every DXGI pointer update as hidden,
+removes information from UU's actual cursor channel. Every module's USER32 queries return
+the real handle and DXGI retains the actual shape. Startup clears inherited presentation
+overrides. The recovery journal retains older bundles' policy so cleanup removes exactly
+the Windows environment values owned by that invocation.
 
-Applications hide the pointer while you type (Ghostty's `mouse-hide-while-typing`, GTK text
-fields), and UU stops drawing a pointer that DXGI or `GetCursorInfo` reports hidden, so the
-controller would lose it until the next tap. UUWay keeps reporting the last shape the desktop
-showed, through both, whenever a pointer exists; the video never contains one, so nothing is drawn
-twice.
+Cursor-only acquisitions reuse the last desktop texture without a producer GPU ACK, so a
+static desktop still supplies movement, visibility and shape changes. Alternative policies
+that composite the pointer into the video remain available.
+
+Each output has a persistent `cursor.<n>.state` snapshot, including visibility when the pointer
+leaves that output. A merged
+`cursor.state` converts the visible stream's coordinates to desktop coordinates for USER32. Switching outputs assigns a fresh shape serial even if both source streams
+use the same serial. DXGI also invalidates the delivered shape when a producer generation
+changes, even if its shape serial restarts at the same value. The bootstrap carries the legacy
+path and per-output directory into Windows service processes, whose environment is rebuilt by Wine.
+Hidden snapshots remain hidden, including Mutter's empty-bitmap updates while typing. The adapter
+retains the old handle privately for reuse instead of reporting it as a visible cursor. Per-role
+logs distinguish server and capture-module queries, including process/thread IDs and
+module binding, without logging cursor pixels. If a writer briefly holds an odd sequence, USER32
+can reuse a committed snapshot for up to 100 ms rather than return a transient API failure; a
+committed hide is applied immediately and an abandoned write expires.
+
+Super Screen can still render an additional cursor alongside UU's independent cursor.
+The release retains the verified metadata path; experimental GPU draw suppression is
+excluded until it has been validated in a real remote session.
 
 ## Input and text
 
@@ -67,6 +90,44 @@ twice.
 calls are answered from Mutter's real monitor configuration. A change is applied temporarily and
 committed only once a fresh GPU frame of the new size has reached UU; otherwise the guardian rolls
 it back after 30 seconds.
+
+Output-specific transactions retain the complete layout and move adjacent outputs when a resized
+screen would otherwise overlap them or leave a gap. Transactions are serialized across outputs;
+only the selected output's fresh capture can confirm its change. Other outputs keep streaming.
+
+## Virtual displays / Super Screen
+
+UU's reviewed IDD device interface is implemented in user space through SetupAPI discovery,
+`CreateFile`, `DeviceIoControl` and real owned handles. Its bounded plug, unplug and mode-list
+messages go to the same-UID display service. Unknown device classes and handles pass through.
+The vendor's `UpdateDriverForPlugAndPlayDevicesW`/SetupAPI installation handshake is also
+translated to the same plug operation on Wine; it is never allowed to fall through to a missing
+kernel/UMDF driver. No Windows driver is installed and no vendor offsets are used at runtime.
+
+UU 4.42 checks Windows 10 support through local `NetWkstaGetInfo(100)` before sending
+any IDD requests. Wine reports 6.2 through that API even when `RtlGetVersion` reports
+Windows 10, and UU returns 501 immediately. While the native virtual-display backend
+is enabled, the vendor import sees consistent local version fields; allocations,
+identity fields, remote queries and NetAPI failures retain their original behavior.
+HTTP status codes are never rewritten. Mode-list messages accept up to 64 entries,
+matching the display ABI; UU's observed 44- and 48-entry catalogues must reach the create
+stage. The 48-entry catalogue contains 144 Hz modes. Display parsing, Win32 changes,
+saved defaults and PipeWire negotiation consistently accept rates through 144 Hz;
+the selected rate is preserved. This is a mode limit, not a delivered-frame-rate guarantee.
+
+The display service owns a Mutter `RecordVirtual` session and negotiates its size with a short
+metadata-only PipeWire consumer. It establishes ownership from the actual added connector, then
+exposes that output to the existing Windows topology and capture APIs. The session outlives
+individual video consumers. Changing the size negotiates the owned source again; closing it stops
+only that owned session. A monitor hotplug can make GNOME reload saved physical settings, so
+creation and removal explicitly retain the live layout of all other outputs.
+
+The console uses the same service for creation/removal and offers explicit monitor selection for
+mode changes. Virtual monitors last until removed or the display service/desktop session stops.
+At least one active desktop output is required to initialize the current input/topology path.
+The reviewed Super Screen CCD path selection, independent process ownership, remote-track quiet
+window and forced-stop physical-layout recovery are described in
+[Super Screen lifecycle](super-screen-lifecycle.md).
 
 ## Terminal
 
@@ -200,8 +261,6 @@ from UU's own remote terminal, and an update restarts the service that terminal 
 
 ## Not supported
 
-- **Super Screen** creates virtual monitors through UU's IddCx driver, a Windows kernel-mode
-  driver that Wine cannot load.
 - **The GDM login screen** is a separate session owned by the `gdm` user. The portal screen cast,
   the input worker and the user services all belong to *your* session, so UU goes offline when
   nobody is logged in. `uuway autologin on` sets two GDM keys: `AutomaticLogin` logs the account in

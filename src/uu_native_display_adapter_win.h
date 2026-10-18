@@ -4,9 +4,13 @@
 typedef DWORD (WINAPI *native_display_query_fn)(const char *, struct uurb_display_snapshot *, DWORD);
 typedef DWORD (WINAPI *native_display_change_fn)(const char *, const struct uurb_display_request *, struct uurb_display_reply *);
 typedef DWORD (WINAPI *native_display_default_fn)(const char *, struct uurb_display_mode *);
+typedef DWORD (WINAPI *native_display_topology_fn)(const char *, struct uurb_display_topology *, DWORD);
+typedef DWORD (WINAPI *native_virtual_control_fn)(const char *, DWORD, const void *, DWORD);
 static native_display_query_fn native_display_query_api;
 static native_display_change_fn native_display_change_api;
 static native_display_default_fn native_display_default_api;
+static native_display_topology_fn native_display_topology_api;
+static native_virtual_control_fn native_virtual_control_api;
 static char native_display_endpoint[108];
 static struct uurb_display_snapshot native_display_cache;
 static struct uurb_display_mode native_display_initial;
@@ -41,6 +45,9 @@ static int native_display_adapter_initialize(void)
     native_display_query_api = (void *)GetProcAddress(loader, "UurbDisplayQueryV2");
     native_display_change_api = (void *)GetProcAddress(loader, "UurbDisplayChange");
     native_display_default_api = (void *)GetProcAddress(loader, "UurbDisplayDefault");
+    /* Optional on rollback to a single-output bundle. */
+    native_display_topology_api = (void *)GetProcAddress(loader, "UurbDisplayTopology");
+    native_virtual_control_api = (void *)GetProcAddress(loader, "UurbVirtualControl");
     if (!native_display_query_api || !native_display_change_api || !native_display_default_api ||
         native_display_query_api(native_display_endpoint, &native_display_cache, sizeof(native_display_cache)) ||
         native_display_cache.version != UURB_DISPLAY_SNAPSHOT_VERSION || !native_display_cache.count ||
@@ -139,7 +146,7 @@ static LONG native_display_change_mode(LPCWSTR device, DEVMODEW *mode, HWND wind
         if (mode->dmFields & DM_PELSWIDTH) request.width = mode->dmPelsWidth;
         if (mode->dmFields & DM_PELSHEIGHT) request.height = mode->dmPelsHeight;
         if (mode->dmFields & DM_DISPLAYFREQUENCY) {
-            if (mode->dmDisplayFrequency > 120) { result = DISP_CHANGE_BADMODE; goto done; }
+            if (mode->dmDisplayFrequency > UURB_DISPLAY_MAX_REFRESH_HZ) { result = DISP_CHANGE_BADMODE; goto done; }
             request.refresh_millihz = mode->dmDisplayFrequency <= 1 ? 0 : mode->dmDisplayFrequency * 1000;
         }
     }

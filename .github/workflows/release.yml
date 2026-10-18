@@ -7,7 +7,7 @@ on:
     inputs:
       version:
         description: Package version for a test build (no release is created)
-        default: 1.3.0~ci
+        default: 1.4.0~ci
 
 permissions:
   contents: write
@@ -21,16 +21,18 @@ jobs:
           fetch-depth: 0
       - name: Resolve version
         id: version
-        run: |
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="${{ inputs.version }}"; fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Validate version-specific release notes
-        if: github.ref_type == 'tag'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          test "$(grep -c '^## UUWay ' packaging/release-notes.md)" -eq 1
-          grep -Fxq "## UUWay ${VERSION}" packaging/release-notes.md
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="$INPUT_VERSION"; fi
+          [[ "$version" =~ ^[0-9][A-Za-z0-9.+~-]*$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Validate release notes
+        if: github.ref_type == 'tag'
+        run: |
+          test -s packaging/release-notes.md
+          grep -Fxq '## 中文' packaging/release-notes.md
+          grep -Fxq '## English' packaging/release-notes.md
       # The same scripts a maintainer runs locally: a clean Ubuntu 24.04 container does the build.
       - name: Build the package
         run: packaging/build-deb.sh --version "${{ steps.version.outputs.version }}" --output-dir out
@@ -39,9 +41,9 @@ jobs:
       - name: Assert both GPU backends are present
         run: |
           deb="out/uuway_${{ steps.version.outputs.version }}_amd64.deb"
-          dpkg-deb -c "$deb" | grep -q '/build/backends/nvidia/native-presenter/'
-          dpkg-deb -c "$deb" | grep -q '/build/backends/amd/native-presenter/uu-vaapi-probe'
-          dpkg-deb -c "$deb" | grep -q '/config/dxvk-amd.conf$'
+          dpkg-deb -c "$deb" | grep '/build/backends/nvidia/native-presenter/' >/dev/null
+          dpkg-deb -c "$deb" | grep '/build/backends/amd/native-presenter/uu-vaapi-probe' >/dev/null
+          dpkg-deb -c "$deb" | grep '/config/dxvk-amd.conf$' >/dev/null
       - name: Checksums
         run: cd out && sha256sum uuway_*_amd64.deb > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@v4

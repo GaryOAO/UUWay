@@ -6,6 +6,7 @@ rollback from overwriting a later local change. No monitor serial is exported.
 """
 import math
 import json
+import time
 from pathlib import Path
 
 # PyGObject is only required when a live Mutter D-Bus transaction is opened.
@@ -19,27 +20,18 @@ except ImportError:  # pragma: no cover - exercised by headless deployments
 
 SERVICE = 'org.gnome.Mutter.DisplayConfig'
 PATH = '/org/gnome/Mutter/DisplayConfig'
+MAX_REFRESH_HZ = 144
 
 
-def decode_state(reply):
-    serial, monitors, logical, properties = reply
-    if len(monitors) != 1 or len(logical) != 1:
-        raise ValueError('Display bridge currently requires exactly one physical output')
-    specification, entries, monitor_properties = monitors[0]
-    x, y, scale, transform, primary, outputs, _ = logical[0]
-    if len(outputs) != 1 or tuple(outputs[0]) != tuple(specification) or x or y or transform or not primary:
-        raise ValueError('Unsupported display layout')
-    connector = specification[0]
-    if not isinstance(connector, str) or not connector or len(connector) > 128 or not 0.5 <= scale <= 4:
-        raise ValueError('Invalid display topology')
-    if len(entries) > 256:
-        raise ValueError('Display mode count exceeds bound')
+def _decode_modes(entries):
+    if not 1 <= len(entries) <= 256:
+        raise ValueError('Display mode count is outside the native bridge scope')
     modes = []
     current = None
     for identifier, width, height, refresh, preferred_scale, scales, flags in entries:
         supported = (isinstance(identifier, str) and 0 < len(identifier) <= 128 and
                      2 <= width <= 4096 and 2 <= height <= 4096 and not width % 2 and not height % 2 and
-                     math.isfinite(refresh) and 1 <= refresh <= 120 and not flags.get('is-interlaced', False) and
+                     math.isfinite(refresh) and 1 <= refresh <= MAX_REFRESH_HZ and not flags.get('is-interlaced', False) and
                      flags.get('refresh-rate-mode', 'fixed') == 'fixed')
         if flags.get('is-current') and not supported:
             raise ValueError('Current display mode is outside the native bridge scope')
@@ -54,15 +46,117 @@ def decode_state(reply):
                 raise ValueError('Ambiguous current display mode')
             current = item
         modes.append(item)
-    if current is None or not any(abs(scale - s) < 0.00001 for s in current['scales']):
-        raise ValueError('Missing or incompatible current display mode')
+    # A connected but disabled output has no current mode.  It is still part
+    # of the monitor catalogue (and still has a mode list), but only a logical
+    # monitor that references it requires a current mode.
+    return modes, current
+
+
+def _decode_topology(reply):
+    serial, monitors, logical, properties = reply
+    if not 1 <= len(monitors) <= 16 or not 1 <= len(logical) <= 16:
+        raise ValueError('Display topology is outside the native bridge scope')
+    physical = {}
+    for specification, entries, monitor_properties in monitors:
+        connector = specification[0]
+        if (not isinstance(connector, str) or not connector or len(connector) > 128 or connector in physical):
+            raise ValueError('Invalid or duplicate display output')
+        modes, current = _decode_modes(entries)
+        physical[connector] = dict(specification=tuple(specification), modes=modes, current=current,
+                                   properties=monitor_properties)
+    layouts, seen = [], set()
+    for x, y, scale, transform, primary, outputs, _ in logical:
+        if (type(x) is not int or type(y) is not int or type(transform) is not int or
+                type(primary) is not bool or type(scale) not in (int, float) or
+                not math.isfinite(scale) or not 0.5 <= scale <= 4 or transform):
+            raise ValueError('Unsupported display layout')
+        if len(outputs) != 1:
+            raise ValueError('Mirrored display outputs are not supported')
+        connector = outputs[0][0]
+        entry = physical.get(connector)
+        if (entry is None or entry['specification'] != tuple(outputs[0]) or connector in seen or
+                entry['current'] is None):
+            raise ValueError('Logical display output has no unique active mode')
+        if not any(abs(scale - s) < 0.00001 for s in entry['current']['scales']):
+            raise ValueError('Missing or incompatible current display mode')
+        seen.add(connector)
+        layouts.append(dict(connector=connector, x=int(x), y=int(y), scale=float(scale), transform=int(transform),
+                            primary=bool(primary), mode=entry['current']['id'],
+                            width=entry['current']['width'], height=entry['current']['height']))
     layout_mode = int(properties.get('layout-mode', 1))
     if layout_mode not in (1, 2):
         raise ValueError('Unknown compositor layout mode')
-    return dict(serial=int(serial), connector=connector, mode=current['id'], scale=float(scale), modes=modes,
-                layout_mode=layout_mode, can_change_layout=bool(properties.get('supports-changing-layout-mode', False)),
-                underscanning=bool(monitor_properties.get('is-underscanning', False)),
-                supports_underscanning='is-underscanning' in monitor_properties)
+    return int(serial), physical, layouts, properties, layout_mode
+
+
+def decode_state(reply):
+    """Decode the origin output while keeping the whole active layout visible.
+
+    The video/input bridge still serves one output.  That output is the
+    logical monitor at the desktop origin (preferring the primary flag), so
+    adding another monitor for a screencast/虚拟屏 no longer tears the bridge
+    down.  The extra outputs remain in ``topology`` and make any mode
+    transaction against the single-output guardian fail closed instead of
+    overwriting the layout.
+    """
+    serial, physical, layouts, properties, layout_mode = _decode_topology(reply)
+    candidates = [item for item in layouts if item['primary'] and not item['x'] and not item['y']]
+    candidates += [item for item in layouts if not item['x'] and not item['y'] and item not in candidates]
+    if not candidates:
+        raise ValueError('Display layout has no primary origin output')
+    selected = candidates[0]
+    entry = physical[selected['connector']]
+    topology = sorted((dict(connector=item['connector'], x=item['x'], y=item['y'], scale=item['scale'],
+                            transform=item['transform'], primary=item['primary'], mode=item['mode'],
+                            width=item['width'], height=item['height']) for item in layouts),
+                      key=lambda item: (item['y'], item['x'], item['connector']))
+    return dict(serial=serial, connector=selected['connector'], mode=selected['mode'],
+                scale=selected['scale'], modes=entry['modes'], layout_mode=layout_mode,
+                can_change_layout=bool(properties.get('supports-changing-layout-mode', False)),
+                underscanning=bool(entry['properties'].get('is-underscanning', False)),
+                supports_underscanning='is-underscanning' in entry['properties'],
+                topology=topology, multi_output=len(layouts) != 1)
+
+
+def decode_monitors(reply):
+    """Describe every active output in the order Windows will enumerate it.
+
+    The origin/primary output is first (``\\\\.\\DISPLAY1``), then the remaining
+    outputs in a stable desktop order.  Only compositor-advertised modes are
+    returned.  EDID serials and monitor device serial strings are never
+    exported; the synthetic device path is stable for one boot/layout.
+    """
+    serial, physical, layouts, properties, layout_mode = _decode_topology(reply)
+    origin = [item for item in layouts if item['primary'] and not item['x'] and not item['y']]
+    origin += [item for item in layouts if not item['x'] and not item['y'] and item not in origin]
+    if origin:
+        ordered = [origin[0]] + sorted((item for item in layouts if item is not origin[0]),
+                                       key=lambda item: (item['y'], item['x'], item['connector']))
+    else:
+        ordered = sorted(layouts, key=lambda item: (item['y'], item['x'], item['connector']))
+    if len(ordered) > 8:
+        raise ValueError('Active display count is outside the native bridge scope')
+    result = []
+    for index, item in enumerate(ordered):
+        entry = physical[item['connector']]
+        specification = entry['specification']
+        friendly = entry['properties'].get('display-name')
+        if not isinstance(friendly, str) or not friendly or len(friendly) > 128:
+            friendly = specification[2] if isinstance(specification[2], str) and specification[2] else item['connector']
+        modes = entry['modes']
+        if len(modes) > 64:
+            raise ValueError('Display mode list is outside the native bridge scope')
+        result.append(dict(index=index, connector=item['connector'],
+                           gdi_name='\\\\.\\DISPLAY%d' % (index + 1),
+                           friendly=friendly[:128],
+                           virtual=item['connector'].startswith('Meta-') or specification[1] == 'MetaVendor',
+                           x=item['x'], y=item['y'], width=item['width'], height=item['height'],
+                           refresh=entry['current']['refresh'], scale=item['scale'],
+                           primary=item['primary'], mode=item['mode'],
+                           device_path='\\\\?\\DISPLAY#UURB#%s#%d' % (item['connector'], index),
+                           modes=[{key: mode[key] for key in ('width', 'height', 'refresh', 'scales')}
+                                  for mode in modes]))
+    return result
 
 
 def signature(state):
@@ -103,12 +197,23 @@ class MutterDisplay:
             'GetNameOwner', GLib.Variant('(s)', (SERVICE,)), None, Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
         return [Path('/proc/sys/kernel/random/boot_id').read_text().strip(), bus_id, owner]
 
-    def current(self):
+    def _reply(self):
         reply = self.bus.call_sync(SERVICE, PATH, SERVICE, 'GetCurrentState', None, None,
                                    Gio.DBusCallFlags.NONE, 2000, None)
-        return decode_state(reply.unpack())
+        return reply.unpack()
+
+    def current(self):
+        return decode_state(self._reply())
+
+    def monitors(self):
+        return decode_monitors(self._reply())
 
     def configure(self, state, target, verify_only):
+        # This backend can only describe the origin output.  Applying that
+        # single-output configuration while another monitor is active would
+        # remove the other monitor from the compositor layout.
+        if state.get('multi_output'):
+            raise ValueError('Display changes require the explicit-output topology backend')
         monitor_properties = {}
         if state['supports_underscanning']:
             monitor_properties['enable_underscanning'] = GLib.Variant('b', state['underscanning'])
@@ -149,7 +254,8 @@ class DisplayTransaction:
             return dict(changed=False, serial=before['serial'])
         # Do not retry an ambiguous D-Bus reply. Keep intent available to the
         # caller even if the compositor changes state then the reply is lost.
-        self.pending = dict(before=before, target=target, observed=None, confirmed=False)
+        self.pending = dict(before=before, target=target, observed=None, confirmed=False,
+                            requested_ns=time.monotonic_ns())
         try:
             self.checkpoint(self.pending)
         except Exception:

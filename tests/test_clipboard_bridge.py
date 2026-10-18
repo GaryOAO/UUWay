@@ -118,8 +118,9 @@ class ClipboardBridgeTests(unittest.TestCase):
         self.log.close()
 
     def read_log(self):
-        self.log.seek(0)
-        return self.log.read()
+        # The child shares this open file description. Seeking here races its
+        # fprintf calls and can overwrite log fragments, losing diagnostics.
+        return os.pread(self.log.fileno(), os.fstat(self.log.fileno()).st_size, 0)
 
     def wait_for(self, predicate, message, seconds=3):
         deadline = time.monotonic() + seconds

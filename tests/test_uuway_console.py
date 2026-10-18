@@ -14,6 +14,36 @@ spec.loader.exec_module(console)
 
 
 class ConsoleConfigTests(unittest.TestCase):
+    def test_update_cache_rejects_wrong_shapes_and_invalid_timestamps(self):
+        for value in ([], 'invalid', None, 42):
+            self.assertEqual(console._update_info(value), {})
+        value = console._update_info(dict(installed='1.2.0', checked_at='yesterday', available='yes',
+                                          url='https://unrelated.invalid/release'))
+        self.assertEqual(value['installed'], '1.2.0')
+        self.assertFalse(value['available'])
+        self.assertNotIn('checked_at', value)
+        self.assertNotIn('url', value)
+        for stamp in (float('inf'), float('nan'), -1, 10 ** 1000):
+            self.assertNotIn('checked_at', console._update_info(dict(checked_at=stamp)))
+
+    def test_immutable_console_prefers_installed_updater_over_stale_source_mapping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            console._write_json(config / 'console-tools.json', dict(cli='/old/source/uuway_cli.py'))
+            with patch.object(console, 'CONFIG_DIR', config), patch.object(console, 'ROOT', config), \
+                    patch.object(Path, 'is_file', return_value=True):
+                self.assertEqual(console._cli_command()[-1], str(config / 'scripts/uuway_cli.py'))
+
+    def test_immutable_source_console_uses_registered_cli_before_old_system_cli(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            registered = config / 'source/scripts/uuway_cli.py'
+            console._write_json(config / 'console-tools.json', dict(cli=str(registered)))
+            with patch.object(console, 'CONFIG_DIR', config), patch.object(console, 'ROOT', config / 'immutable'), \
+                    patch.object(Path, 'is_file', autospec=True,
+                                 side_effect=lambda path: path in (registered,Path('/usr/lib/uuway/scripts/uuway_cli.py'))):
+                self.assertEqual(console._cli_command()[-1], str(registered))
+
     def test_atomic_private_json_roundtrip(self):
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary) / "config"

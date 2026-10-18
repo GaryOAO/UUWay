@@ -186,13 +186,14 @@ Choose the monitor UU should stream and tick “remember”.
 python3 scripts/package-uu-native-runtime.py package --with-input build/uu-native-releases
 # prints {"bundle": "build/uu-native-releases/<sha256>", ...}
 
+systemctl --user stop uu-native-bridge 2>/dev/null || true
 python3 scripts/install-uu-native-service.py \
     --bundle "$PWD/build/uu-native-releases/<sha256>" \
     --prefix ~/.local/share/wineprefixes/uu-remote \
     --restore-state ~/.local/state/uurb/portal-probe.json \
     --state-parent ~/.local/state/uurb \
     --text-socket ~/.local/state/uurb/text.sock \
-    --cursor-mode metadata
+    --cursor-mode metadata --preserve-display-session
 
 # Stop the bridge before changing Wine's path view, then reap the short-lived
 # Wine server started by the desktop registry update.
@@ -207,12 +208,21 @@ WINEPREFIX="$HOME/.local/share/wineprefixes/uu-remote" \
 
 printf '{"version":1,"backend":"fcitx"}' > ~/.config/uurb/text-backend.json   # or "portal"
 systemctl --user daemon-reload
+systemctl --user restart uu-native-display
 systemctl --user enable --now uu-native-display uu-native-text uu-native-bridge
 ```
 
-`--cursor-mode metadata` keeps the pointer out of the video and hands it to UU as DXGI pointer
-data, which is what makes the controller draw your real cursor. Install the console with
-`python3 scripts/install-uu-settings.py` installs the `uuway-console` Python/GTK application and
+`--cursor-mode metadata` keeps the pointer out of the video and exposes complete USER32/DXGI
+cursor metadata to UU, using the same contract for physical and virtual outputs. USER32
+retains the real cursor's visibility, position, image and hotspot, including queries from
+`streamer.dll`. DXGI also retains the actual image and normal shape notifications.
+Startup clears inherited presentation overrides. GPU cursor suppression is excluded from
+release builds: Super Screen can still show an additional cursor. Metadata hiding and
+transparent images are not used because they also affect the independent cursor channel.
+Pointer-only updates remain active on static desktops without a producer GPU ACK. Recovery
+restores the policy recorded for that bundle when cleaning its owned settings.
+Running `python3 scripts/install-uu-settings.py` installs the
+`uuway-console` Python/GTK application and
 the `UUWay 控制台` menu entry. It does not compile Rust or restart a service.
 
 The console is intentionally installed as Python source instead of a GitHub Actions-produced
@@ -221,18 +231,63 @@ portable across Ubuntu updates and avoids bundling a second native runtime. Rein
 updating the console or its artwork; the release identity includes the Python source, icon
 and desktop image.
 
-The console separates overview, display/appearance, input, file transfer and diagnostics.
+The console separates overview, display/appearance, input, file transfer, software updates and diagnostics.
 Mouse speed settings require an explicit save and apply without restarting. Cursor, text,
 cover and receive-directory changes show a persistent restart notice. Display changes from
 the console use manual confirmation with the guardian's 30-second rollback deadline.
+Select a monitor before changing its mode: the console pins that output through apply,
+confirmation and rollback. Other outputs keep their modes. The Super Screen card creates and
+removes owned Mutter virtual monitors, using the same service as UU's IDD device compatibility
+interface. Virtual monitors are bound to the UU bridge and live display-service/desktop-session
+lifetime, not on disk. The bridge sends an idempotent release during UU disconnect/crash cleanup, so a
+remote session cannot leave a stale super screen behind.
+The output catalogue includes inactive physical outputs and external virtual outputs. Owned screens
+can be removed; external/physical outputs can be enabled or disabled, with a guard against disabling
+the last active output. Console output toggles, Super Screen entry/exit and resolution trials all
+use temporary compositor changes. Save permanent layouts through GNOME display settings.
+
+The software-updates page uses the installed CLI's JSON check/status endpoints. Manual checks and
+the automatic-check preference never install anything. With the console open, automatic checks run
+at most every six hours; a failed attempt uses the same backoff. A new available version prompts
+once per release, showing the current/new versions; cancelling never installs it. Installation and manual rollback
+require confirmation and use the existing verified download, detached system update, backup and
+health-check rollback path. Status polling is offline and detects updates launched from a terminal.
+Source builds show release information but cannot install OTA packages. Source-console installations
+record their CLI location in private `console-tools.json`; immutable user copies use that mapping
+before the system package. A packaged console prefers its own CLI.
+Package refresh also retires an old user menu entry so it cannot shadow a newly installed console.
+The Wine compatibility layer records bounded PID/control/API diagnostics and handles the vendor
+IDD driver-install handshake in user space; a failed Windows driver installation must not be
+reported as UU error 501.
+For Super Screen debugging, correlate `net_wksta_version` and `DeviceIoControl` in
+`~/.local/state/uurb/trial-*/display-trace.log` with
+`journalctl --user -u uu-native-display`. A local NetAPI version below 10 triggers
+UU 4.42's 501 before creation; a rejected `0x30c010` mode catalogue can produce 301.
+The mode-list decoder accepts up to 64 entries, including the observed 44-entry
+(536-byte) and 48-entry (584-byte, maximum 144 Hz) requests. The display/capture
+path accepts rates through 144 Hz without clamping the requested rate. The service
+records the bounded numeric catalogue, an explicit `virtual_modes_accepted` or
+`virtual_modes_rejected` event (with rejected index/mode), and the failed creation
+stage. `virtual_negotiate_result` distinguishes a failed capture consumer from a
+Mutter layout/identity failure. These logs contain no desktop pixels.
+Removing one keeps the remaining displays' live modes and positions. One existing desktop output
+is required; mirrored and rotated layouts are outside the current input/topology scope.
+
+Both installation paths ship `mutter-direct-capture.py` and `native_virtual_display.py` along with
+the matched native bridge, display loader and Winelib backend. Runtime schemas 40 (NVIDIA) and
+41 (AMD) verify all three virtual-control exports before advertising support. A source-only
+repack preserves the installed native capability; it cannot turn old DLLs into a virtual-screen
+runtime. Runtime upgrades reload the display service, including fixes within the same API
+version. Use `uuway refresh --restart-display` to reload it explicitly even when the runtime
+is unchanged. Existing virtual monitors are removed; the text/clipboard service keeps running.
 File selection offers a `text/uri-list` through the installed `xclip` helper; finish receiving
 on the phone before replacing the clipboard.
 
 To check the console without changing a live desktop or restarting services:
 
 ```bash
-xvfb-run -a /usr/bin/python3 scripts/uuway_console.py --smoke-test
-xvfb-run -a env UUWAY_UI_TESTS=1 /usr/bin/python3 -m unittest \
+env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a /usr/bin/python3 scripts/uuway_console.py --smoke-test
+env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a env UUWAY_UI_TESTS=1 /usr/bin/python3 -m unittest \
   tests.test_uuway_console tests.test_uuway_console_ui tests.test_uuway_console_install
 ```
 
