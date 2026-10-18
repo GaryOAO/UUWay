@@ -15,12 +15,24 @@
 
 UUWay runs the official Windows UU Remote host on Linux so you can control your desktop from a phone or another device. UU's files stay unmodified; native Linux components provide capture, input and display management.
 
-## Features
+## UU feature support
 
-- **Streaming and input**: NVIDIA NVENC or AMD VA-API H.264/HEVC, keyboard and mouse, native cursor images, and Fcitx5 text input.
-- **Multiple displays and Super Screen**: independent capture, resolution, refresh rate and scale. Exclusive Super Screen restores the original displays on exit or failure.
-- **Terminal and files**: Linux login shells, persistent terminal sessions, bidirectional text clipboard and file transfer.
-- **Console**: service, input, display, file-directory and update settings. Manual and automatic update checks; installation requires confirmation.
+The following common UU features are adapted for Linux. See [supported scope](#supported-scope) for limitations.
+
+| UU feature | Linux support |
+| --- | --- |
+| Video streaming | H.264 / HEVC through NVIDIA NVENC or AMD VA-API |
+| Mouse pointer | Native cursor theme, position and shape |
+| Keyboard and mouse | Remote input, including Win / ⌘ keys |
+| Phone input method | Commit Chinese and other text to the focused field through Fcitx5 |
+| Multiple displays | Independent capture and display selection from the controller |
+| Resolution, refresh rate and scale | Select modes exposed by Linux, with automatic rollback on failure |
+| Super Screen | Virtual displays and exclusive mode; restore original displays on exit or failure |
+| Remote terminal | Linux login shells, multiple sessions that keep running when you leave the page |
+| Clipboard | Bidirectional text sync |
+| File transfer | Phone ↔ Linux; files from other devices arrive in the mapped Linux receive directory |
+
+**UUWay Console** also manages services, input, displays, file directories and software updates. It supports manual and automatic update checks; installation requires confirmation.
 
 ## Install
 
