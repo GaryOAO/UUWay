@@ -289,7 +289,7 @@ class RuntimeStepTests(CliCase):
             self.quiet(cli.runtime_run, ctx)
         backup = next(ctx.state_dir.glob("backup-*"))
         instructions = (backup / "RESTORE.txt").read_text()
-        self.assertIn("cp -a home/. ~/", instructions)
+        self.assertIn("cp -a --remove-destination --no-preserve=mode home/. ~/", instructions)
         self.assertIn("systemctl --user daemon-reload", instructions)
         restored = self.root / "restored-home"
         restored.mkdir()
@@ -363,6 +363,13 @@ class StartStepTests(CliCase):
     def test_only_the_bridge_is_restarted_by_default(self):
         self.start()
         self.assertEqual([c[-1] for c in self.restarts()], ["uu-native-bridge.service"])
+
+    def test_refresh_does_not_start_the_bridge_before_restarting_it(self):
+        self.start()
+        self.assertFalse(any('enable' in c and '--now' in c for c in self.commands))
+        starts = [c for c in self.commands if ('start' in c or 'restart' in c) and
+                  'uu-native-bridge.service' in c]
+        self.assertEqual(len(starts), 1)
 
     def test_restart_services_includes_text_and_display(self):
         self.start(restart_services=True)

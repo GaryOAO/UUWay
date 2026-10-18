@@ -145,6 +145,39 @@ def prefix_processes(prefix):
     return found
 
 
+def uu_server_alive(prefix, proc=Path('/proc')):
+    """Inspect only the owned Wine prefix; zombies cannot serve a desktop."""
+    for process in prefix_processes(prefix):
+        directory = proc / str(process['pid'])
+        try:
+            executable = re.split(rb'[\\/]', (directory / 'cmdline').read_bytes().split(b'\0')[0])[-1]
+            state = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[0]
+            if executable.lower() == b'gameviewerserver.exe' and state not in ('Z', 'X'):
+                return True
+        except (OSError, IndexError):
+            continue
+    return False
+
+
+class ServerLiveness:
+    """Allow short vendor restarts, then let systemd recover a dead UU server."""
+    def __init__(self, alive, clock=time.monotonic):
+        self.alive, self.clock = alive, clock
+        self.next_check = 0
+        self.missing_since = None
+
+    def healthy(self):
+        now = self.clock()
+        if now < self.next_check:
+            return True
+        self.next_check = now + 5
+        if self.alive():
+            self.missing_since = None
+        elif self.missing_since is None:
+            self.missing_since = now
+        return self.missing_since is None or now - self.missing_since < 10
+
+
 def winpath(path):
     return 'Z:' + str(path.resolve()).replace('/', '\\')
 
@@ -868,6 +901,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             if with_input:
                 required_events.add('native_input_hook_ready')
             notified_ready = False
+            server_liveness = ServerLiveness(lambda: uu_server_alive(prefix))
             watchdog_at = 0
             failure = None
             cursor = [0]
@@ -896,6 +930,10 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                     failure = 'Native service worker exited'
                     break
                 if native_input is not None:
+                    if notified_ready and not server_liveness.healthy():
+                        event('uu_server_exited_stopping_owned_trial')
+                        failure = 'UU server process exited'
+                        break
                     if native_input.poll() is not None:
                         event('native_input_exited_stopping_owned_trial')
                         failure = 'Native input worker exited'

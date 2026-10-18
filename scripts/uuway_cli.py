@@ -730,7 +730,7 @@ def runtime_done(ctx):
 
 BACKUP_CONFIG = ('native-runtime.json', 'text-backend.json', 'input-settings.json')
 RESTORE_NOTE = """To go back to the previous installation, from this directory:
-  cp -a home/. ~/
+  cp -a --remove-destination --no-preserve=mode home/. ~/
   systemctl --user daemon-reload && systemctl --user restart uu-native-bridge
 Files are stored under home/ with the path they have relative to your home directory.
 The old runtime directories are never deleted by uuway.
@@ -853,7 +853,9 @@ def start_run(ctx):
         info('加载多屏与超级屏显示服务；现有超级屏会移除。')
         ctx.run(['systemctl', '--user', 'restart', 'uu-native-display.service'])
         ctx.restart_bridge = True
-    ctx.run(['systemctl', '--user', 'enable', '--now', *(name + '.service' for name in SERVICES)])
+    # Enabling with --now would boot UU here, then immediately kill it in
+    # the restart below. Its Windows services can still be initializing.
+    ctx.run(['systemctl', '--user', 'enable', *(name + '.service' for name in SERVICES)])
     if ctx.restart_bridge:
         if getattr(ctx.args, 'restart_services', False) and restart_services_confirmed(ctx):
             ctx.run(['systemctl', '--user', 'restart', 'uu-native-display.service', 'uu-native-text.service'])
@@ -861,6 +863,8 @@ def start_run(ctx):
             info('文字服务保持运行，保留剪贴板所有权；'
                  '空闲时可用 uuway refresh --restart-services 一并重启。')
         ctx.run(['systemctl', '--user', 'restart', 'uu-native-bridge.service'])
+    else:
+        ctx.run(['systemctl', '--user', 'start', *(name + '.service' for name in SERVICES)])
     if not ctx.dry_run:
         time.sleep(5)
         if not unit_active(ctx, 'uu-native-bridge'):

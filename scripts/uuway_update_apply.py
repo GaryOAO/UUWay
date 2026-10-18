@@ -495,6 +495,8 @@ def wait_healthy(job, baseline):
     drops = 0
     notes = []
     problems = ['还没有检查']
+    last_problems = None
+    job.log(f'检查 UU 进程与服务器连接，需连续稳定 {SOAK} 秒。')
     while True:
         now = job.clock()
         if not session_present(job):
@@ -510,6 +512,9 @@ def wait_healthy(job, baseline):
             network = network_is_up(job)
             state = snapshot_health(job)
             problems = judge(baseline, state, network_up=network)
+            if problems != last_problems:
+                job.log('健康检查：' + ('、'.join(problems) if problems else '正常，继续观察。'))
+                last_problems = list(problems)
             if baseline.get('connected') and not network and 'network' not in notes:
                 notes.append('network')
             seen = {name: (unit['restarts'], unit['entered']) for name, unit in state['units'].items()}
@@ -673,10 +678,13 @@ def write_recovery(job, reason):
                      '再 sudo apt install ./那个文件.deb')
     if job.snapshot:
         steps.append('用普通用户（不要用 root）恢复更新前的快照：\n'
-                     f'   cp -a {shlex.quote(job.snapshot + "/home/.")} ~/')
+                     f'   cp -a --remove-destination --no-preserve=mode {shlex.quote(job.snapshot + "/home/.")} ~/\n'
+                     f'   chmod 700 -- {shlex.quote(job.prefix)}')
     else:
         steps.append('没有更新前的快照可以恢复，配置文件保持现状。')
-    steps.append('systemctl --user daemon-reload && uuway refresh --yes')
+    steps.append('systemctl --user daemon-reload && ' +
+                 ('systemctl --user restart uu-native-display uu-native-bridge' if job.snapshot else
+                  'uuway refresh --yes'))
     what = '手动回滚' if job.manual else f"更新（{journal.get('from_version')} → {journal.get('version')}）"
     numbered = '\n'.join(f'{number}. {step}' for number, step in enumerate(steps, 1))
     job.layout.recovery.write_text(
@@ -756,6 +764,29 @@ def give_up(job, reason):
     return finish_with(job, 'rollback_failed', reason)
 
 
+RESTORE_HOME_FILES = r'''
+from pathlib import Path
+import os, shutil, sys, tempfile
+snapshot, home = map(Path, sys.argv[1:])
+for source in sorted(snapshot.rglob('*')):
+    if source.is_symlink():
+        raise ValueError('Snapshot contains a symlink: ' + str(source.relative_to(snapshot)))
+    if not source.is_file() or source.name == '.settings.lock':
+        continue
+    target = home / source.relative_to(snapshot)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix='.uuway-restore-', dir=target.parent)
+    os.close(descriptor)
+    try:
+        shutil.copy2(source, temporary)
+        with open(temporary, 'rb') as stream:
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+'''
+
+
 def rollback(job, reason):
     """Put the previous version back, restore the user's files, and check the machine again."""
     journal = job.journal
@@ -777,15 +808,27 @@ def rollback(job, reason):
     else:
         job.log('回滚用的旧版本包不见了或已损坏，只能走退路：恢复快照并重启桥接服务。')
     snapshot = Path(job.snapshot) / 'home' if job.snapshot else None
+    restored_snapshot = False
     if snapshot and snapshot.is_dir():
-        restored = job.as_user(['cp', '-a', f'{snapshot}/.', f'{job.home}/'], session=False, timeout=300)
-        job.log(f'恢复更新前的快照：{"成功" if restored.returncode == 0 else "失败"}')
+        job.as_user(['systemctl', '--user', 'stop', 'uu-native-bridge.service',
+                     'uu-native-display.service'], session=False, timeout=300)
+        restored = job.as_user(['/usr/bin/python3', '-c', RESTORE_HOME_FILES, str(snapshot), job.home],
+                               session=False, timeout=300)
+        restored_snapshot = restored.returncode == 0
+        job.log(f'恢复更新前的快照：{"成功" if restored_snapshot else "失败"}')
+        if not restored_snapshot:
+            job.log('快照恢复错误：' + restored.stderr.strip()[-500:])
     job.as_user(['systemctl', '--user', 'daemon-reload'], session=False, timeout=60)
     environment = wait_for_session(job)
     if environment is None:
         return give_up(job, f'{reason}；回滚后桌面会话也没有回来')
     job.session_env = environment
-    if installed:
+    if restored_snapshot:
+        # The snapshot already names the exact working runtime and helpers.
+        # Refreshing the old package here would overwrite that restored state.
+        job.as_user(['systemctl', '--user', 'restart', 'uu-native-display.service'], timeout=60)
+        job.as_user(['systemctl', '--user', 'restart', 'uu-native-bridge.service'], timeout=300)
+    elif installed:
         job.as_user(['/usr/bin/uuway', 'refresh', '--yes', '--prefix', job.prefix], timeout=REFRESH_TIMEOUT)
     else:
         job.as_user(['systemctl', '--user', 'restart', 'uu-native-bridge.service'], timeout=300)

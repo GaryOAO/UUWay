@@ -124,6 +124,8 @@ class Machine:
     def __init__(self, test):
         self.test = test
         self.version = "1.2.0"
+        self.snapshot_version = self.version
+        self.restored_runtime = None
         self.commands = []
         self.session = True
         self.audit = ""
@@ -152,6 +154,9 @@ class Machine:
             return completed(argv, 0, self.simulation)
         if program == "apt-get" and "install" in argv:
             version = Path(argv[-1]).name.split("_")[1]
+            if '--allow-downgrades' not in argv:
+                self.snapshot_version = self.version
+                self.restored_runtime = None
             if version in self.apt_fails:
                 if self.apt_leaves_half:
                     self.version = version
@@ -172,6 +177,9 @@ class Machine:
         return completed(argv)
 
     def as_user(self, inner):
+        if inner[:3] == ['/usr/bin/python3', '-c', apply.RESTORE_HOME_FILES]:
+            self.restored_runtime = self.snapshot_version
+            return completed(inner)
         if inner[:3] == ["systemctl", "--user", "show-environment"]:
             if self.session and self.session_returns_after <= 0:
                 return completed(inner, 0, "XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=ubuntu:GNOME\n"
@@ -196,7 +204,8 @@ class Machine:
         if inner[0] == "/usr/bin/uuway" and inner[1] == "refresh":
             return completed(inner, self.refresh_rc.get(self.version, 0))
         if inner[:3] == ["systemctl", "--user", "restart"]:
-            self.bridge_up = True
+            if "uu-native-bridge.service" in inner:
+                self.bridge_up = (self.restored_runtime or self.version) not in self.bad_versions
             return completed(inner)
         return completed(inner)
 
@@ -443,21 +452,41 @@ class RollbackTests(UpdateCase):
         self.assertFalse(self.resume_armed())
         self.assertTrue(self.machine.ran("--allow-downgrades"))
 
-    def test_the_snapshot_is_restored_before_the_old_version_refreshes(self):
+    def test_rollback_restarts_the_restored_runtime_without_refreshing_over_it(self):
         self.machine.bad_versions.add("1.2.1")
         self.update()
         downgrade = self.machine.index("--allow-downgrades")
-        restore = self.machine.index("cp", "-a")
+        restore = self.machine.index("/usr/bin/python3", "-c", apply.RESTORE_HOME_FILES)
         refreshes = [i for i, argv in enumerate(self.machine.commands)
                      if "/usr/bin/uuway" in argv and "refresh" in argv]
-        self.assertEqual(len(refreshes), 2)  # once for the new version, once for the old
+        self.assertEqual(len(refreshes), 1)  # only the new version; keep the exact previous runtime
         self.assertLess(refreshes[0], downgrade)
         self.assertLess(downgrade, restore)
-        self.assertLess(restore, refreshes[1])
-        copy = self.machine.ran("cp", "-a")[0]
-        self.assertIn(f"{self.snapshot}/home/.", copy)
-        self.assertIn(f"{self.home}/", copy)
+        self.assertLess(restore, self.machine.index("restart", "uu-native-bridge.service"))
+        copy = self.machine.ran("/usr/bin/python3", "-c", apply.RESTORE_HOME_FILES)[0]
+        self.assertIn(f"{self.snapshot}/home", copy)
+        self.assertIn(str(self.home), copy)
         self.assertIn("runuser", copy)  # as the user, never as root
+
+    def test_restoring_files_preserves_private_directories_and_replaces_a_running_helper(self):
+        prefix = self.home / 'prefix'
+        prefix.mkdir(mode=0o700)
+        helper = prefix / 'helper'
+        shutil.copy2('/bin/sleep', helper)
+        process = subprocess.Popen([str(helper), '30'])
+        self.addCleanup(process.wait)
+        self.addCleanup(process.terminate)
+        source = self.snapshot / 'home/prefix'
+        source.mkdir(mode=0o775)
+        (source / 'helper').write_bytes(b'restored helper')
+        (prefix / 'unrelated').write_text('keep')
+        result = subprocess.run(['/usr/bin/python3', '-c', apply.RESTORE_HOME_FILES,
+                                 str(self.snapshot / 'home'), str(self.home)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(prefix.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(helper.read_bytes(), b'restored helper')
+        self.assertEqual((prefix / 'unrelated').read_text(), 'keep')
+        self.assertIsNone(process.poll())
 
     def test_a_failing_refresh_rolls_back(self):
         self.machine.refresh_rc["1.2.1"] = 1
@@ -754,7 +783,8 @@ class WhenTheRollbackFailsTests(UpdateCase):
         self.assertFalse(self.machine.rebooted)
         recovery = self.layout.recovery.read_text()
         for expected in ("dpkg --configure -a", "--allow-downgrades", str(self.layout.previous),
-                         f"cp -a {self.snapshot}/home/. ~/", "uuway refresh --yes"):
+                         f"cp -a --remove-destination --no-preserve=mode {self.snapshot}/home/. ~/",
+                         "systemctl --user restart uu-native-display uu-native-bridge"):
             self.assertIn(expected, recovery)
         self.assertEqual(self.result()["recovery"], str(self.layout.recovery))
 
@@ -772,7 +802,8 @@ class WhenTheRollbackFailsTests(UpdateCase):
         spaced = self.root / "a snapshot"
         (spaced / "home").mkdir(parents=True)
         self.update(snapshot=str(spaced))
-        self.assertIn(f"cp -a '{spaced}/home/.' ~/", self.layout.recovery.read_text())
+        self.assertIn(f"cp -a --remove-destination --no-preserve=mode '{spaced}/home/.' ~/",
+                      self.layout.recovery.read_text())
 
     def test_it_reboots_once_when_asked_and_judges_again_afterwards(self):
         self.break_everything()

@@ -15,6 +15,35 @@ trial = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trial)
 
 
+class ServerLivenessTests(unittest.TestCase):
+    def test_a_missing_server_triggers_recovery_but_a_short_restart_is_tolerated(self):
+        state = {'now': 0, 'alive': False}
+        watch = trial.ServerLiveness(lambda: state['alive'], lambda: state['now'])
+        self.assertTrue(watch.healthy())
+        state['now'] = 5
+        state['alive'] = True
+        self.assertTrue(watch.healthy())
+        state['now'] = 10
+        state['alive'] = False
+        self.assertTrue(watch.healthy())
+        state['now'] = 20
+        self.assertFalse(watch.healthy())
+
+    def test_a_zombie_or_another_prefix_does_not_count_as_a_live_server(self):
+        with tempfile.TemporaryDirectory() as name:
+            proc = Path(name)
+            server = proc / '123'
+            server.mkdir()
+            (server / 'cmdline').write_bytes(b'C:\\UU\\GameViewerServer.exe\0')
+            with patch.object(trial, 'prefix_processes', return_value=[{'pid': 123, 'name': 'GameViewerServe'}]):
+                (server / 'stat').write_text('123 (GameViewerServe) Z 1')
+                self.assertFalse(trial.uu_server_alive(Path('/owned/prefix'), proc))
+                (server / 'stat').write_text('123 (GameViewerServe) S 1')
+                self.assertTrue(trial.uu_server_alive(Path('/owned/prefix'), proc))
+            with patch.object(trial, 'prefix_processes', return_value=[]):
+                self.assertFalse(trial.uu_server_alive(Path('/owned/prefix'), proc))
+
+
 class CleanupTests(unittest.TestCase):
     def test_cursor_environment_retains_native_metadata_for_every_output(self):
         directory = Path('/private/trial')

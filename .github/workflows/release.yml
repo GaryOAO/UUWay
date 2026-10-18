@@ -7,7 +7,7 @@ on:
     inputs:
       version:
         description: Package version for a test build (no release is created)
-        default: 1.4.0~ci
+        default: 1.4.1~ci
 
 permissions:
   contents: write
