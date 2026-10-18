@@ -4,8 +4,8 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)
-![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
+![Ubuntu 24.04 / 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%7C%2026.04-E95420?logo=ubuntu&logoColor=white)
+![GNOME Wayland](https://img.shields.io/badge/GNOME-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![AMD VA-API](https://img.shields.io/badge/AMD-VA--API-ED1C24?logo=amd&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
@@ -24,7 +24,7 @@ UUWay 让官方 Windows 版 UU 远程被控端在 Linux 上运行，用手机或
 
 ## 安装
 
-需要 Ubuntu 24.04、GNOME 46 **Wayland** 桌面，以及支持 NVENC 的 NVIDIA 显卡或支持 H.264/HEVC VA-API 的 AMD 显卡。桌面须保持登录；无显示器时需有可用的桌面输出，例如显示器诱骗器。
+主线使用 **GNOME Wayland** 桌面，搭配支持 NVENC 的 NVIDIA 显卡或支持 H.264/HEVC VA-API 的 AMD 显卡。Ubuntu 24.04 / GNOME 46 是参考环境，Ubuntu 26.04 也已有适配和实测。桌面须保持登录；无显示器时需有可用的桌面输出，例如显示器诱骗器。
 
 1. 从 [Releases](https://github.com/GaryOAO/UUWay/releases/latest) 下载 `.deb`，并准备官方 Windows 版 UU 安装包。
 2. 安装并以普通用户运行向导：
@@ -36,7 +36,7 @@ UUWay 让官方 Windows 版 UU 远程被控端在 Linux 上运行，用手机或
 
 3. 按提示登录 UU，允许屏幕共享和文字服务。完成后从应用菜单打开 **UUWay 控制台**，即可在控制端连接。
 
-向导会安装并固定 Wine 11、验证编码后端、配置用户服务；可重复运行。优先选择 NVIDIA，验证失败后尝试 AMD，不会安装或切换显卡驱动。Fcitx5 插件首次启用后需重启输入法：`fcitx5 -r`。
+发布包以 Ubuntu 24.04 构建，其他版本如遇依赖差异可[从源码构建](docs/build.md)。向导会安装并固定 Wine 11、验证编码后端、配置用户服务；可重复运行。优先选择 NVIDIA，验证失败后尝试 AMD，不会安装或切换显卡驱动。Fcitx5 插件首次启用后需重启输入法：`fcitx5 -r`。
 
 ## 常用操作
 
@@ -57,7 +57,14 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 
 ## 支持范围
 
-- 已在 Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770 上验证。其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。
+| 环境 | 验证情况 |
+| --- | --- |
+| Ubuntu 24.04 · GNOME 46 Wayland · RTX 3090 | 维护者日常使用与回归验证 |
+| Ubuntu 26.04 · GNOME Wayland · Radeon 780M | [社区实机连接验证](https://github.com/GaryOAO/UUWay/pull/4)；已适配 Python 3.14 文字服务与 [OSC 3008 终端乱码](https://github.com/GaryOAO/UUWay/issues/2) |
+| Manjaro · KDE Plasma / KWin Wayland | [用户报告可用](https://github.com/GaryOAO/UUWay/issues/14)，使用社区 KDE 适配分支；主线安装器仍面向 GNOME |
+
+其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。
+
 - 最多 8 块活动显示器；暂不支持镜像布局、旋转和 Intel 单显卡编码。AMD 使用内存中转，NVIDIA 使用 GPU 零拷贝链路。
 - 超级屏仍可能出现双光标。分辨率、刷新率和串流性能取决于显示模式、驱动及硬件，最高 144 Hz 模式不代表串流帧率保证。
 - 只服务已登录的桌面会话，不支持 GDM 登录界面。显示布局临时应用；永久布局请在 GNOME 设置中保存。

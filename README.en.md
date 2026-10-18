@@ -4,8 +4,8 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04-E95420?logo=ubuntu&logoColor=white)
-![GNOME 46 Wayland](https://img.shields.io/badge/GNOME_46-Wayland-4A86CF?logo=gnome&logoColor=white)
+![Ubuntu 24.04 / 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%7C%2026.04-E95420?logo=ubuntu&logoColor=white)
+![GNOME Wayland](https://img.shields.io/badge/GNOME-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![AMD VA-API](https://img.shields.io/badge/AMD-VA--API-ED1C24?logo=amd&logoColor=white)
 ![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
@@ -24,7 +24,7 @@ UUWay runs the official Windows UU Remote host on Linux so you can control your 
 
 ## Install
 
-Requires Ubuntu 24.04, a GNOME 46 **Wayland** desktop, and an NVIDIA GPU with NVENC or an AMD GPU with H.264/HEVC VA-API. Keep the desktop logged in. A machine without a monitor still needs an available desktop output, such as a display dummy plug.
+Mainline targets **GNOME Wayland**, with an NVIDIA GPU supporting NVENC or an AMD GPU supporting H.264/HEVC VA-API. Ubuntu 24.04 / GNOME 46 is the reference environment; Ubuntu 26.04 also has compatibility fixes and hardware validation. Keep the desktop logged in. A machine without a monitor still needs a desktop output, such as a display dummy plug.
 
 1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest) and obtain the official Windows UU installer.
 2. Install the package and run setup as your normal user:
@@ -36,7 +36,7 @@ Requires Ubuntu 24.04, a GNOME 46 **Wayland** desktop, and an NVIDIA GPU with NV
 
 3. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
 
-Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
+Release packages are built on Ubuntu 24.04; [build from source](docs/build.md) if another version has different dependencies. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
 
 ## Common commands
 
@@ -57,7 +57,14 @@ To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine pref
 
 ## Supported scope
 
-- Validated on Ubuntu 24.04 + GNOME 46 Wayland + RTX 3090 + UU 4.42.0.2770. Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+| Environment | Validation |
+| --- | --- |
+| Ubuntu 24.04 · GNOME 46 Wayland · RTX 3090 | Maintainer's daily use and regression checks |
+| Ubuntu 26.04 · GNOME Wayland · Radeon 780M | [Community hardware validation](https://github.com/GaryOAO/UUWay/pull/4); Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included |
+| Manjaro · KDE Plasma / KWin Wayland | [Reported working](https://github.com/GaryOAO/UUWay/issues/14) through a community KDE branch; mainline setup targets GNOME |
+
+Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+
 - Up to eight active displays. Mirroring, rotation and Intel-only encoding are unsupported. AMD uses host-memory copies; NVIDIA uses a zero-copy GPU path.
 - Super Screen can still show two cursors. Display modes, drivers and hardware limit resolution, refresh rate and streaming performance; a 144 Hz mode does not guarantee a 144 fps stream.
 - Works inside a logged-in desktop session, not at the GDM login screen. Layout changes are temporary; save permanent layouts in GNOME Settings.
