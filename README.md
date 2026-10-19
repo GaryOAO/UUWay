@@ -73,6 +73,7 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 | --- | --- |
 | Ubuntu 24.04 · GNOME 46 Wayland · RTX 3090 | 维护者日常使用与回归验证 |
 | Ubuntu 26.04 · GNOME Wayland · Radeon 780M | [社区实机连接验证](https://github.com/GaryOAO/UUWay/pull/4)；已适配 Python 3.14 文字服务与 [OSC 3008 终端乱码](https://github.com/GaryOAO/UUWay/issues/2) |
+| Debian 13 (trixie) · GNOME 48.7 · RTX 3090 | [用户报告微调后可用](https://github.com/GaryOAO/UUWay/issues/15)：UUWay 1.2.0、Wine 11.0、NVIDIA 550.163.01，1080p 75 Hz；UU 启动卡住的问题经本地源码调整解决，具体改动未提供 |
 | Manjaro · KDE Plasma / KWin Wayland | [用户报告可用](https://github.com/GaryOAO/UUWay/issues/14)，使用社区 KDE 适配分支；主线安装器仍面向 GNOME |
 
 其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。

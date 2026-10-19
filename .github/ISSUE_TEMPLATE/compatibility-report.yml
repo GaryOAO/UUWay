@@ -1,12 +1,12 @@
 name: 兼容性报告 / Compatibility report
 description: 告诉我们 UUWay 在你的机器上能不能用（成功和失败都欢迎）
-title: "[兼容性] <显卡> + <Ubuntu 版本>：<结果>"
+title: "[兼容性] <显卡> + <发行版与桌面>：<结果>"
 labels: ["compatibility"]
 body:
   - type: markdown
     attributes:
       value: |
-        UUWay 目前只在 Ubuntu 24.04 + GNOME 46 Wayland + NVIDIA 上验证过。你的报告会帮别人判断自己的机器能不能用。
+        UUWay 主线面向 GNOME Wayland，支持 NVIDIA NVENC 和 AMD VA-API；已验证环境见 README 的「支持范围」。欢迎反馈其他发行版、桌面与显卡的使用情况。
         运行 `uuway doctor` 可以一次性收集下面大部分信息。
   - type: dropdown
     id: result
@@ -22,7 +22,7 @@ body:
     id: gpu
     attributes:
       label: 显卡与驱动 / GPU and driver
-      description: "`nvidia-smi` 的第一行和驱动版本"
+      description: "显卡型号与驱动版本；NVIDIA 可参考 `nvidia-smi`，AMD 请注明 Mesa / VA-API 驱动版本"
       placeholder: "NVIDIA GeForce RTX 3090, driver 580.x"
     validations:
       required: true
@@ -30,7 +30,7 @@ body:
     id: system
     attributes:
       label: 系统 / System
-      description: "Ubuntu 版本、GNOME 版本（`gnome-shell --version`）、内核（`uname -r`）"
+      description: "发行版与版本、桌面及版本、Wayland / X11、内核（`uname -r`）；GNOME 版本可运行 `gnome-shell --version`"
       placeholder: "Ubuntu 24.04.5, GNOME Shell 46.x, 6.8.0-xx"
     validations:
       required: true

@@ -73,6 +73,7 @@ To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine pref
 | --- | --- |
 | Ubuntu 24.04 · GNOME 46 Wayland · RTX 3090 | Maintainer's daily use and regression checks |
 | Ubuntu 26.04 · GNOME Wayland · Radeon 780M | [Community hardware validation](https://github.com/GaryOAO/UUWay/pull/4); Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included |
+| Debian 13 (trixie) · GNOME 48.7 · RTX 3090 | [Reported working after local adjustments](https://github.com/GaryOAO/UUWay/issues/15): UUWay 1.2.0, Wine 11.0, NVIDIA 550.163.01, 1080p 75 Hz; a UU startup hang was resolved through local source changes, but the changes were not provided |
 | Manjaro · KDE Plasma / KWin Wayland | [Reported working](https://github.com/GaryOAO/UUWay/issues/14) through a community KDE branch; mainline setup targets GNOME |
 
 Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
