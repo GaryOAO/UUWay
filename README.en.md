@@ -69,12 +69,15 @@ To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine pref
 
 ## Supported scope
 
-| Environment | Validation |
-| --- | --- |
-| Ubuntu 24.04 · GNOME 46 Wayland · RTX 3090 | Maintainer's daily use and regression checks |
-| Ubuntu 26.04 · GNOME Wayland · Radeon 780M | [Community hardware validation](https://github.com/GaryOAO/UUWay/pull/4); Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included |
-| Debian 13 (trixie) · GNOME 48.7 · RTX 3090 | [Reported working after local adjustments](https://github.com/GaryOAO/UUWay/issues/15): UUWay 1.2.0, Wine 11.0, NVIDIA 550.163.01, 1080p 75 Hz; a UU startup hang was resolved through local source changes, but the changes were not provided |
-| Manjaro · KDE Plasma / KWin Wayland | [Reported working](https://github.com/GaryOAO/UUWay/issues/14) through a community KDE branch; mainline setup targets GNOME |
+Results apply to the listed versions and conditions. “Needs adjustments” means local changes or extra steps were required; “Unverified” means no test result is available. Missing information is marked “Not reported”.
+
+| Distribution | Desktop / session | GPU | Result | Versions and conditions | Source |
+| --- | --- | --- | --- | --- | --- |
+| Ubuntu 24.04 | GNOME 46 / Wayland | NVIDIA RTX 3090 | Works | Mainline; daily use and regression checks | Maintainer |
+| Ubuntu 26.04.1 | GNOME / Wayland | AMD Radeon 780M | Works | Wine 11.0 / UU 4.42.1; Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included | Community [#4](https://github.com/GaryOAO/UUWay/pull/4) |
+| Debian 13 (trixie) | GNOME 48.7 / session not reported | NVIDIA RTX 3090 | Needs adjustments | UUWay 1.2.0 / Wine 11.0 / driver 550.163.01; 1080p 75 Hz; a startup hang was resolved through local source changes, whose details were not provided | Community [#15](https://github.com/GaryOAO/UUWay/issues/15) |
+| Manjaro | Plasma / KWin 6.7.4 / Wayland | NVIDIA RTX 4060 Laptop | Needs adjustments | Community KDE branch `60f5c8c`; single-display validation, with extra displays temporarily disabled at the time; mainline setup targets GNOME | Community [#14](https://github.com/GaryOAO/UUWay/issues/14) |
+| Arch Linux | Hyprland / session not reported | Not reported | Unverified | No Hyprland test result; working reports in this discussion concern KDE | Inquiry [#3](https://github.com/GaryOAO/UUWay/issues/3) |
 
 Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
 
