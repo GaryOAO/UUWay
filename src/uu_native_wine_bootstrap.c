@@ -100,6 +100,16 @@ static DWORD named_process_pid(const WCHAR *name)
 static DWORD server_pid(void) { return named_process_pid(L"GameViewerServer.exe"); }
 static DWORD service_pid(void) { return named_process_pid(L"GameViewerService.exe"); }
 
+static DWORD settle_server(HANDLE process, HANDLE stop, DWORD milliseconds)
+{
+    HANDLE handles[] = {stop, process};
+    DWORD result = WaitForMultipleObjects(2, handles, FALSE, milliseconds);
+    if (result == WAIT_OBJECT_0) return ERROR_CANCELLED;
+    if (result == WAIT_OBJECT_0 + 1) return ERROR_PROCESS_ABORTED;
+    if (result == WAIT_TIMEOUT) return ERROR_SUCCESS;
+    return GetLastError();
+}
+
 static DWORD attach_input(const WCHAR *folder, DWORD pid)
 {
     WCHAR executable[32768], command[32768];
@@ -320,7 +330,19 @@ int wmain(int argc, WCHAR **argv)
             }
             missing_since = GetTickCount64();
             if (target == attached) continue;
-            status = attach_input(folder, target);
+            /* Wine 11 can lose the server's initial thread when remote
+             * injection overlaps its early crashpad process startup. Allow
+             * that startup to settle before creating remote threads. This
+             * is a conservative timing workaround, not a readiness claim:
+             * the hook and Python's server liveness checks still must pass.
+             * Hold the process handle through injection to pin this PID,
+             * and keep shutdown/process exit responsive during the grace. */
+            HANDLE target_process = OpenProcess(SYNCHRONIZE, FALSE, target);
+            if (!target_process) { status = GetLastError(); break; }
+            status = settle_server(target_process, stop, 8000);
+            if (!status) status = attach_input(folder, target);
+            CloseHandle(target_process);
+            if (status == ERROR_CANCELLED) { status = 0; break; }
             event("native_input_hook_ready", status);
             if (status) break;
             attached = target;

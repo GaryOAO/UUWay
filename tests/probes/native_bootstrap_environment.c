@@ -17,6 +17,48 @@ static BOOL WINAPI probe_create_process(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, 
 static unsigned checked;
 static BOOL change_owner;
 static const WCHAR other[] = L"Z:\\another-owner";
+static DWORD WINAPI request_stop(void *stop)
+{
+    Sleep(30);
+    SetEvent(stop);
+    return 0;
+}
+static void check_server_settle(void)
+{
+    HANDLE stop = CreateEventW(NULL, TRUE, FALSE, NULL);
+    check(stop != NULL);
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, GetCurrentProcessId());
+    check(process != NULL);
+    ULONGLONG before = GetTickCount64();
+    check(settle_server(process, stop, 100) == ERROR_SUCCESS);
+    check(GetTickCount64() - before >= 90);
+    HANDLE worker = CreateThread(NULL, 0, request_stop, stop, 0, NULL);
+    check(worker != NULL);
+    before = GetTickCount64();
+    check(settle_server(process, stop, 8000) == ERROR_CANCELLED);
+    check(GetTickCount64() - before < 4000);
+    check(WaitForSingleObject(worker, 1000) == WAIT_OBJECT_0);
+    CloseHandle(worker);
+    check(ResetEvent(stop));
+
+    WCHAR executable[32768];
+    check(GetModuleFileNameW(NULL, executable, ARRAYSIZE(executable)) > 0);
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    PROCESS_INFORMATION child = {0};
+    check(CreateProcessW(executable, NULL, NULL, NULL, FALSE, CREATE_SUSPENDED,
+                         NULL, NULL, &startup, &child));
+    check(TerminateProcess(child.hProcess, 0));
+    check(WaitForSingleObject(child.hProcess, 5000) == WAIT_OBJECT_0);
+    check(settle_server(child.hProcess, stop, 8000) == ERROR_PROCESS_ABORTED);
+    check(SetEvent(stop));
+    check(settle_server(child.hProcess, stop, 8000) == ERROR_CANCELLED);
+    CloseHandle(child.hThread);
+    CloseHandle(child.hProcess);
+    check(ResetEvent(stop));
+    check(settle_server(NULL, stop, 100) == ERROR_INVALID_HANDLE);
+    CloseHandle(process);
+    CloseHandle(stop);
+}
 static const WCHAR *environment_value(const WCHAR *block, const WCHAR *name)
 {
     size_t length = wcslen(name);
@@ -53,6 +95,7 @@ static BOOL WINAPI probe_create_process(LPCWSTR app, LPWSTR command, LPSECURITY_
 }
 int wmain(void)
 {
+    check_server_settle();
     check(SetEnvironmentVariableW(L"UURB_NATIVE_BOOTSTRAP", L"1"));
     check(SetEnvironmentVariableW(L"UURB_CURSOR_STATE_PATH", L"Z:\\owned\\cursor.state"));
     check(SetEnvironmentVariableW(L"UURB_CURSOR_STATE_DIR", L"Z:\\owned"));
