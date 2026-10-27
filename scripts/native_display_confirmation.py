@@ -3,6 +3,7 @@
 No framebuffer access or vendor-log export. ACK means allocation acceptance,
 not hardware encoding completion or remote decoding/presentation.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,11 @@ import socket
 import stat
 import struct
 import time
+
+spec = importlib.util.spec_from_file_location('confirmation_process_state',
+    Path(__file__).with_name('native_runtime_state.py'))
+process_state = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(process_state)
 
 
 def process_start_ticks(pid):
@@ -26,7 +32,8 @@ def mapped_files_match(pid, paths):
         if not stat.S_ISREG(info.st_mode):
             return False
         expected.add((os.major(info.st_dev), os.minor(info.st_dev), info.st_ino))
-    with (Path('/proc') / str(pid) / 'maps').open('rb') as source:
+    task = process_state.live_process_task(Path('/proc') / str(pid))
+    with (task / 'maps').open('rb') as source:
         data = source.read(4 * 1024 * 1024 + 1)
     if len(data) > 4 * 1024 * 1024:
         return False
@@ -44,7 +51,8 @@ def owned_consumer(evidence, prefix, server, capture_dll):
     root = Path('/proc') / str(pid)
     if root.stat().st_uid != os.getuid() or process_start_ticks(pid) != evidence['peer_start_ticks']:
         return False
-    with (root / 'environ').open('rb') as source:
+    task = process_state.live_process_task(root)
+    with (task / 'environ').open('rb') as source:
         environment = source.read(2 * 1024 * 1024 + 1)
     if len(environment) > 2 * 1024 * 1024 or os.fsencode('WINEPREFIX=' + str(prefix)) not in environment.split(b'\0'):
         return False

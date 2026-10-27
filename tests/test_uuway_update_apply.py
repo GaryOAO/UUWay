@@ -40,6 +40,7 @@ def make_proc(proc, *, server=True, socket_state="01", other_uid_only=False):
         (proc / str(pid) / "fd").mkdir(parents=True)
         arguments = [argv0] + (["-c", "echo GameViewerServer.exe"] if pid == 200 else [])
         (proc / str(pid) / "cmdline").write_bytes(b"\0".join(a.encode() for a in arguments) + b"\0")
+        (proc / str(pid) / "stat").write_text(f"{pid} (process) S 1")
         if pid == 100:
             os.symlink("socket:[555]", proc / "100/fd/3")
             os.symlink("socket:[999]", proc / "100/fd/4")
@@ -74,6 +75,36 @@ class HealthTests(unittest.TestCase):
 
     def test_an_established_connection_to_a_public_address_means_connected(self):
         self.assertIs(apply.uu_connected(self.proc, UID), True)
+
+    def test_exited_leader_with_live_workers_is_counted_once_and_remains_connected(self):
+        server = self.proc / '100'
+        for tid in (102, 103):
+            task = server / 'task' / str(tid)
+            (task / 'fd').mkdir(parents=True)
+            (task / 'stat').write_text(f'{tid} (worker) S 1')
+            (task / 'cmdline').write_bytes(SERVER.encode() + b'\0')
+            (task / 'fd/3').symlink_to('socket:[555]')
+        (server / 'stat').write_text('100 (GameViewerServe) Z 1')
+        (server / 'cmdline').write_bytes(b'')
+        shutil.rmtree(server / 'fd')
+        self.assertEqual(apply.count_uu_processes(self.proc, UID)['GameViewerServer.exe'], 1)
+        self.assertIs(apply.uu_connected(self.proc, UID), True)
+        self.assertEqual(apply.count_uu_processes(self.proc, UID + 1)['GameViewerServer.exe'], 0)
+        for task in (server / 'task').iterdir():
+            (task / 'stat').write_text(f'{task.name} (worker) Z 1')
+        self.assertEqual(apply.count_uu_processes(self.proc, UID)['GameViewerServer.exe'], 0)
+        self.assertIsNone(apply.uu_connected(self.proc, UID))
+
+    def test_disappearing_thread_does_not_hide_a_surviving_worker(self):
+        server = self.proc / '100'
+        (server / 'stat').write_text('100 (GameViewerServe) Z 1')
+        (server / 'cmdline').write_bytes(b'')
+        (server / 'task/102').mkdir(parents=True)
+        task = server / 'task/103'
+        task.mkdir()
+        (task / 'stat').write_text('103 (worker) S 1')
+        (task / 'cmdline').write_bytes(SERVER.encode() + b'\0')
+        self.assertEqual(apply.count_uu_processes(self.proc, UID)['GameViewerServer.exe'], 1)
 
     def test_closed_or_local_connections_do_not(self):
         make_proc(self.proc, socket_state="08")  # CLOSE_WAIT
