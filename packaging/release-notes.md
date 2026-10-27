@@ -1,11 +1,11 @@
 ## 中文
 
-- 修复首次 `uuway setup` 前运行 `uuway update` 检查更新导致后续启动失败的问题：新建的 `~/.local/state/uurb` 目录使用私有权限 `0700`，更新缓存文件保持 `0600`。（#16，感谢 @mikezom）
-- 已有状态目录的权限保持不变；此修复不会自动修复旧版本已创建的非私有目录。
-- 更新中英文兼容性表格，补充 Debian 社区反馈，并完善兼容性反馈模板。
+- 修复 UU 服务启动或升级后设备离线、桥接服务反复重启的问题：在新发现的 UU 服务进程启动后等待 8 秒，再注入原生输入模块，规避 Wine 11 下观察到的启动时序冲突。（#17）
+- 等待期间可立即响应停止请求或服务进程退出；输入模块就绪检查、进程存活检测及升级健康检查保持启用。启动就绪时间相应增加约 8 秒。
+- 已在受影响设备上验证连续三次启动、90 秒升级健康检查及远端恢复；CI 为 655 项通过、25 项跳过。
 
 ## English
 
-- Fix startup failing after running `uuway update` before the first `uuway setup`: create `~/.local/state/uurb` with private permissions (`0700`) while keeping the update cache file at `0600`. (#16, thanks to @mikezom)
-- Existing state directory permissions are preserved; this fix does not automatically repair non-private directories created by earlier versions.
-- Update the Chinese and English compatibility tables, add Debian community feedback, and improve the compatibility report template.
+- Fix devices staying offline and the bridge repeatedly restarting after UU startup or an upgrade: wait eight seconds after discovering a new UU server process before injecting native input, avoiding the startup timing conflict observed with Wine 11. (#17)
+- Shutdown requests and server exit interrupt the wait immediately. Input readiness, process liveness, and upgrade health checks remain enabled. Startup readiness takes about eight seconds longer.
+- Validated with three consecutive starts, a 90-second upgrade health soak, and confirmed remote recovery on the affected machine. CI: 655 tests passed, 25 skipped.
