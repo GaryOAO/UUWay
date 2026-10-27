@@ -813,10 +813,13 @@ class UpdateCheckTests(UpdateCase):
         self.assertEqual(self.commands, [])  # a check never touches the system
 
     def test_the_answer_is_cached_privately_for_doctor(self):
+        self.assertFalse(self.context().state_dir.exists())
         ctx, _ = self.check()
         cache = ctx.state_dir / "update.json"
         self.assertEqual(json.loads(cache.read_text())["version"], "1.2.1")
         self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+        # setup's runtime refuses a state directory other users can enter
+        self.assertEqual(ctx.state_dir.stat().st_mode & 0o777, 0o700)
 
     def test_no_newer_release_is_said_plainly(self):
         self.fetcher.tag = "v1.2.0"

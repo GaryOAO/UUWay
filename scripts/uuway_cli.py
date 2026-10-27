@@ -1434,6 +1434,8 @@ def latest_known(ctx):
     if not ctx.dry_run:
         record = dict(schema=1, checked_at=int(time.time()), tag=latest.tag, version=latest.version,
                       published=latest.published, etag=latest.etag)
+        # An update check can run before setup; the runtime requires a private state directory.
+        ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         write_atomic(ctx.state_dir / 'update.json', json.dumps(record).encode(), 0o600)
     return latest
 
