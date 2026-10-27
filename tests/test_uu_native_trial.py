@@ -16,26 +16,6 @@ spec.loader.exec_module(trial)
 
 
 class ServerLivenessTests(unittest.TestCase):
-    def test_live_workers_keep_the_owned_prefix_busy_after_the_leader_exits(self):
-        with tempfile.TemporaryDirectory() as name:
-            proc = Path(name)
-            leader = proc / '123'
-            worker = leader / 'task/124'
-            worker.mkdir(parents=True)
-            (leader / 'stat').write_text('123 (GameViewerServe) Z 1')
-            (leader / 'cmdline').write_bytes(b'')
-            (worker / 'stat').write_text('124 (worker) S 1')
-            (worker / 'cmdline').write_bytes(b'C:\\UU\\GameViewerServer.exe\0')
-            (worker / 'environ').write_bytes(b'WINEPREFIX=/owned/prefix\0')
-            with patch.object(trial.subprocess, 'check_output', return_value='123 GameViewerServe\n'):
-                self.assertEqual(trial.prefix_processes(Path('/owned/prefix'), proc),
-                                 [dict(pid=123, name='GameViewerServe')])
-                self.assertTrue(trial.uu_server_alive(Path('/owned/prefix'), proc))
-                self.assertFalse(trial.uu_server_alive(Path('/another/prefix'), proc))
-                (worker / 'stat').write_text('124 (worker) Z 1')
-                self.assertFalse(trial.uu_server_alive(Path('/owned/prefix'), proc))
-                self.assertEqual(trial.prefix_processes(Path('/owned/prefix'), proc), [])
-
     def test_a_missing_server_triggers_recovery_but_a_short_restart_is_tolerated(self):
         state = {'now': 0, 'alive': False}
         watch = trial.ServerLiveness(lambda: state['alive'], lambda: state['now'])

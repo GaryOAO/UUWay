@@ -12,32 +12,6 @@ import stat
 import tempfile
 
 
-def live_process_task(process):
-    """A readable /proc task for a process whose initial thread may have exited.
-
-    Wine can keep serving from worker threads after its Linux thread-group
-    leader becomes a zombie. The leader then has no cmdline/environ/fd view.
-    Keep the process PID as its identity, but read those files via a live task.
-    """
-    def readable(task):
-        try:
-            state = (task / 'stat').read_text().rsplit(')', 1)[1].split()[0]
-            return state not in ('Z', 'X') and bool((task / 'cmdline').read_bytes())
-        except (OSError, IndexError):
-            return False
-
-    process = Path(process)
-    if readable(process):
-        return process
-    try:
-        for task in (process / 'task').iterdir():
-            if task.name.isdecimal() and readable(task):
-                return task
-    except OSError:
-        pass
-    raise ProcessLookupError('No live process task')
-
-
 def read_private(path, max_bytes=65536):
     fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:

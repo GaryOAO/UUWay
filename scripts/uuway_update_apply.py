@@ -333,34 +333,6 @@ def parse_environment(text):
     return values
 
 
-# Kept self-contained like native_runtime_state.live_process_task: the root
-# updater runs from a private single-file copy while dpkg replaces its package.
-def live_process_task(process):
-    """A readable /proc task for a process whose initial thread may have exited.
-
-    Wine can keep serving from worker threads after its Linux thread-group
-    leader becomes a zombie. The leader then has no cmdline/environ/fd view.
-    Keep the process PID as its identity, but read those files via a live task.
-    """
-    def readable(task):
-        try:
-            state = (task / 'stat').read_text().rsplit(')', 1)[1].split()[0]
-            return state not in ('Z', 'X') and bool((task / 'cmdline').read_bytes())
-        except (OSError, IndexError):
-            return False
-
-    process = Path(process)
-    if readable(process):
-        return process
-    try:
-        for task in (process / 'task').iterdir():
-            if task.name.isdecimal() and readable(task):
-                return task
-    except OSError:
-        pass
-    raise ProcessLookupError('No live process task')
-
-
 def count_uu_processes(proc, uid):
     """{executable: how many of this user's processes run it}.
 
@@ -375,8 +347,7 @@ def count_uu_processes(proc, uid):
         try:
             if entry.stat().st_uid != uid:
                 continue
-            task = live_process_task(entry)
-            argv0 = (task / 'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace')
+            argv0 = (entry / 'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace')
         except OSError:
             continue
         name = re.split(r'[\\/]', argv0)[-1].lower()
@@ -409,12 +380,11 @@ def uu_connected(proc, uid):
         try:
             if entry.stat().st_uid != uid:
                 continue
-            task = live_process_task(entry)
-            argv0 = (task / 'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace')
+            argv0 = (entry / 'cmdline').read_bytes().split(b'\0')[0].decode(errors='replace')
             if re.split(r'[\\/]', argv0)[-1].lower() != UU_PROCESSES[0].lower():
                 continue
             servers += 1
-            for descriptor in (task / 'fd').iterdir():
+            for descriptor in (entry / 'fd').iterdir():
                 target = os.readlink(descriptor)
                 if target.startswith('socket:['):
                     inodes.add(target[len('socket:['):-1])

@@ -128,7 +128,7 @@ def private_directory(path):
         raise ValueError('Expected an owned private directory: ' + path.name)
 
 
-def prefix_processes(prefix, proc=Path('/proc')):
+def prefix_processes(prefix):
     needle = ('WINEPREFIX=' + str(prefix)).encode()
     found = []
     listing = subprocess.check_output(['ps', '-u', str(os.getuid()), '-o', 'pid=,comm='], text=True, timeout=5,
@@ -138,8 +138,7 @@ def prefix_processes(prefix, proc=Path('/proc')):
         # UU's GUI can replace argv[0]/comm with a launch-source argument.
         # The exact prefix environment, not its mutable process name, scopes it.
         try:
-            task = state_tools.live_process_task(proc / pid)
-            if needle in (task / 'environ').read_bytes().split(b'\0'):
+            if needle in (Path('/proc') / pid / 'environ').read_bytes().split(b'\0'):
                 found.append(dict(pid=int(pid), name=name))
         except OSError:
             continue
@@ -147,12 +146,13 @@ def prefix_processes(prefix, proc=Path('/proc')):
 
 
 def uu_server_alive(prefix, proc=Path('/proc')):
-    """Inspect the owned Wine process, including surviving worker threads."""
-    for process in prefix_processes(prefix, proc):
+    """Inspect only the owned Wine prefix; zombies cannot serve a desktop."""
+    for process in prefix_processes(prefix):
+        directory = proc / str(process['pid'])
         try:
-            directory = state_tools.live_process_task(proc / str(process['pid']))
             executable = re.split(rb'[\\/]', (directory / 'cmdline').read_bytes().split(b'\0')[0])[-1]
-            if executable.lower() == b'gameviewerserver.exe':
+            state = (directory / 'stat').read_text().rsplit(')', 1)[1].split()[0]
+            if executable.lower() == b'gameviewerserver.exe' and state not in ('Z', 'X'):
                 return True
         except (OSError, IndexError):
             continue
