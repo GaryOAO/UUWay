@@ -283,6 +283,7 @@ VAAPI_FIELDS = dict(encoder_backend='amd-vaapi', gpu_message_version=4,
     pixel_transport='size_sealed_memfd_bgra_host_copy', gpu_zero_copy=False,
     encoder_reconfigure='close_and_reopen_between_frames_force_IDR',
     spatial_aq='32_luma_variance_regions_vaapi_qp_delta',
+    spatial_aq_fallback='disable_when_roi_unavailable',
     unsupported_encoder_modes=RATE_CONTRACT_FIELDS['unsupported_encoder_modes'] + ['temporal_AQ', 'multipass'])
 VAAPI_INPUT_CONTRACT = dict(INPUT_CONTRACT, schema_version=38, **VAAPI_FIELDS)
 VAAPI_CONTRACT = dict(CONTRACT, schema_version=39, **VAAPI_FIELDS)

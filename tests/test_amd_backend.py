@@ -87,6 +87,24 @@ int main(void) {
                             '-I', str(ROOT / 'src'), '-o', str(binary)], input=source, text=True, check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_spatial_aq_is_optional_when_vaapi_roi_is_missing(self):
+        source = r'''
+#include "native_vaapi_aq.h"
+#include <assert.h>
+int main(void) {
+    assert(uurb_vaapi_spatial_aq_enabled(1, 640, 360, 1));
+    assert(!uurb_vaapi_spatial_aq_enabled(1, 640, 360, 0));
+    assert(!uurb_vaapi_spatial_aq_enabled(1, 127, 360, 1));
+    assert(!uurb_vaapi_spatial_aq_enabled(1, 640, 63, 1));
+    assert(!uurb_vaapi_spatial_aq_enabled(0, 640, 360, 1));
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'aq-policy'
+            subprocess.run(['gcc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-x', 'c', '-',
+                            '-I', str(ROOT / 'src'), '-o', str(binary)], input=source, text=True, check=True)
+            subprocess.run([str(binary)], check=True)
+
     def check(self, marker, code):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -34,9 +34,11 @@ Reconfiguration reopens the encoder between frames and starts a new IDR.
 Spatial AQ uses 32 non-overlapping regions selected from luma variance and
 submitted as VA-API QP deltas. Flatter areas receive more bits; the requested
 strength controls the bounded QP adjustment. This is this backend's algorithm,
-not NVIDIA's proprietary AQ. Drivers lacking 32 QP-delta ROI regions reject AQ.
-Temporal AQ, multipass, HDR/10-bit, asynchronous encoding and dynamic resolution within
-an encoder session are rejected. Display-size changes require the existing
+not NVIDIA's proprietary AQ. Drivers with 32 QP-delta ROI regions use this
+enhancement; drivers without that optional capability continue with regular
+VA-API encoding and disable spatial AQ. Temporal AQ, multipass, HDR/10-bit,
+asynchronous encoding and dynamic resolution within an encoder session are rejected.
+Display-size changes require the existing
 session-recreation mechanism. Multiple AMD GPUs require future explicit device
 selection. The initial validation target is Radeon 780M, Ubuntu 26.04, GNOME
 Wayland, and WineHQ 11.0; other hardware remains unverified.

@@ -1,11 +1,11 @@
 ## 中文
 
-- 修复 UU 服务启动或升级后设备离线、桥接服务反复重启的问题：在新发现的 UU 服务进程启动后等待 8 秒，再注入原生输入模块，规避 Wine 11 下观察到的启动时序冲突。（#17）
-- 等待期间可立即响应停止请求或服务进程退出；输入模块就绪检查、进程存活检测及升级健康检查保持启用。启动就绪时间相应增加约 8 秒。
-- 已在受影响设备上验证连续三次启动、90 秒升级健康检查及远端恢复；CI 为 655 项通过、25 项跳过。
+- 修复 AMD VA-API 后端在显卡缺少 ROI（空间 AQ）能力时被误判为不可用的问题。（#18）
+- H.264/HEVC 硬件编码现在会在没有 32 个 QP-delta ROI 区域的驱动上继续工作，并自动关闭空间 AQ；支持 ROI 的驱动仍保留原有空间 AQ 优化。
+- 增加 ROI 能力降级回归测试，并更新 AMD 后端说明。
 
 ## English
 
-- Fix devices staying offline and the bridge repeatedly restarting after UU startup or an upgrade: wait eight seconds after discovering a new UU server process before injecting native input, avoiding the startup timing conflict observed with Wine 11. (#17)
-- Shutdown requests and server exit interrupt the wait immediately. Input readiness, process liveness, and upgrade health checks remain enabled. Startup readiness takes about eight seconds longer.
-- Validated with three consecutive starts, a 90-second upgrade health soak, and confirmed remote recovery on the affected machine. CI: 655 tests passed, 25 skipped.
+- Fix AMD VA-API setup being rejected when the GPU lacks ROI (spatial AQ) support. (#18)
+- H.264/HEVC hardware encoding now continues on drivers without 32 QP-delta ROI regions and disables spatial AQ automatically; drivers with ROI support keep the existing spatial AQ optimization.
+- Add a regression test for the ROI capability fallback and update the AMD backend documentation.

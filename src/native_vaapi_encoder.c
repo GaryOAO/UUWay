@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "native_vaapi_encoder.h"
+#include "native_vaapi_aq.h"
 #include "native_nvenc_negotiation.h"
 #include "native_spatial_aq.h"
 #include <libavcodec/avcodec.h>
@@ -28,7 +29,7 @@ struct uurb_encoder {
     void *mapped;
     size_t mapped_size;
     uint64_t last_timestamp, frames_sent;
-    int locked, failed, pending_idr;
+    int locked, failed, pending_idr, roi_supported;
 };
 
 /* Match the actual Vulkan GPU used by DXVK/PipeWire, not renderD128 by guess. */
@@ -116,6 +117,15 @@ static int codec_open(struct uurb_encoder *s)
     return 0;
 }
 
+static int vaapi_roi_supported(VADisplay display, VAProfile profile)
+{
+    VAConfigAttrib attr = {.type = VAConfigAttribEncROI};
+    if (vaGetConfigAttributes(display, profile, VAEntrypointEncSlice, &attr, 1) != VA_STATUS_SUCCESS ||
+        attr.value == VA_ATTRIB_NOT_SUPPORTED) return 0;
+    VAConfigAttribValEncROI roi = {.value = attr.value};
+    return roi.bits.num_roi_regions >= 32 && roi.bits.roi_rc_qp_delta_support;
+}
+
 struct uurb_encoder *uurb_vaapi_open(const unsigned char uuid[16], const NV_ENC_INITIALIZE_PARAMS *p)
 {
     if (!p || !uurb_nvenc_valid_rates(p) || p->encodeWidth < 2 || p->encodeHeight < 2 ||
@@ -126,7 +136,6 @@ struct uurb_encoder *uurb_vaapi_open(const unsigned char uuid[16], const NV_ENC_
     const NV_ENC_CONFIG *cfg = p->encodeConfig;
     if (cfg->frameIntervalP != 1 || cfg->rcParams.enableLookahead || cfg->rcParams.enableTemporalAQ ||
         cfg->rcParams.multiPass != NV_ENC_MULTI_PASS_DISABLED || p->enableEncodeAsync) return NULL;
-    if (cfg->rcParams.enableAQ && (p->encodeWidth < 128 || p->encodeHeight < 64)) return NULL;
     char node[128];
     if (uurb_vaapi_device(uuid, node)) return NULL;
     struct uurb_encoder *s = calloc(1, sizeof(*s));
@@ -134,16 +143,13 @@ struct uurb_encoder *uurb_vaapi_open(const unsigned char uuid[16], const NV_ENC_
     if (uuid) memcpy(s->uuid, uuid, 16);
     s->init = *p; s->config = *cfg; s->init.encodeConfig = &s->config;
     if (av_hwdevice_ctx_create(&s->device, AV_HWDEVICE_TYPE_VAAPI, node, NULL, 0) < 0) goto fail;
-    if (cfg->rcParams.enableAQ) {
-        AVHWDeviceContext *device = (void *)s->device->data;
-        VADisplay display = ((AVVAAPIDeviceContext *)device->hwctx)->display;
-        VAConfigAttrib attr = {.type = VAConfigAttribEncROI};
-        VAProfile profile = !memcmp(&p->encodeGUID, &NV_ENC_CODEC_HEVC_GUID, sizeof(GUID)) ? VAProfileHEVCMain : VAProfileH264High;
-        if (vaGetConfigAttributes(display, profile, VAEntrypointEncSlice, &attr, 1) != VA_STATUS_SUCCESS ||
-            attr.value == VA_ATTRIB_NOT_SUPPORTED) goto fail;
-        VAConfigAttribValEncROI roi = {.value = attr.value};
-        if (roi.bits.num_roi_regions < 32 || !roi.bits.roi_rc_qp_delta_support) goto fail;
-    }
+    AVHWDeviceContext *device = (void *)s->device->data;
+    VADisplay display = ((AVVAAPIDeviceContext *)device->hwctx)->display;
+    VAProfile profile = !memcmp(&p->encodeGUID, &NV_ENC_CODEC_HEVC_GUID, sizeof(GUID)) ? VAProfileHEVCMain : VAProfileH264High;
+    s->roi_supported = vaapi_roi_supported(display, profile);
+    if (!uurb_vaapi_spatial_aq_enabled(s->config.rcParams.enableAQ, p->encodeWidth,
+                                       p->encodeHeight, s->roi_supported))
+        s->config.rcParams.enableAQ = 0;
     if (codec_open(s)) goto fail;
     s->software = av_frame_alloc(); s->packet = av_packet_alloc();
     if (!s->software || !s->packet) goto fail;
@@ -250,11 +256,20 @@ int uurb_encoder_release_packet(struct uurb_encoder *s)
 }
 int uurb_encoder_reconfigure_config(struct uurb_encoder *s, const NV_ENC_RECONFIGURE_PARAMS *p)
 {
-    if (!s || s->locked || s->failed || !uurb_nvenc_valid_reconfigure(&s->config, &s->init, p)) return 1;
+    if (!s || s->locked || s->failed || !p || !p->reInitEncodeParams.encodeConfig) return 1;
+    NV_ENC_RECONFIGURE_PARAMS requested = *p;
+    NV_ENC_CONFIG requested_config = *p->reInitEncodeParams.encodeConfig;
+    if (!uurb_vaapi_spatial_aq_enabled(requested_config.rcParams.enableAQ,
+                                       requested.reInitEncodeParams.encodeWidth,
+                                       requested.reInitEncodeParams.encodeHeight,
+                                       s->roi_supported))
+        requested_config.rcParams.enableAQ = 0;
+    requested.reInitEncodeParams.encodeConfig = &requested_config;
+    if (!uurb_nvenc_valid_reconfigure(&s->config, &s->init, &requested)) return 1;
     /* FFmpeg VA-API has no public live bitrate API. Reopen between frames;
      * no B frames/delayed packets are in flight, and the new stream starts IDR. */
     codec_close(s);
-    s->config = *p->reInitEncodeParams.encodeConfig; s->init = p->reInitEncodeParams; s->init.encodeConfig = &s->config;
+    s->config = requested_config; s->init = requested.reInitEncodeParams; s->init.encodeConfig = &s->config;
     if (codec_open(s)) { s->failed = 1; return 1; }
     return 0;
 }
