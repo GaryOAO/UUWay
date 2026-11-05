@@ -1620,7 +1620,7 @@ def update_status(ctx, args):
 
 def update_recovery_layer(ctx, args):
     """An update that crashes the desktop must not leave the machine at a login screen for good."""
-    hyprland = 'Hyprland' in os.environ.get('XDG_CURRENT_DESKTOP', '').split(':')
+    hyprland = backend_name() == 'hyprland'
     timed = None if hyprland else timed_state(ctx)
     if timed and timed[0] and timed[1] == getpass.getuser():
         return
@@ -1629,6 +1629,8 @@ def update_recovery_layer(ctx, args):
     warn('这台机器在桌面崩溃或注销后不会自动重新登录：万一更新让桌面崩溃，没有人在本机登录，UU 就一直离线。')
     info('请先配置会话自动恢复，或明确允许无自动登录保护的更新。' if hyprland else '先开启：uuway autologin on')
     if ctx.assume_yes or not sys.stdin.isatty():
+        if hyprland:
+            raise SetupError('请先配置 Hyprland 会话自动恢复，或明确使用 --allow-no-recovery 允许继续。')
         raise SetupError('没有开启“崩溃后自动重新登录”，--yes 或非交互运行不会替你冒这个险。'
                          '先运行 uuway autologin on，或在终端里交互运行并明确同意。')
     if not input('   仍然继续？[y/N] ').lower().startswith('y'):

@@ -154,7 +154,9 @@ check "re-running the installer over its own units succeeds (upgrade path)" as_u
 
 section "uuway command in a machine that has no GPU, Wine or desktop"
 check "doctor reports the missing pieces and exits non-zero" bash -c "
-    ! runuser -u tester -- env HOME=/home/tester uuway doctor > /tmp/doctor.txt; grep -q 'NVIDIA' /tmp/doctor.txt && grep -q 'WineHQ' /tmp/doctor.txt"
+    if runuser -u tester -- env HOME=/home/tester uuway doctor > /tmp/doctor.txt; then cat /tmp/doctor.txt; exit 1; fi
+    cat /tmp/doctor.txt
+    grep -q 'NVIDIA' /tmp/doctor.txt && grep -q 'Wine 11.0' /tmp/doctor.txt"
 mkdir -p /tmp/fakebin
 printf '#!/bin/sh\necho "GPU 0: Fake GPU (UUID: GPU-test)"\n' > /tmp/fakebin/nvidia-smi
 chmod +x /tmp/fakebin/nvidia-smi

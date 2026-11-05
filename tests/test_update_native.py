@@ -22,10 +22,10 @@ class NativeUpdateTests(unittest.TestCase):
 
     def test_asset_names_remain_separate_and_legacy_ubuntu_is_unchanged(self):
         names = {target: update.package_name('1.5.0', target) for target in update.TARGETS}
-        self.assertEqual(len(set(names.values())), 4)
+        self.assertEqual(len(set(names.values())), 5)
         self.assertEqual(names['ubuntu'], update.deb_name('1.5.0'))
         self.assertTrue(names['debian-13'].endswith('_trixie_amd64.deb'))
-        self.assertTrue(names['fedora'].endswith('.fedora.x86_64.rpm'))
+        self.assertTrue(names['fedora-44'].endswith('.fedora44.x86_64.rpm'))
         self.assertTrue(names['arch'].endswith('.pkg.tar.zst'))
         with self.assertRaises(update.VerifyError):
             update.package_name('1.5.0', '../unknown')
@@ -36,23 +36,23 @@ class NativeUpdateTests(unittest.TestCase):
             self.assertEqual(update.installed_target(root), 'ubuntu')
             info = root / 'usr/lib/uuway/package-info.json'
             info.parent.mkdir(parents=True)
-            info.write_text(json.dumps(dict(target='fedora')))
-            self.assertEqual(update.installed_target(root), 'fedora')
+            info.write_text(json.dumps(dict(target='fedora-44')))
+            self.assertEqual(update.installed_target(root), 'fedora-44')
             info.write_text(json.dumps(dict(target='unknown')))
             with self.assertRaises(update.VerifyError):
                 update.installed_target(root)
 
     def test_rpm_rejects_wrong_distribution_architecture_version_and_obsoletes(self):
-        metadata = ('Package: uuway\nVersion: 1.5.0\nArchitecture: x86_64\nTarget: fedora\n'
+        metadata = ('Package: uuway\nVersion: 1.5.0\nArchitecture: x86_64\nTarget: fedora-44\n'
                     'Release: 1\nEpoch: 0\nObsoletes: \n')
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            self.stage(root, 'fedora')
+            self.stage(root, 'fedora-44')
             def verify(text):
-                return update.check_release(root, 'v1.5.0', '1.4.4', target='fedora',
+                return update.check_release(root, 'v1.5.0', '1.4.4', target='fedora-44',
                     run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, text, ''))
             self.assertEqual(verify(metadata).version, '1.5.0')
-            for old, new in (('Target: fedora', 'Target: ubuntu'), ('x86_64', 'aarch64'),
+            for old, new in (('Target: fedora-44', 'Target: fedora-45'), ('x86_64', 'aarch64'),
                              ('Version: 1.5.0', 'Version: 1.4.4'), ('Release: 1', 'Release: 2'),
                              ('Epoch: 0', 'Epoch: 1'), ('Obsoletes: ', 'Obsoletes: other')):
                 with self.subTest(new=new), self.assertRaises(update.VerifyError):
@@ -79,19 +79,19 @@ class NativeUpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.stage(root, 'ubuntu')
-            for target in ('debian-13', 'fedora', 'arch'):
+            for target in ('debian-13', 'fedora-44', 'fedora-45', 'arch'):
                 with self.subTest(target=target), self.assertRaises(update.VerifyError):
                     update.check_checksums(root, 'v1.5.0', target=target)
 
     def test_native_versions_are_compared_without_dpkg(self):
-        for target in ('fedora', 'arch'):
+        for target in ('fedora-44', 'fedora-45', 'arch'):
             self.assertTrue(update.version_is_newer('1.10.0', '1.9.9', target=target))
             self.assertFalse(update.version_is_newer('1.5.0', '1.5.0', target=target))
             with self.assertRaises(update.VerifyError):
                 update.version_is_newer('1.5.0', '1.4.3~port1', target=target)
 
     def test_package_manager_commands_cannot_update_unrelated_packages(self):
-        for target, tool in (('fedora', 'rpm'), ('arch', 'pacman')):
+        for target, tool in (('fedora-44', 'rpm'), ('arch', 'pacman')):
             job = type('Job', (), dict(target=target))()
             command = update.install_command(job, '/private/uuway-package', downgrade=True)
             self.assertEqual(command[0], tool)
@@ -99,6 +99,22 @@ class NativeUpdateTests(unittest.TestCase):
             self.assertNotIn('--nodeps', command)
             self.assertNotIn('--allowerasing', command)
             self.assertNotIn('--overwrite', command)
+
+    def test_hyprland_without_a_systemd_graphical_target_uses_the_live_compositor(self):
+        commands = []
+        def command(argv, **kwargs):
+            commands.append(argv)
+            return subprocess.CompletedProcess(argv, 0, '[{"name":"DP-1"}]', '')
+        job = type('Job', (), {})()
+        job.session_env = dict(XDG_CURRENT_DESKTOP='Hyprland', HYPRLAND_INSTANCE_SIGNATURE='instance')
+        job.as_user = command
+        self.assertTrue(update.session_present(job))
+        self.assertEqual(commands, [['hyprctl', '-j', 'monitors']])
+        for result in ('[]', '{}', 'broken', '[{"disabled":true}]'):
+            job.as_user = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, result, '')
+            self.assertFalse(update.session_present(job))
+        job.session_env.pop('HYPRLAND_INSTANCE_SIGNATURE')
+        self.assertFalse(update.session_present(job))
 
 
 if __name__ == '__main__':

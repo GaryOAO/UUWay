@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build distribution-native UUWay using official prebuilt Wine 11.0.
-# Usage: packaging/build-linux.sh --target debian-13|fedora-44|arch --version 1.4.3
+# Usage: packaging/build-linux.sh --target debian-13|fedora-44|fedora-45|arch --version 1.4.3
 set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 target='' version='' output_dir='' keep=0

@@ -72,5 +72,5 @@ def uninstall_command(release=None):
 def ota_supported(root=None):
     info = package_info(root)
     # Legacy Ubuntu packages have no metadata. New packages must opt in.
-    return (info.get('ota') is True and info.get('target') in ('ubuntu', 'debian-13', 'fedora', 'arch')
+    return (info.get('ota') is True and info.get('target') in ('ubuntu', 'debian-13', 'fedora-44', 'fedora-45', 'arch')
             if info else os_release().get('ID') == 'ubuntu')

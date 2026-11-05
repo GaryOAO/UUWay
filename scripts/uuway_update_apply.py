@@ -40,7 +40,8 @@ DEFAULT_TARGET = 'ubuntu'
 TARGETS = {
     'ubuntu': ('deb', 'amd64', 'uuway_{version}_amd64.deb'),
     'debian-13': ('deb', 'amd64', 'uuway_{version}_trixie_amd64.deb'),
-    'fedora': ('rpm', 'x86_64', 'uuway-{version}-1.fedora.x86_64.rpm'),
+    'fedora-44': ('rpm', 'x86_64', 'uuway-{version}-1.fedora44.x86_64.rpm'),
+    'fedora-45': ('rpm', 'x86_64', 'uuway-{version}-1.fedora45.x86_64.rpm'),
     'arch': ('arch', 'x86_64', 'uuway-{version}-1-x86_64.pkg.tar.zst'),
 }
 
@@ -549,6 +550,19 @@ def network_is_up(job):
 
 
 def session_present(job):
+    desktops = job.session_env.get('XDG_CURRENT_DESKTOP', '').lower().split(':')
+    if 'hyprland' in desktops:
+        # Hyprland can run without graphical-session.target (for example without UWSM).
+        # Imported environment alone can outlive the compositor; ask the live instance.
+        if not job.session_env.get('HYPRLAND_INSTANCE_SIGNATURE'):
+            return False
+        result = job.as_user(['hyprctl', '-j', 'monitors'], timeout=30)
+        try:
+            monitors = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            return False
+        return (result.returncode == 0 and isinstance(monitors, list)
+                and any(isinstance(m, dict) and not m.get('disabled', False) for m in monitors))
     result = job.as_user(['systemctl', '--user', 'is-active', '--quiet', 'graphical-session.target'],
                          session=False, timeout=30)
     return result.returncode == 0
@@ -565,8 +579,8 @@ def wait_for_session(job, limit=SESSION_WAIT):
         if (job.layout.runtime / str(job.uid) / 'bus').exists():
             shown = job.as_user(['systemctl', '--user', 'show-environment'], session=False, timeout=30)
             values = parse_environment(shown.stdout) if shown.returncode == 0 else {}
-            desktops = values.get('XDG_CURRENT_DESKTOP', '').split(':')
-            if values.get('XDG_SESSION_TYPE') == 'wayland' and any(d in desktops for d in ('GNOME', 'Hyprland')):
+            desktops = values.get('XDG_CURRENT_DESKTOP', '').lower().split(':')
+            if values.get('XDG_SESSION_TYPE') == 'wayland' and any(d in desktops for d in ('gnome', 'hyprland')):
                 return {key: values[key] for key in SESSION_KEYS if key in values}
         if job.clock() >= end:
             return None

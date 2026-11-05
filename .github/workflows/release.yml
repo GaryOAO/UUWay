@@ -60,7 +60,7 @@ jobs:
           root = pathlib.Path('out')
           arch_version = version.replace('~', '.').replace('+', '.')
           names = [f'uuway_{version}_amd64.deb', f'uuway_{version}_trixie_amd64.deb',
-                   f'uuway-{version}-1.fedora.x86_64.rpm',
+                   f'uuway-{version}-1.fedora44.x86_64.rpm', f'uuway-{version}-1.fedora45.x86_64.rpm',
                    f'uuway-{arch_version}-1-x86_64.pkg.tar.zst']
           assert all((root / name).is_file() for name in names), names
           (root / 'SHA256SUMS').write_text(''.join(

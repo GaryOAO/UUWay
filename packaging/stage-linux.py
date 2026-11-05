@@ -67,7 +67,7 @@ def build_rpm(stage, work, output, name, version, depends, suite, *, runtime=Fal
         '%global debug_package %{nil}\n%global _build_id_links none\n'
         '%global __requires_exclude ^(libcuda\\.so\\.1|libFcitx5Core\\.so\\.7|libFcitx5Utils\\.so\\.2).*$\n'
         '%global __os_install_post %{nil}\n'
-        f'Name: {name}\nVersion: {version}\nRelease: 1\nDistribution: fedora\n'
+        f'Name: {name}\nVersion: {version}\nRelease: 1\nDistribution: {suite.replace("fedora", "fedora-")}\n'
         f'Summary: {"UU Remote Linux host" if runtime else "UUWay private Wine 11.0"}\n'
         f'License: {"AGPL-3.0-only" if runtime else "LGPL-2.1-or-later"}\n'
         'URL: https://github.com/GaryOAO/UUWay\nSource0: payload.tar.gz\n'

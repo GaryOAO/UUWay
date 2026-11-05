@@ -48,7 +48,7 @@ UUWay 让官方 Windows 版 UU 远程被控端在 Linux 上运行，用手机或
 
 3. 向导会先查找下载目录中的 UU Windows 安装包，找不到时从 UU 官方下载。也可用 `uuway setup --installer 路径` 指定本地安装包。按提示登录 UU，允许屏幕共享和文字服务。完成后从应用菜单打开 **UUWay 控制台**，即可在控制端连接。
 
-发布包以 Ubuntu 24.04 构建，其他版本如遇依赖差异可[从源码构建](docs/build.md)。向导会安装并固定 Wine 11、验证编码后端、配置用户服务；可重复运行。优先选择 NVIDIA，验证失败后尝试 AMD，不会安装或切换显卡驱动。Fcitx5 插件首次启用后需重启输入法：`fcitx5 -r`。
+Ubuntu 安装包以 Ubuntu 24.04 构建；其他发行版请选用[对应安装包](docs/linux-packages.md)，遇到依赖差异也可[从源码构建](docs/build.md)。向导会安装并固定 Wine 11、验证编码后端、配置用户服务；可重复运行。优先选择 NVIDIA，验证失败后尝试 AMD，不会安装或切换显卡驱动。Fcitx5 插件首次启用后需重启输入法：`fcitx5 -r`。
 
 ## 常用操作
 

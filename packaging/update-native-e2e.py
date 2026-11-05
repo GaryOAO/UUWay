@@ -46,6 +46,10 @@ class Runner:
             if inner[:3] == ['systemctl', '--user', 'show-environment']:
                 output = ('XDG_SESSION_TYPE=wayland\nXDG_CURRENT_DESKTOP=Hyprland\n'
                           'HYPRLAND_INSTANCE_SIGNATURE=ci-instance\n')
+            elif inner[:3] == ['hyprctl', '-j', 'monitors']:
+                output = '[{"name":"HEADLESS-1","disabled":false}]'
+            elif inner[:4] == ['systemctl', '--user', 'is-active', '--quiet']:
+                return subprocess.CompletedProcess(argv, 3, '', '')
             elif inner[:3] == ['systemctl', '--user', 'show']:
                 version = update.parse_installed(update.run_command(update.installed_command(TARGET)), TARGET)
                 for name in update.SERVICES:
@@ -88,7 +92,9 @@ def make_release(work, version):
         shutil.copyfile(next((top / 'RPMS').rglob('*.rpm')), package)
     else:
         (tree / '.PKGINFO').write_text(
-            f'pkgname = uuway\npkgver = {version}-1\npkgdesc = update fixture\n'
+            f'pkgname = uuway\npkgbase = uuway\npkgver = {version}-1\npkgdesc = update fixture\n'
+            'url = https://github.com/GaryOAO/UUWay\nbuilddate = 1\n'
+            'packager = CI <ci@example.invalid>\nsize = 0\nlicense = MIT\nxdata = pkgtype=pkg\n'
             'arch = x86_64\nprovides = uuway-target-arch\n')
         run(['bsdtar', '--zstd', '-cf', package, '-C', tree, '.PKGINFO', 'usr'])
     (directory / 'SHA256SUMS').write_text(f'{update.sha256_file(package)}  {package.name}\n')

@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [debian-13, fedora-44, arch]
+        target: [debian-13, fedora-44, fedora-45, arch]
     steps:
       - uses: actions/checkout@v4
       - name: Build and install-check UUWay with official Wine 11.0 binaries
@@ -58,20 +58,6 @@ jobs:
         with:
           name: uuway-${{ matrix.target }}
           path: out/
-  fedora-45:
-    needs: native
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: uuway-fedora-44
-          path: out
-      - name: Check the same Fedora RPM and official Wine 11.0 on Fedora 45
-        run: |
-          docker run --rm -i -v "$PWD/out:/packages:ro" -v "$PWD:/source:ro" \
-            fedora:45 bash -s -- fedora-45 /packages < packaging/container-linux-test.sh
   ubuntu:
     needs: test
     runs-on: ubuntu-24.04

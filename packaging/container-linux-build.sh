@@ -17,7 +17,7 @@ case "$target:${ID:-}:${VERSION_ID:-}" in
             glslang-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev \
             libfcitx5utils-dev libavcodec-dev libavutil-dev libswscale-dev libva-dev
         ;;
-    fedora-44:fedora:44)
+    fedora-44:fedora:44|fedora-45:fedora:45)
         dnf install -y --setopt=install_weak_deps=False ca-certificates curl git ripgrep python3 gcc gcc-c++ \
             make mingw64-gcc mingw64-gcc-c++ meson ninja-build \
             pkgconf-pkg-config xz dpkg rpm-build python3-rpm \
