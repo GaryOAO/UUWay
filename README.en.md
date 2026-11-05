@@ -5,6 +5,9 @@
 [简体中文](README.md) · [English](README.en.md)
 
 ![Ubuntu 24.04 / 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%7C%2026.04-E95420?logo=ubuntu&logoColor=white)
+[![Debian 13](https://img.shields.io/badge/Debian-13-A81D33?logo=debian&logoColor=white)](docs/linux-packages.md)
+[![Fedora 44 / 45](https://img.shields.io/badge/Fedora-44%20%7C%2045-51A2DA?logo=fedora&logoColor=white)](docs/linux-packages.md)
+[![Arch Linux](https://img.shields.io/badge/Arch-Linux-1793D1?logo=archlinux&logoColor=white)](docs/linux-packages.md)
 ![GNOME Wayland](https://img.shields.io/badge/GNOME-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![AMD VA-API](https://img.shields.io/badge/AMD-VA--API-ED1C24?logo=amd&logoColor=white)
@@ -38,17 +41,17 @@ The following common UU features are adapted for Linux. See [supported scope](#s
 
 Mainline targets **GNOME Wayland**, with an NVIDIA GPU supporting NVENC or an AMD GPU supporting H.264/HEVC VA-API. Ubuntu 24.04 / GNOME 46 is the reference environment; Ubuntu 26.04 also has compatibility fixes and hardware validation. Keep the desktop logged in. A machine without a monitor still needs a desktop output, such as a display dummy plug.
 
-1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest) and obtain the official Windows UU installer.
+1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest).
 2. Install the package and run setup as your normal user:
 
    ```bash
    sudo apt install ./uuway_*_amd64.deb
-   uuway setup --installer ~/Downloads/UURemote_Setup.exe
+   uuway setup
    ```
 
-3. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
+3. Setup looks for a UU Windows installer in your Downloads folder, then downloads it from UU's official endpoint if none is found. Use `--installer PATH` to supply a local file. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
 
-Release packages are built on Ubuntu 24.04; [build from source](docs/build.md) if another version has different dependencies. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
+Ubuntu packages are built on Ubuntu 24.04; other distributions have [native packages](docs/linux-packages.md). [Build from source](docs/build.md) if dependencies differ. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
 
 ## Common commands
 
@@ -61,7 +64,7 @@ uuway update rollback          # Roll back an update
 uuway refresh --restart-display # Reload display service; removes Super Screens
 ```
 
-The console checks for updates every six hours while open; automatic checks can be disabled. Updating briefly disconnects remote sessions. OTA installation requires a `.deb` install; source installations should rebuild from updated source.
+The console checks for updates every six hours while open; automatic checks can be disabled. Updating briefly disconnects remote sessions. Package installations select the matching distribution's update asset; source installations should rebuild from updated source.
 
 For remote-only use, `uuway autologin on` enables GDM login and relogin after the desktop exits. Anyone with physical access can also enter the desktop; consider that before enabling it. Disable with `uuway autologin off`.
 
@@ -80,6 +83,10 @@ Results apply to the listed versions and conditions. “Needs adjustments” mea
 | Arch Linux | Hyprland / session not reported | Not reported | Unverified | No Hyprland test result; working reports in this discussion concern KDE | Inquiry [#3](https://github.com/GaryOAO/UUWay/issues/3) |
 
 Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+
+[Experimental support](docs/linux-packages.md) is available for Debian 13, Fedora 44 / 45 and Arch Linux. These builds have not yet been tested on real hardware. Compatibility reports via [Issues](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) and code contributions via [PRs](https://github.com/GaryOAO/UUWay/compare) are welcome.
+
+Hyprland has an [experimental single-monitor backend](docs/hyprland.md). Remote mode changes and Super Screen are not supported yet.
 
 - Up to eight active displays. Mirroring, rotation and Intel-only encoding are unsupported. AMD uses host-memory copies; NVIDIA uses a zero-copy GPU path.
 - Super Screen can still show two cursors. Display modes, drivers and hardware limit resolution, refresh rate and streaming performance; a 144 Hz mode does not guarantee a 144 fps stream.

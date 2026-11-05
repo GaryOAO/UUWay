@@ -724,14 +724,14 @@ class UpdateCase(CliCase):
         self.progress = []
         self.baseline = dict(self.HEALTHY)
 
-        def check_release(stage, tag, installed, *, run):
+        def check_release(stage, tag, installed, *, run, target='ubuntu'):
             self.checked = (tag, installed)
             deb = Path(stage) / f"uuway_{tag[1:]}_amd64.deb"
             return cli.update_checks.Release(tag[1:], deb, "0" * 64)
         self.checked = None
         self.early_checks = []
 
-        def check_checksums(stage, tag):
+        def check_checksums(stage, tag, *, target='ubuntu'):
             self.early_checks.append((Path(stage), tag))
             return "0" * 64
         for override in (patch.object(cli, "DEB_ROOT", self.checkout.resolve()),

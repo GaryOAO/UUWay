@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        UUWay 主线面向 GNOME Wayland，支持 NVIDIA NVENC 和 AMD VA-API；已验证环境见 README 的「支持范围」。欢迎反馈其他发行版、桌面与显卡的使用情况。
+        UUWay 主线面向 GNOME Wayland，另有跨发行版和 Hyprland 实验支持。欢迎反馈使用情况，也欢迎提交代码一起完善。
         运行 `uuway doctor` 可以一次性收集下面大部分信息。
   - type: dropdown
     id: result
@@ -30,7 +30,7 @@ body:
     id: system
     attributes:
       label: 系统 / System
-      description: "发行版与版本、桌面及版本、Wayland / X11、内核（`uname -r`）；GNOME 版本可运行 `gnome-shell --version`"
+      description: "发行版与版本、桌面及版本、Wayland / X11、内核（`uname -r`）"
       placeholder: "Ubuntu 24.04.5, GNOME Shell 46.x, 6.8.0-xx"
     validations:
       required: true
@@ -38,7 +38,7 @@ body:
     id: versions
     attributes:
       label: 版本 / Versions
-      description: "`uuway --version`、`/opt/wine-stable/bin/wine --version`、UU 远程版本"
+      description: "`uuway --version`、`uuway doctor` 中的 Wine 版本、UU 远程版本"
       placeholder: "uuway 1.0.0, wine-11.0, UU 4.42.0.2770"
     validations:
       required: true

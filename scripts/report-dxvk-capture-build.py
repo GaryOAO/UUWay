@@ -2,6 +2,7 @@
 """Record actual pinned source and built PE hashes, not runtime acceptance."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -24,8 +25,10 @@ def report():
         if data[:2] != b'MZ':
             raise RuntimeError('Expected built PE module: ' + name)
         files[name] = dict(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+    system_toolchain = os.environ.get('UURB_USE_SYSTEM_TOOLCHAIN') == '1'
     return dict(dxvk_revision=revision, submodules=manifest['submodules'],
-                packages=manifest['packages'], files=files,
+                toolchain='distribution' if system_toolchain else 'pinned_ubuntu',
+                packages=[] if system_toolchain else manifest['packages'], files=files,
                 hook_sha256=hashlib.sha256((ROOT / 'src/dxvk_capture_hook.h').read_bytes()).hexdigest(),
                 patch_sha256=hashlib.sha256((ROOT / 'patches/dxvk-3.1-private-capture.patch').read_bytes()).hexdigest(),
                 private_build=True, default_capture_enabled=False, runtime_tested=False, uu_session_tested=False)

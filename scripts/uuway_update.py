@@ -203,7 +203,7 @@ def latest_release(fetcher, etag=None):
                   headers.get('etag'), RELEASE_PAGE.format(tag=tag))
 
 
-def download_release(fetcher, tag, dest, before_deb=None):
+def download_release(fetcher, tag, dest, before_deb=None, *, target=checks.DEFAULT_TARGET):
     """Fetch SHA256SUMS and the deb of `tag` into `dest` (created 0700).
 
     `before_deb(dest)` runs once SHA256SUMS is there and before the deb is fetched, so a release
@@ -215,11 +215,25 @@ def download_release(fetcher, tag, dest, before_deb=None):
     dest = Path(dest)
     dest.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(dest, 0o700)
-    for name, limit in (('SHA256SUMS', SMALL_LIMIT), (checks.deb_name(match.group(1)), DEB_LIMIT)):
-        if name == checks.deb_name(match.group(1)) and before_deb is not None:
+    package = checks.package_name(match.group(1), target)
+    for name, limit in (('SHA256SUMS', SMALL_LIMIT), (package, DEB_LIMIT)):
+        if name == package and before_deb is not None:
             before_deb(dest)
         try:
             fetcher.save(DOWNLOAD_URL.format(tag=tag, name=name), dest / name, limit)
         except NotFound:
             raise FetchError(f'{tag} 缺少 {name}。') from None
     return dest
+
+
+def download_previous(fetcher, version, dest, *, target):
+    """Keep a verified old native package locally before an RPM/Arch update starts."""
+    if checks.TARGETS[target][0] == 'deb':
+        return
+    tag = 'v' + version
+    if not checks.TAG.fullmatch(tag):
+        raise FetchError('开发构建没有正式回滚包，请先手动安装当前发行版的正式安装包。')
+    previous = Path(dest) / 'previous'
+    download_release(fetcher, tag, previous, target=target,
+                     before_deb=lambda stage: checks.check_checksums(stage, tag, target=target))
+    checks.check_release(previous, tag, version, target=target, require_newer=False)

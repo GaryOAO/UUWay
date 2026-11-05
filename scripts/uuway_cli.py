@@ -31,11 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import uuway_update  # noqa: E402
 import uuway_update_apply as update_checks  # noqa: E402
+import uuway_platform as platform  # noqa: E402
+import uuway_installer  # noqa: E402
+import uuway_wine_archive  # noqa: E402
+from native_desktop import backend_name, HyprlandDisplay  # noqa: E402
 
 PYTHON = '/usr/bin/python3'
-WINE_DIR = Path('/opt/wine-stable/bin')
+WINE_DIR = platform.wine_directory()
 WINE_SERIES = 'wine-11.0'
-WINE_PIN = Path('/etc/apt/preferences.d/uuway-wine')
+WINE_PIN = platform.wine_pin_path()
 SERVICES = ('uu-native-display', 'uu-native-text', 'uu-native-bridge')
 GDM_CONFIGS = (Path('/etc/gdm3/custom.conf'), Path('/etc/gdm/custom.conf'))  # Debian/Ubuntu, Fedora/Arch
 AUTOLOGIN_KEYS = ('AutomaticLoginEnable', 'AutomaticLogin')
@@ -264,15 +268,22 @@ def check_environment(ctx):
         for line in Path('/etc/os-release').read_text().splitlines():
             key, _, value = line.partition('=')
             release[key] = value.strip('"')
-    if release.get('ID') == 'ubuntu' and release.get('VERSION_ID') == '24.04':
-        ok('Ubuntu 24.04')
+    if (release.get('ID'), release.get('VERSION_ID')) in (('ubuntu', '24.04'), ('ubuntu', '26.04')):
+        ok(release.get('PRETTY_NAME', 'Ubuntu'))
     else:
-        warn(f'UUWay 只在 Ubuntu 24.04 上验证过（当前：{release.get("PRETTY_NAME", "未知")}），继续但不保证可用。')
+        warn(f'当前系统：{release.get("PRETTY_NAME", "未知")}；跨发行版包仍需 GNOME Wayland 真机验证。')
     session = os.environ.get('XDG_SESSION_TYPE', '')
     desktop = os.environ.get('XDG_CURRENT_DESKTOP', '')
-    if session != 'wayland' or 'GNOME' not in desktop:
-        raise SetupError(f'请在 GNOME Wayland 会话里运行（当前会话：{session or "未知"} / {desktop or "未知"}）。')
-    ok('GNOME Wayland 会话')
+    if session != 'wayland' or ('GNOME' not in desktop and backend_name() != 'hyprland'):
+        raise SetupError(f'请在 GNOME Wayland 或 Hyprland 会话里运行（当前会话：{session or "未知"} / {desktop or "未知"}）。')
+    if backend_name() == 'hyprland':
+        try:
+            HyprlandDisplay().current()
+        except (ValueError, RuntimeError) as error:
+            raise SetupError(str(error)) from error
+        warn('Hyprland 实验支持：单屏、100% 缩放，暂不支持修改显示模式和超级屏。')
+    else:
+        ok('GNOME Wayland 会话')
     backend = select_backend(ctx)
     ctx.backend = backend
     if backend == 'amd':
@@ -313,6 +324,8 @@ def backend_available(backend):
 def amd_backend_probe(ctx, backend='amd'):
     root = backend_root(backend) or ROOT / 'build'
     binary = root / 'native-presenter/uu-vaapi-probe'
+    if root.name == backend and root.parent.name == 'backends':
+        binary = platform.backend_file(root.parents[2], backend, 'uu-vaapi-probe')
     with tempfile.TemporaryDirectory(prefix='uuway-amd-check-') as directory:
         return ctx.probe([binary, directory])
 
@@ -380,7 +393,7 @@ def backend_for_context(ctx):
 
 def wine_done(ctx):
     version = wine_version(ctx)
-    return bool(version) and version.startswith(WINE_SERIES) and WINE_PIN.is_file()
+    return platform.wine_compatible(version) and (platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file())
 
 
 def wine_pin_command(ctx):
@@ -390,7 +403,34 @@ def wine_pin_command(ctx):
 
 def wine_run(ctx):
     version = wine_version(ctx)
-    if version and version.startswith(WINE_SERIES):
+    if platform.is_arch():
+        if platform.wine_compatible(version):
+            ok('Wine 11.0 官方归档包')
+            return
+        info('下载 Arch 官方 Wine 11.0 归档包，安装到 UUWay 独立目录。')
+        ctx.run([PYTHON, ROOT / 'scripts/uuway_wine_archive.py'])
+        if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
+            raise SetupError('Wine 11.0 安装失败。')
+        return
+    if platform.os_release().get('ID') == 'fedora':
+        if ctx.confirm('现在下载官方预编译包，安装固定的 Wine 11.0？'):
+            release = platform.os_release()
+            ctx.run(ctx.elevate(['bash', ROOT / 'scripts/install-wine11.sh', 'fedora-' + release.get('VERSION_ID', '')]))
+        else:
+            raise SetupError('缺少固定的 Wine 11.0，已停止。')
+        if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
+            raise SetupError('Wine 11.0 安装失败。')
+        return
+    if WINE_DIR == platform.PRIVATE_WINE:
+        if not platform.wine_compatible(version):
+            raise SetupError('配套 Wine 不是 11.0，请重新安装 uuway-wine11。')
+        ok('独立 Wine 11.0 运行时（不随系统 Wine 升级）')
+        return
+    try:
+        source_name, source_url = platform.winehq_source()
+    except ValueError as error:
+        raise SetupError(str(error)) from error
+    if platform.wine_compatible(version):
         info('WineHQ 已是 11.0。还差把它固定在 11.0 系列，免得 apt upgrade 悄悄升到不兼容的版本。')
         if ctx.confirm(f'现在用 sudo 写入 {WINE_PIN}？'):
             ctx.run(wine_pin_command(ctx))
@@ -406,10 +446,10 @@ def wine_run(ctx):
         ctx.run(sudo + ['install', '-d', '-m', '0755', '/etc/apt/keyrings'])
         ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/keyrings/winehq-archive.asc',
                         'https://dl.winehq.org/wine-builds/winehq.key'])
-        ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/sources.list.d/winehq-noble.sources',
-                        'https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources'])
+        source_path = '/etc/apt/sources.list.d/' + source_name
+        ctx.run(sudo + ['curl', '-fsSLo', source_path, source_url])
         ctx.run(sudo + ['sed', '-i', 's@winehq-archive.key@winehq-archive.asc@',
-                        '/etc/apt/sources.list.d/winehq-noble.sources'])
+                        source_path])
     else:
         info('已有 WineHQ 软件源配置，保持不变。')
     ctx.run(wine_pin_command(ctx))
@@ -418,7 +458,7 @@ def wine_run(ctx):
     ctx.run(sudo + ['apt-get', 'install', '-y', '--install-recommends',
                     'winehq-stable' + series, 'wine-stable' + series, 'wine-stable-amd64' + series,
                     'wine-stable-i386:i386' + series])
-    if not ctx.dry_run and not (wine_version(ctx) or '').startswith(WINE_SERIES):
+    if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
         raise SetupError(f'装好的 WineHQ 不是 11.0 版（{wine_version(ctx) or "未找到"}）。')
 
 
@@ -473,7 +513,7 @@ def powershell_native(ctx):
 def find_installer(ctx):
     if getattr(ctx.args, 'installer', None):
         return Path(ctx.args.installer).expanduser()
-    names = ('UURemote*.exe', '*UU*emote*.exe')
+    names = ('UURemote*.exe', '*UU*emote*.exe', 'uuyc_*.exe')
     for directory in (ctx.home / 'Downloads', ctx.home / '下载'):
         for pattern in names:
             for candidate in sorted(directory.glob(pattern)):
@@ -531,10 +571,15 @@ def prefix_run(ctx):
         ok(f'UU 已安装在 {ctx.prefix}')
     else:
         installer = find_installer(ctx)
-        if installer is None and not ctx.dry_run:
-            info('请先从 UU 远程官网下载 Windows 版安装包（UUWay 不分发它）。')
-            installer = Path(input('   安装包路径：').strip().replace('~', str(ctx.home), 1)).expanduser()
-        installer = installer or ctx.home / 'Downloads/UURemote_Setup.exe'
+        if installer is None:
+            installer = ctx.state_dir / 'downloads/UURemote_Setup.exe'
+            info('从 UU 官方下载 Windows 安装包：' + uuway_installer.INSTALLER_URL)
+            if not ctx.dry_run:
+                try:
+                    result = uuway_installer.download(installer)
+                except uuway_installer.DownloadError as error:
+                    raise SetupError(str(error)) from error
+                ok(f'下载完成（{result["bytes"] // (1 << 20)} MiB，SHA256 {result["sha256"]}）')
         if not ctx.dry_run and not installer.is_file():
             raise SetupError(f'找不到安装包：{installer}')
         ok(f'安装包：{installer}')
@@ -658,6 +703,8 @@ def fcitx_run(ctx):
 # --------------------------------------------------------------------- step: portal
 
 def portal_done(ctx):
+    if backend_name() == 'hyprland':
+        return (ctx.state_dir / 'hyprland-portal-check.json').is_file() and not getattr(ctx.args, 'regrant_screen', False)
     try:
         has_token = ctx.restore_state.stat().st_size > 0
     except OSError:
@@ -668,6 +715,15 @@ def portal_done(ctx):
 def portal_run(ctx):
     if not ctx.dry_run:
         ctx.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if backend_name() == 'hyprland':
+        info('请选择并允许共享当前屏幕；Hyprland 连接时可能需要再次在本机确认。')
+        state = HyprlandDisplay().current()
+        mode = state['modes'][0]
+        ctx.run([PYTHON, ROOT / 'scripts/probe-wayland-portal.py', '--capture-check',
+                 '--expected-size', str(mode['width']), str(mode['height'])])
+        if not ctx.dry_run:
+            write_atomic(ctx.state_dir / 'hyprland-portal-check.json', b'{"version":1,"checked":true}', 0o600)
+        return
     backup = None
     if getattr(ctx.args, 'regrant_screen', False) and ctx.restore_state.exists() and not ctx.dry_run:
         backup = ctx.restore_state.with_name(ctx.restore_state.name + f'.before-{int(time.time())}')
@@ -802,7 +858,8 @@ def runtime_run(ctx):
                '--backend', ctx.backend]
     if not ctx.runtime_config.exists():
         # A re-run must keep what the console saved, so these only go in on a fresh install.
-        command += ['--cursor-mode', 'metadata', '--preserve-display-session']
+        command += ['--cursor-mode', 'embedded' if backend_name() == 'hyprland' else 'metadata',
+                    '--preserve-display-session']
     ctx.run(command)
     # Wine's Linux path view is applied while the bridge is stopped, and the short-lived
     # wineserver the registry update starts is reaped before the bridge's Wine starts.
@@ -814,7 +871,8 @@ def runtime_run(ctx):
     backend_file = ctx.config_dir / 'text-backend.json'
     if not backend_file.exists():
         pgrep = ctx.probe(['pgrep', '-u', str(os.getuid()), '-x', 'fcitx5'])
-        backend = 'fcitx' if pgrep.returncode == 0 and fcitx_conf_path(ctx).is_file() else 'portal'
+        backend = 'fcitx' if (backend_name() == 'hyprland' or
+                              (pgrep.returncode == 0 and fcitx_conf_path(ctx).is_file())) else 'portal'
         if ctx.dry_run:
             info(f'（演练）会写入 {backend_file}：{backend}')
         else:
@@ -845,6 +903,10 @@ def restart_services_confirmed(ctx):
 
 
 def start_run(ctx):
+    if backend_name() == 'hyprland':
+        variables = [name for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_CURRENT_DESKTOP',
+                     'XDG_SESSION_TYPE', 'HYPRLAND_INSTANCE_SIGNATURE') if name in os.environ]
+        ctx.run(['systemctl', '--user', 'import-environment', *variables])
     ctx.restart_bridge |= bool(getattr(ctx.args, 'restart_services', False))
     restart_display = ctx.restart_display or getattr(ctx.args, 'restart_display', False)
     if restart_display:
@@ -877,6 +939,8 @@ def start_run(ctx):
 # --------------------------------------------------------------------- step: text consent
 
 def consent_done(ctx):
+    if backend_name() == 'hyprland':
+        return True  # XDPH has no RemoteDesktop clipboard backend; text uses Fcitx5.
     try:
         return ctx.text_token.stat().st_size > 0
     except OSError:
@@ -884,6 +948,9 @@ def consent_done(ctx):
 
 
 def consent_run(ctx):
+    if backend_name() == 'hyprland':
+        info('Hyprland 手机文字输入使用 Fcitx5，请确保输入法已运行并加载 UUWay 插件。')
+        return
     info('文字服务还会再弹出一个授权对话框（远程输入与剪贴板），请点「允许」；约 2 分钟内有效。')
     if ctx.dry_run:
         return
@@ -1300,7 +1367,8 @@ def command_doctor(args):
 
     session = os.environ.get('XDG_SESSION_TYPE', '')
     desktop = os.environ.get('XDG_CURRENT_DESKTOP', '')
-    check('ok' if session == 'wayland' and 'GNOME' in desktop else 'fail', 'GNOME Wayland 会话',
+    check('ok' if session == 'wayland' and ('GNOME' in desktop or backend_name() == 'hyprland') else 'fail',
+          'Hyprland Wayland 会话' if backend_name() == 'hyprland' else 'GNOME Wayland 会话',
           f'{session or "?"} / {desktop or "?"}')
     try:
         backend = select_backend(ctx)
@@ -1330,10 +1398,12 @@ def command_doctor(args):
                 check('fail', 'NVIDIA 内核模块与用户态库版本不一致',
                       f'{mismatch["kernel_module"]} ≠ {mismatch["userspace"]}，请重启')
     version = wine_version(ctx)
-    check('ok' if version and version.startswith(WINE_SERIES) else 'fail', 'WineHQ stable 11.0',
-          version or '没有找到 /opt/wine-stable/bin/wine（运行 uuway setup）')
-    if version and version.startswith(WINE_SERIES):
-        check('ok' if WINE_PIN.is_file() else 'warn', 'WineHQ 已固定在 11.0 系列',
+    check('ok' if platform.wine_compatible(version) else 'fail', 'Wine 11.0',
+          version or f'没有找到 {WINE_DIR / "wine"}（运行 uuway setup）')
+    if platform.wine_compatible(version):
+        pinned = platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file()
+        check('ok' if pinned else 'warn', 'Wine 已固定在 11.0 系列',
+              str(WINE_DIR) if platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE else
               str(WINE_PIN) if WINE_PIN.is_file() else '升级 WineHQ 可能让 UUWay 无法采集画面；运行 uuway setup --only wine')
     check('ok' if uinput_usable() else 'fail', '/dev/uinput 可写', '' if uinput_usable()
           else '运行 uuway setup --only udev；装好规则后可能需要重新登录')
@@ -1401,13 +1471,29 @@ def deb_version(ctx):
     """The installed package's version, or None when this is not a package install."""
     if ROOT.resolve() != DEB_ROOT:
         return None
-    result = ctx.probe(['dpkg-query', '-W', '-f=${Version}', 'uuway'])
-    return result.stdout.strip() or None if result.returncode == 0 else None
+    if not platform.ota_supported(ROOT):
+        return None
+    target = update_target()
+    return update_checks.parse_installed(ctx.probe(update_checks.installed_command(target)), target)
+
+
+def update_target():
+    target = platform.package_info(ROOT).get('target', update_checks.DEFAULT_TARGET)
+    if target not in update_checks.TARGETS:
+        raise SetupError('当前安装包没有可用的更新目标，请通过系统包管理器更新。')
+    return target
 
 
 def is_newer(ctx, new, old):
+    if platform.package_info(ROOT) and not platform.ota_supported(ROOT):
+        match = re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(.*)', old)
+        if not match or not re.fullmatch(r'\d+\.\d+\.\d+', new):
+            return False
+        current = tuple(int(value) for value in match.groups()[:3])
+        candidate = tuple(int(value) for value in new.split('.'))
+        return candidate > current or (candidate == current and match.group(4).startswith('~'))
     try:
-        return update_checks.version_is_newer(new, old, run=lambda argv, **kwargs: ctx.probe(argv))
+        return update_checks.version_is_newer(new, old, run=lambda argv, **kwargs: ctx.probe(argv), target=update_target())
     except update_checks.VerifyError as error:
         raise SetupError(str(error))
 
@@ -1449,13 +1535,14 @@ def update_busy(ctx):
 
 
 def update_check(ctx, args):
-    installed = deb_version(ctx)
+    installed = platform.package_info(ROOT).get('version') or deb_version(ctx)
     latest = latest_known(ctx)
     if getattr(args, 'json', False):
         print(json.dumps(dict(installed=installed, latest=latest.version, tag=latest.tag, url=latest.url,
                               published=latest.published, checked_at=int(time.time()),
                               available=bool(installed and is_newer(ctx, latest.version, installed)),
-                              installable=bool(installed and not installed.startswith('0.0.0~')))))
+                              installable=bool(installed and not installed.startswith('0.0.0~')
+                                               and platform.ota_supported(ROOT)))))
         return 0
     if installed is None:
         info(f'最新正式版：{latest.version}（{latest.url}）')
@@ -1464,7 +1551,10 @@ def update_check(ctx, args):
     if is_newer(ctx, latest.version, installed):
         print(f'   {_paint("1;32", "有新版本")} {latest.version}（当前 {installed}，发布于 {latest.published[:10]}）')
         info(f'更新说明：{latest.url}')
-        info('安装：uuway update install（安装时远程连接会断开几分钟，会自动检查并在不正常时回滚）')
+        if platform.ota_supported(ROOT):
+            info('安装：uuway update install（安装时远程连接会断开几分钟，会自动检查并在不正常时回滚）')
+        else:
+            info('请下载当前发行版的原生包，通过系统包管理器更新。')
     else:
         ok(f'已是最新（{installed}）。')
     return 0
@@ -1532,14 +1622,17 @@ def update_status(ctx, args):
 
 def update_recovery_layer(ctx, args):
     """An update that crashes the desktop must not leave the machine at a login screen for good."""
-    timed = timed_state(ctx)
+    hyprland = backend_name() == 'hyprland'
+    timed = None if hyprland else timed_state(ctx)
     if timed and timed[0] and timed[1] == getpass.getuser():
         return
     if getattr(args, 'allow_no_recovery', False):
         return  # Explicit GUI/CLI consent; never enables autologin implicitly.
     warn('这台机器在桌面崩溃或注销后不会自动重新登录：万一更新让桌面崩溃，没有人在本机登录，UU 就一直离线。')
-    info('先开启：uuway autologin on')
+    info('请先配置会话自动恢复，或明确允许无自动登录保护的更新。' if hyprland else '先开启：uuway autologin on')
     if ctx.assume_yes or not sys.stdin.isatty():
+        if hyprland:
+            raise SetupError('请先配置 Hyprland 会话自动恢复，或明确使用 --allow-no-recovery 允许继续。')
         raise SetupError('没有开启“崩溃后自动重新登录”，--yes 或非交互运行不会替你冒这个险。'
                          '先运行 uuway autologin on，或在终端里交互运行并明确同意。')
     if not input('   仍然继续？[y/N] ').lower().startswith('y'):
@@ -1638,16 +1731,20 @@ def confirm_default_no(ctx, question):
 
 
 def update_install(ctx, args):
+    if not platform.ota_supported(ROOT):
+        raise SetupError('当前安装包未启用内置更新，请通过系统包管理器更新。')
+    target = update_target()
     installed = deb_version(ctx)
     if installed is None:
-        raise SetupError('uuway update install 只支持用安装包（.deb）装的 UUWay；源码目录请自己更新。')
+        raise SetupError('uuway update install 只支持用安装包装的 UUWay；源码目录请自己更新。')
     if installed.startswith('0.0.0~'):
         raise SetupError(f'这是开发构建（{installed}），不能用 OTA 更新。')
     if update_busy(ctx):
         raise SetupError('已经有一个更新在进行；运行 uuway update status 查看。')
-    audit = ctx.probe(['dpkg', '--audit'])
-    if audit.returncode != 0 or audit.stdout.strip():
-        raise SetupError('dpkg 处于未完成状态，先修好它：sudo dpkg --configure -a')
+    audit = ctx.probe(update_checks.audit_command(target))
+    if audit.returncode != 0 or (update_checks.TARGETS[target][0] == 'deb' and audit.stdout.strip()):
+        raise SetupError('dpkg 处于未完成状态，先修好它：sudo dpkg --configure -a' if update_checks.TARGETS[target][0] == 'deb'
+                         else '系统包管理器状态异常，请先修复后再更新。')
     source = getattr(args, 'source', None)
     if source:
         # A rehearsal: a release laid out by hand in a directory (the deb and its SHA256SUMS, see
@@ -1683,8 +1780,9 @@ def update_install(ctx, args):
             shutil.rmtree(ctx.state_dir / 'update', ignore_errors=True)
             uuway_update.download_release(
                 new_fetcher(), tag, stage,
-                before_deb=lambda staged: update_checks.check_checksums(staged, tag))
-        release = update_checks.check_release(stage, tag, installed, run=subprocess.run)
+                before_deb=lambda staged: update_checks.check_checksums(staged, tag, target=target), target=target)
+            uuway_update.download_previous(new_fetcher(), installed, stage, target=target)
+        release = update_checks.check_release(stage, tag, installed, run=subprocess.run, target=target)
     except (uuway_update.FetchError, update_checks.VerifyError) as error:
         raise SetupError(str(error))
     ok(f'已{"读取" if source else "下载"}并校验 {version}（哈希对得上）。')
@@ -1704,6 +1802,8 @@ def update_install(ctx, args):
 
 
 def update_rollback(ctx, args):
+    if not platform.ota_supported(ROOT):
+        raise SetupError('当前安装包未启用内置回滚，请通过系统包管理器降级。')
     result = read_json(UPDATE_STATE / 'last-result.json')
     target = result.get('rollback_to') if isinstance(result, dict) else None
     previous = Path(str(target.get('deb') or '/nonexistent')) if isinstance(target, dict) else None
@@ -1788,11 +1888,14 @@ def command_uninstall(args):
         print('\n开机自动登录是 UUWay 开启的，卸载没有改动它；它的记录已随 --purge 删除，要关闭请编辑 GDM 配置。'
               if args.purge else '\n开机自动登录是 UUWay 开启的，卸载没有改动它；要关闭：uuway autologin off')
     print('\nWine prefix（含 UU 登录信息）没有动：' + str(ctx.prefix)
-          + '\n不再需要时可手动删除；要卸载程序本身：sudo apt remove uuway')
+          + '\n不再需要时可手动删除；要卸载程序本身：' + platform.uninstall_command())
     return 0
 
 
 def installed_version():
+    info = platform.package_info(ROOT)
+    if isinstance(info.get('version'), str):
+        return info['version']
     result = subprocess.run(['dpkg-query', '-W', '-f=${Version}', 'uuway'], capture_output=True, text=True,
                             check=False) if shutil.which('dpkg-query') else None
     return result.stdout if result and result.returncode == 0 and result.stdout else '源码目录'
@@ -1809,7 +1912,7 @@ def build_parser():
 
     setup = commands.add_parser('setup', help='安装并配置（可反复运行）')
     common(setup)
-    setup.add_argument('--installer', type=Path, help='UU 远程官方 Windows 安装包')
+    setup.add_argument('--installer', type=Path, help='本地 UU Windows 安装包；未指定且下载目录中没有时从官方下载')
     setup.add_argument('--prefix', type=Path, help='Wine prefix（默认 ~/.local/share/wineprefixes/uu-remote）')
     setup.add_argument('--only', help='只运行这些步骤（逗号分隔）：' + ', '.join(STEP_NAMES))
     setup.add_argument('--force', help='即使已完成也重做这些步骤')

@@ -1,0 +1,127 @@
+name: Experimental Linux packages
+
+on:
+  push:
+    branches: [codex/linux-packages-hyprland, main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (no release is published)
+        default: 1.5.0~ci
+        required: true
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: 1.5.0~ci
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-packages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-pytest python3-gi python3-dbus \
+            gir1.2-gtk-3.0 gir1.2-atspi-2.0 xvfb xauth xclip x11-utils build-essential libjson-c-dev \
+            libx11-dev libxfixes-dev shellcheck dbus-daemon fonts-noto-cjk librsvg2-common
+      - name: Unit and UI tests
+        run: env -u WAYLAND_DISPLAY GDK_BACKEND=x11 UUWAY_UI_TESTS=1 xvfb-run -a dbus-run-session -- /usr/bin/python3 -m pytest tests -q -p no:cacheprovider
+      - name: Shell scripts
+        run: shellcheck -S warning install.sh packaging/*.sh packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm scripts/build-*.sh scripts/install-wine11.sh
+  native:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [debian-13, fedora-44, fedora-45, arch]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and install-check UUWay with official Wine 11.0 binaries
+        env:
+          VERSION: ${{ inputs.version || '1.5.0~ci' }}
+          TARGET: ${{ matrix.target }}
+          UUWAY_BUILD_JOBS: 4
+          UUWAY_BUILD_CPUS: 4
+        run: packaging/build-linux.sh --target "$TARGET" --version "$VERSION" --output-dir out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uuway-${{ matrix.target }}
+          path: out/
+  fedora:
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora-44
+          path: input44
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora-45
+          path: input45
+      - name: Assemble one Fedora RPM with automatic FFmpeg ABI selection
+        env:
+          VERSION: ${{ inputs.version || '1.5.0~ci' }}
+        run: |
+          mkdir -p out
+          docker run --rm -e VERSION -v "$PWD:/source:ro" -v "$PWD/out:/result" fedora:44 bash -c '
+            set -e
+            dnf install -y --setopt=install_weak_deps=False python3 rpm-build cpio
+            python3 /source/packaging/combine-fedora.py --version "$VERSION" \
+              --fedora44 /source/input44/*.rpm --fedora45 /source/input45/*.rpm --output-dir /result
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uuway-fedora
+          path: out/
+  fedora-check:
+    needs: fedora
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['44', '45']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora
+          path: out
+      - name: Install and update the same RPM on each Fedora version
+        env:
+          FEDORA_VERSION: ${{ matrix.version }}
+        run: |
+          docker run --rm -i -v "$PWD/out:/packages:ro" -v "$PWD:/source:ro" \
+            "fedora:$FEDORA_VERSION" bash -s -- "fedora-$FEDORA_VERSION" /packages < packaging/container-linux-test.sh
+  ubuntu:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build and install-check the Ubuntu package, including OTA regression tests
+        env:
+          VERSION: ${{ inputs.version || '1.5.0~ci' }}
+          UUWAY_BUILD_JOBS: 4
+        run: |
+          packaging/build-deb.sh --version "$VERSION" --output-dir out
+          packaging/test-deb.sh "out/uuway_${VERSION}_amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uuway-ubuntu
+          path: out/

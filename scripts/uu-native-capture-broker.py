@@ -22,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location('capture_runtime_state', ROOT / 'scripts/native_runtime_state.py')
 state_tools = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(state_tools)
+_desktop_spec = importlib.util.spec_from_file_location('capture_desktop', ROOT / 'scripts/native_desktop.py')
+desktop_tools = importlib.util.module_from_spec(_desktop_spec)
+_desktop_spec.loader.exec_module(desktop_tools)
 
 
 class DisplayReset:
@@ -446,7 +449,8 @@ def direct_command(connector, channel, duration, cursor_mode, capture_binary,
                    cursor_fd=None, status_fd=None):
     if not capture_binary:
         raise ValueError('Direct compositor capture requires a pinned producer')
-    command = ['/usr/bin/python3', str(ROOT / 'scripts/mutter-direct-capture.py'),
+    script = 'hyprland-capture.py' if desktop_tools.backend_name() == 'hyprland' else 'mutter-direct-capture.py'
+    command = ['/usr/bin/python3', str(ROOT / 'scripts' / script),
                '--connector', connector, '--gpu-relay-fd', str(channel),
                '--duration-seconds', str(duration), '--cursor-mode', cursor_mode,
                '--capture-binary', str(capture_binary)]
@@ -479,6 +483,17 @@ def read_capture_request(connection):
     return device if device.startswith('\\\\.\\DISPLAY') else ''
 
 
+def validate_restore_state(restore_state, *, explicit_outputs=False):
+    if desktop_tools.backend_name() == 'hyprland':
+        if not explicit_outputs:
+            raise ValueError('Hyprland capture requires the explicit display service')
+        # XDPH consent is requested by each producer; there is no persistent token.
+        return
+    info = restore_state.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ValueError('An existing private authorized restore-state file is required')
+
+
 def run(path, restore_state, duration=3600, cursor_mode='embedded', cursor_path=None, capture_binary=None,
         display_reset_state=None, display_socket=None):
     validate_endpoint(path)
@@ -486,9 +501,7 @@ def run(path, restore_state, duration=3600, cursor_mode='embedded', cursor_path=
         raise ValueError('Capture lifetime must be 0 (supervised) or from 1 to 3600 seconds')
     producer_command(restore_state, 3, duration, cursor_mode,
                      4 if cursor_path is not None and cursor_mode in ('metadata', 'composited') else None, capture_binary=capture_binary)
-    info = restore_state.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError('An existing private authorized restore-state file is required')
+    validate_restore_state(restore_state)
     stopping = False
     reset_pending = False
     display_reset = DisplayReset()
@@ -670,9 +683,7 @@ def run_multi(path, restore_state, duration=3600, cursor_mode='embedded', cursor
     producer_command(restore_state, 3, duration, cursor_mode,
                      4 if cursor_path is not None and cursor_mode in ('metadata', 'composited') else None,
                      capture_binary=capture_binary)
-    info = restore_state.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError('An existing private authorized restore-state file is required')
+    validate_restore_state(restore_state, explicit_outputs=True)
     cursor_directory = cursor_path.parent if cursor_path is not None else None
     stopping = False
     reset_pending = False

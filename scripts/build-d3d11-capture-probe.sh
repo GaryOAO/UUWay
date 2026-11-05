@@ -10,7 +10,7 @@ common=(-std=c11 -O2 -Wall -Wextra -Werror)
 gcc "${common[@]}" -fPIC -I /usr/local/cuda/include \
     -c "$repo_dir/src/native_cuda_frame_copy.c" -o "$stage/native_cuda_frame_copy.o"
 gcc "${common[@]}" -fPIC -c "$repo_dir/src/native_gpu_frame_channel.c" -o "$stage/native_gpu_frame_channel.o"
-/opt/wine-stable/bin/winegcc -m64 "${common[@]}" \
+"${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc" -m64 "${common[@]}" \
     -I "$work/wine-dev/usr/include/wine" -I "$work/wine-dev/usr/include/wine/wine/windows" \
     -I "$work/nv-codec-headers/include" \
     -o "$stage/uu-d3d11-receiver-probe.exe" "$repo_dir/src/uu_gpu_receiver_probe.c" \

@@ -5,12 +5,31 @@
 #define __WINESRC__
 #include <wine/server.h>
 #include <dlfcn.h>
+#include <link.h>
 #include <stdio.h>
+#include <string.h>
+
+struct ntdll_lookup { const char *path; unsigned count; };
+
+static int find_ntdll(struct dl_phdr_info *info, size_t size, void *context)
+{
+    (void)size;
+    struct ntdll_lookup *lookup = context;
+    const char *name = strrchr(info->dlpi_name, '/');
+    name = name ? name + 1 : info->dlpi_name;
+    if (!strcmp(name, "ntdll.so")) {
+        lookup->path = info->dlpi_name;
+        lookup->count++;
+    }
+    return 0;
+}
 
 int uurb_wine11_gpu_fd(void *shared, void **opened)
 {
     _Static_assert(SERVER_PROTOCOL_VERSION == 930, "Wine protocol version mismatch");
-    void *ntdll = dlopen("/opt/wine-stable/lib/wine/x86_64-unix/ntdll.so", RTLD_NOW | RTLD_NOLOAD);
+    struct ntdll_lookup lookup = {0};
+    dl_iterate_phdr(find_ntdll, &lookup);
+    void *ntdll = lookup.count == 1 ? dlopen(lookup.path, RTLD_NOW | RTLD_NOLOAD) : NULL;
     if (!ntdll) { fprintf(stderr, "Pinned Wine Unix runtime is not loaded\n"); return -1; }
     unsigned int (*server_call)(void *) = dlsym(ntdll, "wine_server_call");
     unsigned int (*to_fd)(HANDLE, unsigned int, int *, unsigned int *) =

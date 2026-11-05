@@ -10,11 +10,11 @@ gcc "${common[@]}" -fPIC -I /usr/local/cuda/include -I "$work/nv-codec-headers/i
     -c "$repo_dir/src/native_nvenc_query.c" -o "$stage/native_nvenc_query.o"
 winincludes=(-I "$work/wine-dev/usr/include/wine" -I "$work/wine-dev/usr/include/wine/wine/windows"
     -I "$work/nv-codec-headers/include")
-/opt/wine-stable/bin/winegcc -m64 -shared "${common[@]}" "${winincludes[@]}" \
+"${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc" -m64 -shared "${common[@]}" "${winincludes[@]}" \
     -o "$stage/uurb-nvenc-query.dll" "$repo_dir/src/uu_nvenc_query.spec" \
     "$repo_dir/src/uu_nvenc_query.c" "$stage/native_nvenc_query.o" \
     -ld3d11 -ldxguid -lvulkan-1 -ldl -lpthread -lcuda
-/opt/wine-stable/bin/winegcc -m64 "${common[@]}" "${winincludes[@]}" \
+"${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc" -m64 "${common[@]}" "${winincludes[@]}" \
     -o "$stage/uu-nvenc-query-probe.exe" "$repo_dir/src/uu_nvenc_query_probe.c" \
     -ld3d11 -ldxgi -ldxguid
 x86_64-w64-mingw32-gcc "${common[@]}" -I "$work/nv-codec-headers/include" \

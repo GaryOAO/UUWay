@@ -1,0 +1,26 @@
+{
+  "debian-13": {
+    "image": "debian:13-slim",
+    "format": "deb",
+    "suite": "trixie",
+    "label": "Debian 13"
+  },
+  "fedora-44": {
+    "image": "fedora:44",
+    "format": "rpm",
+    "suite": "fedora44",
+    "label": "Fedora 44"
+  },
+  "arch": {
+    "image": "archlinux:base-devel",
+    "format": "arch",
+    "suite": "arch",
+    "label": "Arch Linux"
+  },
+  "fedora-45": {
+    "image": "fedora:45",
+    "format": "rpm",
+    "suite": "fedora45",
+    "label": "Fedora 45"
+  }
+}

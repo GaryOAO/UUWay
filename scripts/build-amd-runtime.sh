@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 base="${UURB_AMD_BASE:-${1:-/usr/lib/uuway}}"
-winegcc="${UURB_WINEGCC:-/opt/wine-stable/bin/winegcc}"
+winegcc="${UURB_WINEGCC:-${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc}"
 stage="$repo_dir/build/native-presenter"
 headers="$repo_dir/build/gpu-relay/nv-codec-headers"
 for tool in gcc x86_64-w64-mingw32-gcc "$winegcc" pkg-config glslangValidator; do
@@ -30,9 +30,11 @@ if [[ ! -d "$wine_headers/wine/windows" ]]; then
 fi
 [[ -d "$wine_headers/wine/windows" ]] || { echo "Missing Wine development headers" >&2; exit 1; }
 win=(-I "$wine_headers" -I "$wine_headers/wine/windows")
-native=(-lavcodec -lavutil -lswscale -lvulkan -lva -ldl -pthread)
+read -r -a native_cflags <<< "$(pkg-config --cflags libavcodec libavutil libswscale libva)"
+read -r -a native_link <<< "$(pkg-config --libs libavcodec libavutil libswscale libva)"
+native=("${native_link[@]}" -lvulkan -ldl -pthread)
 for source in native_vaapi_encoder native_vaapi_query native_gpu_frame_channel native_host_frame; do
-    gcc "${common[@]}" -fPIC -c "$repo_dir/src/$source.c" -o "$stage/$source.o"
+    gcc "${common[@]}" "${native_cflags[@]}" -fPIC -c "$repo_dir/src/$source.c" -o "$stage/$source.o"
 done
 "$winegcc" -m64 -shared "${common[@]}" "${win[@]}" \
     -o "$stage/uurb-nvenc-encode.dll" "$repo_dir/src/uu_nvenc_query.spec" \
@@ -48,13 +50,13 @@ x86_64-w64-mingw32-gcc "${common[@]}" -shared \
     -ld3d11 -ldxgi -ldxguid -luuid
 UURB_GLSLANG="$(command -v glslangValidator)" bash "$repo_dir/scripts/build-native-cursor-shaders.sh"
 read -r -a pipewire_cflags <<< "$(pkg-config --cflags libpipewire-0.3)"
-gcc "${common[@]}" -std=gnu11 "${pipewire_cflags[@]}" \
+gcc "${common[@]}" "${native_cflags[@]}" -std=gnu11 "${pipewire_cflags[@]}" \
     "$repo_dir/src/uu_pipewire_native_probe.c" "$repo_dir/src/native_vk_dmabuf_import.c" \
     "$repo_dir/src/native_vk_capture_encode.c" "$repo_dir/src/native_host_frame.c" \
     "$repo_dir/src/native_gpu_frame_channel.c" "$repo_dir/src/native_cursor_metadata.c" \
     "$repo_dir/src/native_vk_cursor_composite.c" "$stage/native_vaapi_encoder.o" \
     -I "$stage/cursor-shaders" -o "$stage/uu-pipewire-native-probe" -lpipewire-0.3 "${native[@]}"
-gcc "${common[@]}" -I "$repo_dir/src" "$repo_dir/tests/probes/vaapi_encode.c" \
+gcc "${common[@]}" "${native_cflags[@]}" -I "$repo_dir/src" "$repo_dir/tests/probes/vaapi_encode.c" \
     "$stage/native_vaapi_encoder.o" -o "$stage/uu-vaapi-probe" "${native[@]}"
 x86_64-w64-mingw32-gcc "${common[@]}" -o "$stage/uu-nvenc-pe-encode-probe.exe" \
     "$repo_dir/src/uu_nvenc_encode_probe.c" -ld3d11 -ld3dcompiler -ldxgi -ldxguid

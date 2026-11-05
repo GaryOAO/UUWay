@@ -12,7 +12,7 @@ read -r -a json_cflags <<< "$json_cflags_text"
 read -r -a json_libs <<< "$json_libs_text"
 cc -std=c11 -O2 -Wall -Wextra -Werror -fPIC "${json_cflags[@]}" \
   -c "$repo_dir/src/native_display_client.c" -o "$stage/native_display_client.o"
-/opt/wine-stable/bin/winegcc -m64 -shared -std=c11 -O2 -Wall -Wextra -Werror \
+"${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc" -m64 -shared -std=c11 -O2 -Wall -Wextra -Werror \
   -I "$wine_headers" \
   -I "$wine_headers/wine/windows" \
   -o "$stage/uurb-native-display.dll" "$repo_dir/src/uu_native_display.spec" \
