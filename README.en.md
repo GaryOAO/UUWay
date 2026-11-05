@@ -4,14 +4,15 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-![Ubuntu 24.04 / 26.04](https://img.shields.io/badge/Ubuntu-24.04%20%7C%2026.04-E95420?logo=ubuntu&logoColor=white)
-[![Debian 13](https://img.shields.io/badge/Debian-13-A81D33?logo=debian&logoColor=white)](docs/linux-packages.md)
-[![Fedora 44 / 45](https://img.shields.io/badge/Fedora-44%20%7C%2045-51A2DA?logo=fedora&logoColor=white)](docs/linux-packages.md)
-[![Arch Linux](https://img.shields.io/badge/Arch-Linux-1793D1?logo=archlinux&logoColor=white)](docs/linux-packages.md)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?logo=ubuntu&logoColor=white)
+[![Debian](https://img.shields.io/badge/Debian-A81D33?logo=debian&logoColor=white)](docs/linux-packages.md)
+[![Fedora](https://img.shields.io/badge/Fedora-51A2DA?logo=fedora&logoColor=white)](docs/linux-packages.md)
+[![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793D1?logo=archlinux&logoColor=white)](docs/linux-packages.md)
+<br>
 ![GNOME Wayland](https://img.shields.io/badge/GNOME-Wayland-4A86CF?logo=gnome&logoColor=white)
 ![NVIDIA NVENC](https://img.shields.io/badge/NVIDIA-NVENC-76B900?logo=nvidia&logoColor=white)
 ![AMD VA-API](https://img.shields.io/badge/AMD-VA--API-ED1C24?logo=amd&logoColor=white)
-![Wine 11](https://img.shields.io/badge/Wine-11-A30000)
+![Wine](https://img.shields.io/badge/Wine-A30000)
 ![License AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0ea5e9)
 
 </div>
@@ -112,6 +113,6 @@ cd UUWay
 
 ## License and credits
 
-[GNU AGPL-3.0](LICENSE). UUWay is an independent, unofficial project, unaffiliated with NetEase. It does not distribute UU program files.
+[GNU AGPL-3.0](LICENSE). UUWay is an independent, unofficial project, unaffiliated with NetEase.
 
 Derived from [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge), and built on [Wine](https://www.winehq.org/), [DXVK](https://github.com/doitsujin/dxvk), PipeWire and Mutter.
