@@ -39,7 +39,7 @@ case "$target" in
     fedora-45)
         # WineHQ's Fedora 44 RPM requires FFmpeg 8, absent on Fedora 45.
         # Use the same checksum-pinned, relocatable official Wine archive as Arch.
-        dnf install -y --setopt=install_weak_deps=False ca-certificates curl python3 libarchive \
+        dnf install -y --setopt=install_weak_deps=False ca-certificates curl python3 bsdtar \
             freetype fontconfig gettext libpcap libunwind libXcursor libxkbcommon libXi libXrandr \
             libX11 libXfixes libXext libXrender libXinerama gnutls pulseaudio-libs alsa-lib \
             mesa-libGL systemd-libs
