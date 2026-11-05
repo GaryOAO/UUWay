@@ -40,6 +40,7 @@ DEFAULT_TARGET = 'ubuntu'
 TARGETS = {
     'ubuntu': ('deb', 'amd64', 'uuway_{version}_amd64.deb'),
     'debian-13': ('deb', 'amd64', 'uuway_{version}_trixie_amd64.deb'),
+    'fedora': ('rpm', 'x86_64', 'uuway-{version}-1.fedora.x86_64.rpm'),
     'fedora-44': ('rpm', 'x86_64', 'uuway-{version}-1.fedora44.x86_64.rpm'),
     'fedora-45': ('rpm', 'x86_64', 'uuway-{version}-1.fedora45.x86_64.rpm'),
     'arch': ('arch', 'x86_64', 'uuway-{version}-1-x86_64.pkg.tar.zst'),
@@ -688,7 +689,11 @@ def prepare_previous(job, stage, work, version):
 def install_command(job, package, *, downgrade=False):
     fmt = TARGETS[job.target][0]
     if fmt == 'rpm':
-        return ['rpm', '-U', '--replacepkgs', *(['--oldpackage'] if downgrade else []), str(package)]
+        # Release RPMs use the verified GitHub SHA256SUMS rather than RPM signing.
+        # RPM 6 requires signatures by default; retain digest verification for
+        # this one transaction without changing the machine's RPM configuration.
+        return ['rpm', '--define', '_pkgverify_level digest', '-U', '--replacepkgs',
+                *(['--oldpackage'] if downgrade else []), str(package)]
     if fmt == 'arch':
         return ['pacman', '-U', '--noconfirm', str(package)]
     return ['apt-get', 'install', '-y', '--no-install-recommends',
@@ -699,7 +704,7 @@ def simulate_install(job, package):
     fmt = TARGETS[job.target][0]
     if fmt == 'rpm':
         # rpm checks dependencies/conflicts but cannot fetch or upgrade unrelated packages.
-        result = job.run(['rpm', '-U', '--test', str(package)], timeout=600)
+        result = job.run(['rpm', '--define', '_pkgverify_level digest', '-U', '--test', str(package)], timeout=600)
         return result.returncode == 0
     if fmt == 'arch':
         result = job.run(['pacman', '-U', '--print', '--print-format', '%n', str(package)], timeout=600)

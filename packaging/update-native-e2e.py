@@ -21,7 +21,10 @@ FMT = update.TARGETS[TARGET][0]
 
 
 def run(argv, **kwargs):
-    return subprocess.run(list(map(str, argv)), check=True, capture_output=True, text=True, **kwargs)
+    result = subprocess.run(list(map(str, argv)), check=False, capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        raise RuntimeError(f'{argv!r} failed ({result.returncode}):\n{result.stdout}\n{result.stderr}')
+    return result
 
 
 class Clock:

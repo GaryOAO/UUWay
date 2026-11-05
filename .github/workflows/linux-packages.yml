@@ -58,6 +58,54 @@ jobs:
         with:
           name: uuway-${{ matrix.target }}
           path: out/
+  fedora:
+    needs: native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora-44
+          path: input44
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora-45
+          path: input45
+      - name: Assemble one Fedora RPM with automatic FFmpeg ABI selection
+        env:
+          VERSION: ${{ inputs.version || '1.5.0~ci' }}
+        run: |
+          mkdir -p out
+          docker run --rm -e VERSION -v "$PWD:/source:ro" -v "$PWD/out:/result" fedora:44 bash -c '
+            set -e
+            dnf install -y --setopt=install_weak_deps=False python3 rpm-build cpio
+            python3 /source/packaging/combine-fedora.py --version "$VERSION" \
+              --fedora44 /source/input44/*.rpm --fedora45 /source/input45/*.rpm --output-dir /result
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uuway-fedora
+          path: out/
+  fedora-check:
+    needs: fedora
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['44', '45']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: uuway-fedora
+          path: out
+      - name: Install and update the same RPM on each Fedora version
+        env:
+          FEDORA_VERSION: ${{ matrix.version }}
+        run: |
+          docker run --rm -i -v "$PWD/out:/packages:ro" -v "$PWD:/source:ro" \
+            "fedora:$FEDORA_VERSION" bash -s -- "fedora-$FEDORA_VERSION" /packages < packaging/container-linux-test.sh
   ubuntu:
     needs: test
     runs-on: ubuntu-24.04

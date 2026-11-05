@@ -9,6 +9,8 @@ import re
 
 PACKAGE_ROOT = Path('/usr/lib/uuway')
 PRIVATE_WINE = Path('/opt/uuway-wine11/bin')
+# Only these AMD files link FFmpeg. Fedora's shared RPM carries both ABIs.
+FEDORA_AMD_VARIANTS = frozenset(('uurb-nvenc-encode.dll.so', 'uu-pipewire-native-probe', 'uu-vaapi-probe'))
 
 
 def os_release(path=Path('/etc/os-release')):
@@ -50,6 +52,16 @@ def private_wine():
     return is_arch() or wine_directory().is_relative_to(Path('/opt/uuway-wine11'))
 
 
+def backend_file(root, backend, name, release=None):
+    root = Path(root)
+    release = os_release() if release is None else release
+    if backend == 'amd' and name in FEDORA_AMD_VARIANTS and release.get('ID') == 'fedora' and release.get('VERSION_ID') == '45':
+        variant = root / 'build/compat/fedora45' / name
+        if variant.is_file():
+            return variant
+    return root / 'build/backends' / backend / 'native-presenter' / name
+
+
 def wine_compatible(version):
     # 11.01 and 11.0-rc1 are not the Wine 11.0 server protocol we build against.
     return isinstance(version, str) and re.fullmatch(r'wine-11\.0(?:\.[0-9]+)?', version) is not None
@@ -78,5 +90,5 @@ def uninstall_command(release=None):
 def ota_supported(root=None):
     info = package_info(root)
     # Legacy Ubuntu packages have no metadata. New packages must opt in.
-    return (info.get('ota') is True and info.get('target') in ('ubuntu', 'debian-13', 'fedora-44', 'fedora-45', 'arch')
+    return (info.get('ota') is True and info.get('target') in ('ubuntu', 'debian-13', 'fedora', 'fedora-44', 'fedora-45', 'arch')
             if info else os_release().get('ID') == 'ubuntu')

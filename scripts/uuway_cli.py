@@ -324,6 +324,8 @@ def backend_available(backend):
 def amd_backend_probe(ctx, backend='amd'):
     root = backend_root(backend) or ROOT / 'build'
     binary = root / 'native-presenter/uu-vaapi-probe'
+    if root.name == backend and root.parent.name == 'backends':
+        binary = platform.backend_file(root.parents[2], backend, 'uu-vaapi-probe')
     with tempfile.TemporaryDirectory(prefix='uuway-amd-check-') as directory:
         return ctx.probe([binary, directory])
 

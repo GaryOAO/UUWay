@@ -63,11 +63,19 @@ def build_rpm(stage, work, output, name, version, depends, suite, *, runtime=Fal
                  + '\n%preun\nif [ "$1" -eq 0 ]; then\n'
                  + (ROOT / 'packaging/deb/prerm').read_text().replace('case "$1" in', 'case remove in').replace('exit 0', ':') + '\nfi\n')
     specfile = top / 'SPECS' / (name + '.spec')
+    shared_fedora = suite == 'fedora'
+    exclude = r'libcuda\.so\.1|libFcitx5Core\.so\.7|libFcitx5Utils\.so\.2'
+    if shared_fedora:
+        # Versioned AMD payloads use the host's native FFmpeg. Keep the rest of
+        # the RPM's automatic dependencies, including the Fedora 44 glibc floor.
+        exclude += r'|lib(avcodec|avutil|swscale)\.so\.'
+        depends += ', libavcodec-free, libavutil-free, libswscale-free, libva'
     specfile.write_text(
         '%global debug_package %{nil}\n%global _build_id_links none\n'
-        '%global __requires_exclude ^(libcuda\\.so\\.1|libFcitx5Core\\.so\\.7|libFcitx5Utils\\.so\\.2).*$\n'
+        f'%global __requires_exclude ^({exclude}).*$\n'
+        + ('%global __requires_exclude_from ^/usr/lib/uuway/build/compat/fedora45/.*$\n' if shared_fedora else '') +
         '%global __os_install_post %{nil}\n'
-        f'Name: {name}\nVersion: {version}\nRelease: 1\nDistribution: {suite.replace("fedora", "fedora-")}\n'
+        f'Name: {name}\nVersion: {version}\nRelease: 1\nDistribution: {"fedora" if shared_fedora else suite.replace("fedora", "fedora-")}\n'
         f'Summary: {"UU Remote Linux host" if runtime else "UUWay private Wine 11.0"}\n'
         f'License: {"AGPL-3.0-only" if runtime else "LGPL-2.1-or-later"}\n'
         'URL: https://github.com/GaryOAO/UUWay\nSource0: payload.tar.gz\n'

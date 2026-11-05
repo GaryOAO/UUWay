@@ -22,7 +22,8 @@ class NativeUpdateTests(unittest.TestCase):
 
     def test_asset_names_remain_separate_and_legacy_ubuntu_is_unchanged(self):
         names = {target: update.package_name('1.5.0', target) for target in update.TARGETS}
-        self.assertEqual(len(set(names.values())), 5)
+        self.assertEqual(len(set(names.values())), len(update.TARGETS))
+        self.assertTrue(names['fedora'].endswith('.fedora.x86_64.rpm'))
         self.assertEqual(names['ubuntu'], update.deb_name('1.5.0'))
         self.assertTrue(names['debian-13'].endswith('_trixie_amd64.deb'))
         self.assertTrue(names['fedora-44'].endswith('.fedora44.x86_64.rpm'))
@@ -79,7 +80,7 @@ class NativeUpdateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.stage(root, 'ubuntu')
-            for target in ('debian-13', 'fedora-44', 'fedora-45', 'arch'):
+            for target in ('debian-13', 'fedora', 'fedora-44', 'fedora-45', 'arch'):
                 with self.subTest(target=target), self.assertRaises(update.VerifyError):
                     update.check_checksums(root, 'v1.5.0', target=target)
 

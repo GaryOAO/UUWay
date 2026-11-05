@@ -6,6 +6,7 @@ an active release, installs services, or runs the legacy RDP installer.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,9 @@ import struct
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+_platform_spec = importlib.util.spec_from_file_location('uuway_bundle_platform', ROOT / 'scripts/uuway_platform.py')
+platform = importlib.util.module_from_spec(_platform_spec)
+_platform_spec.loader.exec_module(platform)
 INPUTS = {
     'app/bin/dxgi.dll': 'build/dxvk-capture/stage/dxgi.dll',
     'app/bin/d3d11.dll': 'build/dxvk-capture/stage/d3d11.dll',
@@ -46,7 +50,10 @@ def backend_inputs(backend, inputs):
     for name, source in inputs.items():
         source = Path(source)
         if source.parts[:1] == ('build',) and source.parts[1] in ('native-presenter', 'dxvk-capture', 'helpers'):
-            result[name] = str(Path('build/backends') / backend / Path(*source.parts[1:]))
+            selected = Path('build/backends') / backend / Path(*source.parts[1:])
+            if source.parts[1] == 'native-presenter':
+                selected = platform.backend_file(ROOT, backend, source.name).relative_to(ROOT)
+            result[name] = str(selected)
         else:
             result[name] = source
     return result

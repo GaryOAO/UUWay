@@ -43,6 +43,10 @@ done
 python3 - "$output" <<'PY'
 import json, pathlib, subprocess, sys
 root = pathlib.Path('/usr/lib/uuway')
+info = json.loads((root / 'package-info.json').read_text())
+sys.path.insert(0, str(root / 'scripts'))
+import uuway_platform as platform
+release = platform.os_release()
 for backend in ('nvidia', 'amd'):
     bundle = json.loads(pathlib.Path(f'/tmp/uuway-{backend}.json').read_text())['bundle']
     subprocess.run(['runuser', '-u', 'uuway-test', '--', '/usr/bin/python3',
@@ -51,6 +55,13 @@ errors = []
 for path in root.rglob('*'):
     if not path.is_file() or path.is_symlink():
         continue
+    if info['target'] == 'fedora':
+        relative = str(path.relative_to(root))
+        if release.get('VERSION_ID') == '44' and relative.startswith('build/compat/fedora45/'):
+            continue
+        if (release.get('VERSION_ID') == '45' and path.name in platform.FEDORA_AMD_VARIANTS
+                and path.parent == root / 'build/backends/amd/native-presenter'):
+            continue
     with path.open('rb') as stream:
         if stream.read(4) != b'\x7fELF':
             continue
@@ -60,9 +71,7 @@ for path in root.rglob('*'):
             errors.append(f'{path}: {line.strip()}')
 if errors:
     raise SystemExit('\n'.join(errors))
-info = json.loads((root / 'package-info.json').read_text())
 assert info['ota'] is True
-sys.path.insert(0, str(root / 'scripts'))
 import uuway_update_apply as update
 assert update.installed_target() == info['target']
 suffix = {'deb': '*.deb', 'rpm': '*.rpm', 'arch': '*.pkg.tar.zst'}[info['format']]
@@ -73,6 +82,15 @@ assert control['Package'] == 'uuway'
 assert control['Architecture'] == update.TARGETS[info['target']][1]
 expected_version = info['version'].replace('~', '.').replace('+', '.') if info['format'] == 'arch' else info['version']
 assert control['Version'] == expected_version, control
+if info['target'] == 'fedora':
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('packager', root / 'scripts/package-uu-native-runtime.py')
+    packager = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(packager)
+    for source in ('build/native-presenter/uurb-nvenc-encode.dll.so',
+                   'build/native-presenter/uu-pipewire-native-probe'):
+        selected = packager.backend_inputs('amd', {'file': source})['file']
+        assert ('compat/fedora45' in selected) == (release['VERSION_ID'] == '45'), selected
 print('Target-aware OTA asset:', update.package_name('1.5.0', info['target']))
 print('Both GPU bundles verify; installed ELF dependencies resolve. Live desktop acceptance remains required.')
 PY

@@ -7,8 +7,7 @@ and code contributions via [PRs](https://github.com/GaryOAO/UUWay/compare) are w
 | Target | Build image | Outputs |
 | --- | --- | --- |
 | `debian-13` | Debian 13 | UUWay `.deb` |
-| `fedora-44` | Fedora 44 | UUWay `.rpm` |
-| `fedora-45` | Fedora 45 | UUWay `.rpm` |
+| Fedora | Fedora 44 + 45 | one shared UUWay `.rpm` |
 | `arch` | Arch Linux | UUWay `.pkg.tar.zst`, generated PKGBUILD |
 
 All builds are x86_64 and carry NVIDIA NVENC and AMD VA-API backends. GPU drivers
@@ -24,8 +23,6 @@ Compiled host artifacts and host packages are never used or changed.
 
 ```bash
 packaging/build-linux.sh --target debian-13 --version 1.5.0
-packaging/build-linux.sh --target fedora-44 --version 1.5.0
-packaging/build-linux.sh --target fedora-45 --version 1.5.0
 packaging/build-linux.sh --target arch --version 1.5.0
 ```
 
@@ -34,7 +31,8 @@ Outputs go to `build/linux/<target>/`. Use `--output-dir DIR` to override it;
 `UUWAY_BUILD_CPUS` default to 8; set both to 4 for concurrent local builds. The
 build downloads official prebuilt Wine 11.0 and compiles only UUWay.
 The **Experimental Linux packages** GitHub Actions workflow builds Ubuntu and all
-four native targets and uploads artifacts.
+the native targets and uploads artifacts. Fedora builds are combined into one RPM,
+then that same package is install-checked on both Fedora 44 and 45.
 The **Release** workflow runs these checks before assembling a complete draft release.
 
 A second, clean container installs the resulting packages without the build
@@ -51,8 +49,8 @@ Install the package for your distribution:
 # Debian 13
 sudo apt install ./uuway_*_trixie_amd64.deb
 
-# Fedora 44 (use fedora45 on Fedora 45)
-sudo dnf install ./uuway-[0-9]*.fedora44.x86_64.rpm
+# Fedora 44 / 45 (same package)
+sudo dnf install ./uuway-[0-9]*.fedora.x86_64.rpm
 
 # Arch Linux
 sudo pacman -U ./uuway-[0-9]*.pkg.tar.zst
@@ -69,7 +67,8 @@ check completeness and the Windows executable header before installation.
 
 The adapter is compiled against Wine 11.0's private server protocol 930.
 Debian and Fedora 44 use WineHQ's official prebuilt packages, pinned to 11.0.
-Fedora 44 and 45 use separate UUWay RPMs because their FFmpeg libraries differ.
+Fedora 44 and 45 share one RPM. Three AMD components have separate FFmpeg builds;
+UUWay selects them automatically. Other files are shared.
 Fedora 45 and Arch use Arch's official Wine 11.0 archive in a separate directory
 and verify its SHA256 checksum. Fedora 45 uses `/opt/uuway-wine11`; Arch uses the
 user's UUWay data directory. No target compiles Wine or follows rolling Wine
