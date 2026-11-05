@@ -2,13 +2,13 @@
 """uuway_update_apply: check a downloaded UUWay release, and install it as root.
 
 One file with two halves, because the second half runs as root from a private copy
-(`python3 -I -B`, nothing imported from the tree that dpkg is about to replace):
+(`python3 -I -B`, nothing imported from the installed tree being replaced):
 
 * verification: plain functions that `uuway update` also calls before it asks for root,
   so a bad download is refused before anyone is prompted;
 * the transaction: install, prove the machine is back, roll back if it is not.
 
-What is believed is the release that github.com/GaryOAO/UUWay serves over https: the deb has to
+What is believed is the release that github.com/GaryOAO/UUWay serves over https: the package has to
 match the SHA-256 that the same release lists in SHA256SUMS, be the right package, and be newer.
 The checksum guards against a damaged or cut-off download; it is not a signature.
 """
@@ -219,12 +219,12 @@ def check_release(stage, tag, installed, *, run=subprocess.run, target=DEFAULT_T
         raise VerifyError(f'{name} 的 SHA-256 与 SHA256SUMS 不一致（哈希 {actual}），拒绝安装。')
     control = package_control(deb, target, run=run)
     if control.get('Package') != PACKAGE:
-        raise VerifyError(f'deb 的软件包名是 {control.get("Package")!r}，不是 {PACKAGE}。')
+        raise VerifyError(f'安装包的软件包名是 {control.get("Package")!r}，不是 {PACKAGE}。')
     architecture = TARGETS[target][1]
     if control.get('Architecture') != architecture:
         raise VerifyError(f'安装包的架构是 {control.get("Architecture")!r}，不是 {architecture}。')
     if control.get('Version') != version:
-        raise VerifyError(f'deb 的版本是 {control.get("Version")!r}，与标签 {tag} 不符。')
+        raise VerifyError(f'安装包的版本是 {control.get("Version")!r}，与标签 {tag} 不符。')
     if require_newer and not version_is_newer(version, installed, run=run, target=target):
         raise VerifyError(f'新版本 {version} 不比已安装的 {installed} 更新，拒绝安装。')
     return Release(version, deb, actual)

@@ -39,8 +39,8 @@ for backend in nvidia amd; do
     runuser -u uuway-test -- /usr/bin/python3 /usr/lib/uuway/scripts/package-uu-native-runtime.py \
         package --with-input --backend "$backend" "/home/uuway-test/releases/$backend" > "/tmp/uuway-$backend.json"
 done
-python3 - <<'PY'
-import json, pathlib, subprocess
+python3 - "$output" <<'PY'
+import json, pathlib, subprocess, sys
 root = pathlib.Path('/usr/lib/uuway')
 for backend in ('nvidia', 'amd'):
     bundle = json.loads(pathlib.Path(f'/tmp/uuway-{backend}.json').read_text())['bundle']
@@ -61,10 +61,17 @@ if errors:
     raise SystemExit('\n'.join(errors))
 info = json.loads((root / 'package-info.json').read_text())
 assert info['ota'] is True
-import sys
 sys.path.insert(0, str(root / 'scripts'))
 import uuway_update_apply as update
 assert update.installed_target() == info['target']
+suffix = {'deb': '*.deb', 'rpm': '*.rpm', 'arch': '*.pkg.tar.zst'}[info['format']]
+packages = list(pathlib.Path(sys.argv[1]).glob(suffix))
+assert len(packages) == 1, packages
+control = update.package_control(packages[0], info['target'])
+assert control['Package'] == 'uuway'
+assert control['Architecture'] == update.TARGETS[info['target']][1]
+expected_version = info['version'].replace('~', '.').replace('+', '.') if info['format'] == 'arch' else info['version']
+assert control['Version'] == expected_version, control
 print('Target-aware OTA asset:', update.package_name('1.5.0', info['target']))
 print('Both GPU bundles verify; installed ELF dependencies resolve. Live desktop acceptance remains required.')
 PY
