@@ -61,7 +61,7 @@ uuway update rollback         # 回滚更新
 uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 ```
 
-控制台默认在打开期间每 6 小时检查一次更新，可关闭自动检查。更新会短暂断开远程连接。OTA 安装适用于 `.deb` 安装，源码安装请更新源码后重新构建。
+控制台默认在打开期间每 6 小时检查一次更新，可关闭自动检查。更新会短暂断开远程连接。安装包用户可直接更新，系统会选择对应发行版的包；源码安装请更新源码后重新构建。
 
 仅远程使用可手动启用 `uuway autologin on`，让 GDM 自动登录并在桌面退出后重新登录；任何能接触机器的人也能进入桌面，启用前请了解这一影响。关闭：`uuway autologin off`。
 
@@ -81,7 +81,7 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 
 其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。
 
-Debian 13、Fedora 44 和 Arch Linux 提供[实验性支持](docs/linux-packages.md)，受条件限制暂未做真机测试。欢迎提交 [Issue](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) 反馈兼容性，也欢迎提交 [PR](https://github.com/GaryOAO/UUWay/compare) 一起完善。
+Debian 13、Fedora 44 / 45 和 Arch Linux 提供[实验性支持](docs/linux-packages.md)，受条件限制暂未做真机测试。欢迎提交 [Issue](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) 反馈兼容性，也欢迎提交 [PR](https://github.com/GaryOAO/UUWay/compare) 一起完善。
 
 Hyprland 已加入[单屏实验支持](docs/hyprland.md)，暂不支持修改显示模式和超级屏。
 

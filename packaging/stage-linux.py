@@ -37,6 +37,7 @@ def build_deb(stage, output, name, version, depends, suite, *, runtime=False):
     control.mkdir()
     (control / 'control').write_text(
         f'Package: {name}\nVersion: {version}\nArchitecture: amd64\n'
+        'X-UUWay-Target: debian-13\n'
         'Maintainer: GaryOAO <62834599+GaryOAO@users.noreply.github.com>\n'
         f'Depends: {depends}\nSection: utils\nPriority: optional\n'
         'Homepage: https://github.com/GaryOAO/UUWay\n'
@@ -66,7 +67,7 @@ def build_rpm(stage, work, output, name, version, depends, suite, *, runtime=Fal
         '%global debug_package %{nil}\n%global _build_id_links none\n'
         '%global __requires_exclude ^(libcuda\\.so\\.1|libFcitx5Core\\.so\\.7|libFcitx5Utils\\.so\\.2).*$\n'
         '%global __os_install_post %{nil}\n'
-        f'Name: {name}\nVersion: {version}\nRelease: 1\n'
+        f'Name: {name}\nVersion: {version}\nRelease: 1\nDistribution: fedora\n'
         f'Summary: {"UU Remote Linux host" if runtime else "UUWay private Wine 11.0"}\n'
         f'License: {"AGPL-3.0-only" if runtime else "LGPL-2.1-or-later"}\n'
         'URL: https://github.com/GaryOAO/UUWay\nSource0: payload.tar.gz\n'
@@ -98,6 +99,7 @@ def build_arch(stage, work, output, name, version, depends, *, runtime=False):
         "arch=('x86_64')\nurl='https://github.com/GaryOAO/UUWay'\n"
         f'license=({shlex.quote("AGPL-3.0-only" if runtime else "LGPL-2.1-or-later")})\n'
         f'depends=({" ".join(shlex.quote(v) for v in depends.split())})\n'
+        "provides=('uuway-target-arch')\n"
         "options=('!strip' '!debug')\n" + hook +
         'package() { cp -a "$startdir/payload/." "$pkgdir/"; }\n')
     if subprocess.run(['id', 'uuway-builder'], capture_output=True).returncode:
@@ -132,7 +134,7 @@ def main():
         deb.check_sources(entries)
         deb.copy_tree(entries, stage, epoch)
         (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(dict(
-            version=args.version, target=args.target, format=target['format'], ota=False,
+            version=args.version, target=target.get('package_target', args.target), format=target['format'], ota=True,
             desktop='GNOME Wayland / Hyprland (single-output experiment)', status='experimental', wine='11.0'), indent=2) + '\n')
         fmt = target['format']
         if fmt == 'deb':

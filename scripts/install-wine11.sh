@@ -9,7 +9,7 @@ repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 . /etc/os-release
 case "$target:${ID:-}:${VERSION_ID:-}" in
-    debian-13:debian:13|fedora-44:fedora:44|arch:arch:*) ;;
+    debian-13:debian:13|fedora-44:fedora:44|fedora-45:fedora:45|arch:arch:*) ;;
     *) echo "Wine target $target does not match ${PRETTY_NAME:-unknown}" >&2; exit 2 ;;
 esac
 case "$target" in
@@ -27,11 +27,10 @@ case "$target" in
         apt-get install -y --no-install-recommends 'winehq-stable=11.0.*' 'wine-stable=11.0.*' 'wine-stable-amd64=11.0.*' 'wine-stable-i386:i386=11.0.*'
         /opt/wine-stable/bin/wine --version
         ;;
-    fedora-44)
+    fedora-44|fedora-45)
         command -v curl >/dev/null || dnf install -y curl
-        if [[ ! -f /etc/yum.repos.d/winehq.repo ]]; then
-            curl -fsSL --proto '=https' --proto-redir '=https' https://dl.winehq.org/wine-builds/fedora/44/winehq.repo -o /etc/yum.repos.d/winehq.repo
-        fi
+        # WineHQ 11.0 is published for Fedora 44. CI also checks these binaries on 45.
+        curl -fsSL --proto '=https' --proto-redir '=https' https://dl.winehq.org/wine-builds/fedora/44/winehq.repo -o /etc/yum.repos.d/winehq.repo
         packages=('winehq-stable-11.0*' dnf5-plugins)
         ((tools == 0)) || packages+=('wine-stable-devel-11.0*')
         dnf install -y --setopt=install_weak_deps=False "${packages[@]}"

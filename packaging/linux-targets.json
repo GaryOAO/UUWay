@@ -1,5 +1,5 @@
 {
   "debian-13": {"image": "debian:13-slim", "format": "deb", "suite": "trixie", "label": "Debian 13"},
-  "fedora-44": {"image": "fedora:44", "format": "rpm", "suite": "fedora44", "label": "Fedora 44"},
+  "fedora-44": {"image": "fedora:44", "format": "rpm", "suite": "fedora", "package_target": "fedora", "label": "Fedora 44 / 45"},
   "arch": {"image": "archlinux:base-devel", "format": "arch", "suite": "arch", "label": "Arch Linux"}
 }

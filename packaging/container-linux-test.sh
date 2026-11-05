@@ -8,7 +8,7 @@ case "$target" in
         apt-get update -qq
         apt-get install -y --no-install-recommends "$output"/*.deb
         ;;
-    fedora-44) dnf install -y --setopt=install_weak_deps=False "$output"/*.rpm ;;
+    fedora-44|fedora-45) dnf install -y --setopt=install_weak_deps=False "$output"/*.rpm ;;
     arch)
         pacman -Syu --noconfirm
         pacman -U --noconfirm "$output"/*.pkg.tar.zst
@@ -60,6 +60,16 @@ for path in root.rglob('*'):
 if errors:
     raise SystemExit('\n'.join(errors))
 info = json.loads((root / 'package-info.json').read_text())
-assert info['ota'] is False, 'distribution packages must not install Ubuntu OTA artifacts'
+assert info['ota'] is True
+import sys
+sys.path.insert(0, str(root / 'scripts'))
+import uuway_update_apply as update
+assert update.installed_target() == info['target']
+print('Target-aware OTA asset:', update.package_name('1.5.0', info['target']))
 print('Both GPU bundles verify; installed ELF dependencies resolve. Live desktop acceptance remains required.')
 PY
+# Exercise the real native package manager; desktop health is supplied by the fixture.
+if [[ "$target" == fedora-* ]]; then
+    dnf install -y --setopt=install_weak_deps=False rpm-build
+fi
+python3 /source/packaging/update-native-e2e.py

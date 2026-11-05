@@ -36,6 +36,13 @@ TAG = re.compile(r'v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))')
 SUMS_LINE = re.compile(r'([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+~-]*)')
 
 Release = collections.namedtuple('Release', 'version deb sha256')
+DEFAULT_TARGET = 'ubuntu'
+TARGETS = {
+    'ubuntu': ('deb', 'amd64', 'uuway_{version}_amd64.deb'),
+    'debian-13': ('deb', 'amd64', 'uuway_{version}_trixie_amd64.deb'),
+    'fedora': ('rpm', 'x86_64', 'uuway-{version}-1.fedora.x86_64.rpm'),
+    'arch': ('arch', 'x86_64', 'uuway-{version}-1-x86_64.pkg.tar.zst'),
+}
 
 
 class VerifyError(Exception):
@@ -44,6 +51,44 @@ class VerifyError(Exception):
 
 def deb_name(version):
     return f'{PACKAGE}_{version}_{ARCHITECTURE}.deb'
+
+
+def package_name(version, target=DEFAULT_TARGET):
+    if target not in TARGETS:
+        raise VerifyError(f'不支持的安装包目标：{target!r}')
+    return TARGETS[target][2].format(version=version)
+
+
+def installed_target(root=Path('/')):
+    info = read_json(Path(root) / 'usr/lib/uuway/package-info.json')
+    target = info.get('target') if isinstance(info, dict) else DEFAULT_TARGET
+    if target not in TARGETS:
+        raise VerifyError(f'不支持的安装包目标：{target!r}')
+    return target
+
+
+def installed_command(target=DEFAULT_TARGET):
+    fmt = TARGETS[target][0]
+    if fmt == 'rpm':
+        return ['rpm', '-q', '--qf', '%{VERSION}', PACKAGE]
+    if fmt == 'arch':
+        return ['pacman', '-Q', PACKAGE]
+    return ['dpkg-query', '-W', '-f=${Version}', PACKAGE]
+
+
+def parse_installed(result, target=DEFAULT_TARGET):
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    value = result.stdout.strip()
+    if TARGETS[target][0] == 'arch':
+        words = value.split()
+        return words[1].rsplit('-', 1)[0] if len(words) == 2 and words[0] == PACKAGE else None
+    return value
+
+
+def audit_command(target=DEFAULT_TARGET):
+    return {'deb': ['dpkg', '--audit'], 'rpm': ['rpm', '--verifydb'],
+            'arch': ['pacman', '-Dk']}[TARGETS[target][0]]
 
 
 def sha256_file(path):
@@ -72,7 +117,13 @@ def parse_sums(text, name):
     return found[0]
 
 
-def version_is_newer(new, old, *, run=subprocess.run):
+def version_is_newer(new, old, *, run=subprocess.run, target=DEFAULT_TARGET):
+    if TARGETS[target][0] != 'deb':
+        candidate = TAG.fullmatch('v' + new)
+        current = TAG.fullmatch('v' + old)
+        if not candidate or not current:
+            raise VerifyError('当前版本不是正式版本，请先手动安装发行版对应的正式安装包。')
+        return tuple(map(int, new.split('.'))) > tuple(map(int, old.split('.')))
     result = run(['dpkg', '--compare-versions', new, 'gt', old],
                  capture_output=True, text=True, timeout=60, check=False)
     if result.returncode not in (0, 1):
@@ -92,7 +143,7 @@ def deb_control(deb, *, run=subprocess.run):
     return fields
 
 
-def check_checksums(stage, tag):
+def check_checksums(stage, tag, *, target=DEFAULT_TARGET):
     """The checksum that SHA256SUMS lists for this release's deb.
 
     Needs only the small file, so the updater can run it before the deb is downloaded.
@@ -104,10 +155,50 @@ def check_checksums(stage, tag):
     sums = stage / 'SHA256SUMS'
     if not sums.is_file():
         raise VerifyError(f'缺少文件 {sums.name}。')
-    return parse_sums(sums.read_text(), deb_name(match.group(1)))
+    return parse_sums(sums.read_text(), package_name(match.group(1), target))
 
 
-def check_release(stage, tag, installed, *, run=subprocess.run):
+def package_control(path, target, *, run=subprocess.run):
+    fmt = TARGETS[target][0]
+    if fmt == 'deb':
+        fields = deb_control(path, run=run)
+        result = run(['dpkg-deb', '-f', str(path), 'X-UUWay-Target'],
+                     capture_output=True, text=True, timeout=60, check=False)
+        declared = result.stdout.strip() if result.returncode == 0 else ''
+        # Old Ubuntu releases predate target metadata; their asset name remains unchanged.
+        if declared != target and not (target == DEFAULT_TARGET and not declared):
+            raise VerifyError('安装包的发行版目标不匹配，拒绝安装。')
+        return fields
+    if fmt == 'rpm':
+        query = ('Package: %{NAME}\nVersion: %{VERSION}\nArchitecture: %{ARCH}\n'
+                 'Target: %{DISTRIBUTION}\nRelease: %{RELEASE}\nEpoch: %{EPOCHNUM}\n'
+                 'Obsoletes: [%{OBSOLETENAME} ]\n')
+        result = run(['rpm', '-qp', '--qf', query, str(path)],
+                     capture_output=True, text=True, timeout=60, check=False)
+        fields = dict(line.split(': ', 1) for line in result.stdout.splitlines() if ': ' in line)
+        if (result.returncode != 0 or fields.get('Target') != target or fields.get('Release') != '1'
+                or fields.get('Epoch') != '0' or fields.get('Obsoletes', '').strip()):
+            raise VerifyError('RPM 的发行版目标或替换规则不符合要求，拒绝安装。')
+        return fields
+    result = run(['bsdtar', '-xOf', str(path), '.PKGINFO'],
+                 capture_output=True, text=True, timeout=60, check=False)
+    info = collections.defaultdict(list)
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition(' = ')
+        if sep:
+            info[key].append(value)
+    if (result.returncode != 0 or info['provides'] != ['uuway-target-arch']
+            or info['replaces'] or info['conflict']):
+        raise VerifyError('Arch 安装包的发行版目标或替换规则不符合要求，拒绝安装。')
+    if any(len(info[key]) != 1 for key in ('pkgname', 'pkgver', 'arch')):
+        raise VerifyError('无法读取 Arch 软件包信息。')
+    version = info['pkgver'][0]
+    if not version.endswith('-1'):
+        raise VerifyError('Arch 安装包的版本不符合要求。')
+    return dict(Package=info['pkgname'][0], Version=version[:-2], Architecture=info['arch'][0])
+
+
+def check_release(stage, tag, installed, *, run=subprocess.run, target=DEFAULT_TARGET, require_newer=True):
     """Verify a staged download; return a Release or raise VerifyError.
 
     `stage` holds the deb and SHA256SUMS.  Order matters: the checksum first, then what the deb
@@ -118,22 +209,23 @@ def check_release(stage, tag, installed, *, run=subprocess.run):
     if not match:
         raise VerifyError(f'发布标签（tag）必须形如 vX.Y.Z，收到的是 {tag!r}。')
     version = match.group(1)
-    name = deb_name(version)
+    name = package_name(version, target)
     deb = stage / name
-    expected = check_checksums(stage, tag)
+    expected = check_checksums(stage, tag, target=target)
     if not deb.is_file():
         raise VerifyError(f'缺少文件 {name}。')
     actual = sha256_file(deb)
     if actual != expected:
         raise VerifyError(f'{name} 的 SHA-256 与 SHA256SUMS 不一致（哈希 {actual}），拒绝安装。')
-    control = deb_control(deb, run=run)
+    control = package_control(deb, target, run=run)
     if control.get('Package') != PACKAGE:
         raise VerifyError(f'deb 的软件包名是 {control.get("Package")!r}，不是 {PACKAGE}。')
-    if control.get('Architecture') != ARCHITECTURE:
-        raise VerifyError(f'deb 的架构是 {control.get("Architecture")!r}，不是 {ARCHITECTURE}。')
+    architecture = TARGETS[target][1]
+    if control.get('Architecture') != architecture:
+        raise VerifyError(f'安装包的架构是 {control.get("Architecture")!r}，不是 {architecture}。')
     if control.get('Version') != version:
         raise VerifyError(f'deb 的版本是 {control.get("Version")!r}，与标签 {tag} 不符。')
-    if not version_is_newer(version, installed, run=run):
+    if require_newer and not version_is_newer(version, installed, run=run, target=target):
         raise VerifyError(f'新版本 {version} 不比已安装的 {installed} 更新，拒绝安装。')
     return Release(version, deb, actual)
 
@@ -144,7 +236,8 @@ def check_release(stage, tag, installed, *, run=subprocess.run):
 
 SERVICES = ('uu-native-display', 'uu-native-text', 'uu-native-bridge')
 UU_PROCESSES = ('GameViewerServer.exe', 'GameViewerService.exe')
-SESSION_KEYS = ('XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY')
+SESSION_KEYS = ('XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'WAYLAND_DISPLAY', 'DISPLAY', 'XAUTHORITY',
+                'HYPRLAND_INSTANCE_SIGNATURE')
 SESSION_WAIT = 180   # seconds for the desktop session to be there (autologin takes about a minute)
 SOAK = 90            # seconds of unbroken health: a watchdog period (30), a restart delay (10) and margin
 DEADLINE = 300       # seconds from the end of `refresh` to a verdict
@@ -272,7 +365,7 @@ class Job:
 
     def __init__(self, layout, *, user, uid, home, prefix, tag='', snapshot='', baseline=None,
                  reboot_if_stuck=False, run=run_command, check_run=subprocess.run,
-                 clock=time.monotonic, sleep=time.sleep, log=None):
+                 clock=time.monotonic, sleep=time.sleep, log=None, target=None):
         self.layout = layout
         self.user, self.uid, self.home, self.prefix = user, uid, str(home), str(prefix)
         self.tag, self.snapshot, self.baseline = tag, str(snapshot or ''), baseline
@@ -282,6 +375,9 @@ class Job:
         self.session_env = {}
         self.journal = None
         self.manual = False  # a rollback somebody asked for, not one the update decided on
+        self.target = installed_target(layout.root) if target is None else target
+        if self.target not in TARGETS:
+            raise VerifyError(f'不支持的安装包目标：{self.target!r}')
 
     @property
     def version(self):
@@ -313,13 +409,12 @@ def progress_logger(layout, clock=time.time):
 
 
 def installed_version(job):
-    result = job.run(['dpkg-query', '-W', '-f=${Version}', PACKAGE])
-    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+    return parse_installed(job.run(installed_command(job.target)), job.target)
 
 
 def dpkg_is_clean(job):
-    result = job.run(['dpkg', '--audit'])
-    return result.returncode == 0 and not result.stdout.strip()
+    result = job.run(audit_command(job.target))
+    return result.returncode == 0 and (TARGETS[job.target][0] != 'deb' or not result.stdout.strip())
 
 
 # --------------------------------------------------------------------------- health
@@ -470,7 +565,8 @@ def wait_for_session(job, limit=SESSION_WAIT):
         if (job.layout.runtime / str(job.uid) / 'bus').exists():
             shown = job.as_user(['systemctl', '--user', 'show-environment'], session=False, timeout=30)
             values = parse_environment(shown.stdout) if shown.returncode == 0 else {}
-            if values.get('XDG_SESSION_TYPE') == 'wayland' and 'GNOME' in values.get('XDG_CURRENT_DESKTOP', ''):
+            desktops = values.get('XDG_CURRENT_DESKTOP', '').split(':')
+            if values.get('XDG_SESSION_TYPE') == 'wayland' and any(d in desktops for d in ('GNOME', 'Hyprland')):
                 return {key: values[key] for key in SESSION_KEYS if key in values}
         if job.clock() >= end:
             return None
@@ -557,8 +653,45 @@ def copy_private(source, target, limit):
 
 def copy_stage(job, stage, work):
     """The two downloaded files, copied where only root can change them before they are checked."""
-    for name, limit in (('SHA256SUMS', SUMS_LIMIT), (deb_name(job.version), DEB_LIMIT)):
+    for name, limit in (('SHA256SUMS', SUMS_LIMIT), (package_name(job.version, job.target), DEB_LIMIT)):
         copy_private(Path(stage) / name, Path(work) / name, limit)
+
+
+def prepare_previous(job, stage, work, version):
+    if TARGETS[job.target][0] == 'deb':
+        return repack_installed(job, version)
+    if not TAG.fullmatch('v' + version):
+        raise TransactionError('开发构建没有对应的回滚包，请先手动安装正式安装包。')
+    previous = Path(work) / 'previous'
+    previous.mkdir(mode=0o700)
+    for name, limit in (('SHA256SUMS', SUMS_LIMIT), (package_name(version, job.target), DEB_LIMIT)):
+        copy_private(Path(stage) / 'previous' / name, previous / name, limit)
+    release = check_release(previous, 'v' + version, version, target=job.target,
+                            require_newer=False, run=job.check_run)
+    return release.deb, release.sha256
+
+
+def install_command(job, package, *, downgrade=False):
+    fmt = TARGETS[job.target][0]
+    if fmt == 'rpm':
+        return ['rpm', '-U', '--replacepkgs', *(['--oldpackage'] if downgrade else []), str(package)]
+    if fmt == 'arch':
+        return ['pacman', '-U', '--noconfirm', str(package)]
+    return ['apt-get', 'install', '-y', '--no-install-recommends',
+            *(['--allow-downgrades'] if downgrade else []), '-o', 'DPkg::Lock::Timeout=600', str(package)]
+
+
+def simulate_install(job, package):
+    fmt = TARGETS[job.target][0]
+    if fmt == 'rpm':
+        # rpm checks dependencies/conflicts but cannot fetch or upgrade unrelated packages.
+        result = job.run(['rpm', '-U', '--test', str(package)], timeout=600)
+        return result.returncode == 0
+    if fmt == 'arch':
+        result = job.run(['pacman', '-U', '--print', '--print-format', '%n', str(package)], timeout=600)
+        return result.returncode == 0 and result.stdout.strip() == PACKAGE
+    result = job.run(['apt-get', '-s', 'install', '-y', '--no-install-recommends', str(package)], timeout=600)
+    return result.returncode == 0 and simulation_is_safe(result.stdout)
 
 
 def repack_installed(job, version):
@@ -670,12 +803,13 @@ def write_recovery(job, reason):
     """
     journal = job.journal
     previous = journal.get('previous_deb')
-    steps = ['sudo dpkg --configure -a']
+    fmt = TARGETS[job.target][0]
+    steps = ['sudo dpkg --configure -a'] if fmt == 'deb' else []
     if previous:
-        steps.append(f'sudo apt-get install --allow-downgrades {shlex.quote(str(previous))}')
+        steps.append('sudo ' + shlex.join(install_command(job, previous, downgrade=True)))
     else:
         steps.append('没有保存下来的旧版本包：到 https://github.com/GaryOAO/UUWay/releases 下载更新前的版本，'
-                     '再 sudo apt install ./那个文件.deb')
+                     '用系统包管理器重新安装。')
     if job.snapshot:
         steps.append('用普通用户（不要用 root）恢复更新前的快照：\n'
                      f'   cp -a --remove-destination --no-preserve=mode {shlex.quote(job.snapshot + "/home/.")} ~/\n'
@@ -796,10 +930,9 @@ def rollback(job, reason):
     previous = Path(journal.get('previous_deb') or '/nonexistent')
     installed = False
     if previous.is_file() and sha256_file(previous) == journal.get('previous_sha256'):
-        command = ['apt-get', 'install', '-y', '--no-install-recommends', '--allow-downgrades',
-                   '-o', 'DPkg::Lock::Timeout=600', str(previous)]
+        command = install_command(job, previous, downgrade=True)
         result = job.run(command, timeout=APT_TIMEOUT)
-        if result.returncode != 0:
+        if result.returncode != 0 and TARGETS[job.target][0] == 'deb':
             job.log('降级失败，先 dpkg --configure -a 再试一次。')
             job.run(['dpkg', '--configure', '-a'], timeout=900)
             result = job.run(command, timeout=APT_TIMEOUT)
@@ -869,6 +1002,7 @@ def run_update(job, stage, *, verify=check_release):
     layout.prepare()
     installed = installed_version(job)
     job.journal = Journal(layout.journal, dict(schema=1, phase='starting', tag=job.tag, version=job.version,
+                                               target=job.target,
                                                from_version=installed, user=job.user, uid=job.uid, home=job.home,
                                                prefix=job.prefix, snapshot=job.snapshot, baseline=job.baseline,
                                                reboot_if_stuck=job.reboot_if_stuck, manual=False,
@@ -879,7 +1013,10 @@ def run_update(job, stage, *, verify=check_release):
     try:
         work = Path(tempfile.mkdtemp(prefix='stage-', dir=layout.work))
         copy_stage(job, stage, work)
-        release = verify(work, job.tag, installed, run=job.check_run)
+        kwargs = dict(run=job.check_run)
+        if job.target != DEFAULT_TARGET:
+            kwargs['target'] = job.target
+        release = verify(work, job.tag, installed, **kwargs)
         # Moved, not copied: it was verified where only root can write, and a move leaves it as it was.
         for old in layout.new.iterdir():
             old.unlink()
@@ -890,12 +1027,11 @@ def run_update(job, stage, *, verify=check_release):
         return finish_with(job, 'not_started', str(error))
     log('哈希和版本检查通过。')
     try:
-        built, previous_sha = repack_installed(job, installed)
-    except (TransactionError, OSError) as error:
+        built, previous_sha = prepare_previous(job, stage, work, installed)
+    except (VerifyError, TransactionError, OSError) as error:
         return finish_with(job, 'not_started', f'没法备好回滚用的旧版本，所以没有开始：{error}')
     log(f'已备好回滚用的 {installed}。')
-    simulated = job.run(['apt-get', '-s', 'install', '-y', '--no-install-recommends', str(new)], timeout=600)
-    if simulated.returncode != 0 or not simulation_is_safe(simulated.stdout):
+    if not simulate_install(job, new):
         return finish_with(job, 'not_started', '模拟安装显示它会动 uuway 以外的软件包，或装不上，所以没有开始。')
     previous = commit_previous(layout, built)
     job.journal.commit(phase='prepared', previous_deb=str(previous), previous_sha256=previous_sha,
@@ -904,13 +1040,12 @@ def run_update(job, stage, *, verify=check_release):
     job.journal.update(phase='apt')
     log('开始安装。')
     environment = dict(os.environ, DEBIAN_FRONTEND='noninteractive', NEEDRESTART_SUSPEND='1')
-    result = job.run(['apt-get', 'install', '-y', '--no-install-recommends', '-o', 'DPkg::Lock::Timeout=600', str(new)],
-                     env=environment, timeout=APT_TIMEOUT)
+    result = job.run(install_command(job, new), env=environment, timeout=APT_TIMEOUT)
     now = installed_version(job)
     if result.returncode != 0:
         if now == installed and dpkg_is_clean(job):
-            return finish_with(job, 'not_started', 'apt 安装失败，系统没有改变：' + result.stderr.strip()[-300:])
-        return rollback(job, 'apt 安装中途失败')
+            return finish_with(job, 'not_started', '软件包安装失败，系统没有改变：' + result.stderr.strip()[-300:])
+        return rollback(job, '软件包安装中途失败')
     if now != release.version:
         return rollback(job, f'安装后版本是 {now}，不是 {release.version}')
     return complete_update(job)
@@ -979,7 +1114,8 @@ def resume(job):
         disarm_resume(job)
         return 'nothing'
     job.log(f'开机后继续未完成的更新（阶段：{phase}）')
-    job.run(['dpkg', '--configure', '-a'], timeout=900)
+    if TARGETS[job.target][0] == 'deb':
+        job.run(['dpkg', '--configure', '-a'], timeout=900)
     now = installed_version(job)
     if phase in ('starting', 'prepared', 'apt'):
         if now == journal.get('from_version') and dpkg_is_clean(job):
@@ -1023,6 +1159,7 @@ def job_from_journal(layout, journal, **overrides):
     data = journal.data
     job = Job(layout, user=data['user'], uid=data['uid'], home=data['home'], prefix=data['prefix'],
               tag=data['tag'], snapshot=data.get('snapshot', ''), baseline=data.get('baseline'),
+              target=data.get('target', DEFAULT_TARGET),
               reboot_if_stuck=overrides.pop('reboot_if_stuck', data.get('reboot_if_stuck', False)),
               log=progress_logger(layout), **overrides)
     job.journal = journal

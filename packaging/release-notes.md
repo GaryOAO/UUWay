@@ -1,11 +1,17 @@
 ## 中文
 
-- 修复 AMD VA-API 后端在显卡缺少 ROI（空间 AQ）能力时被误判为不可用的问题。（#18）
-- H.264/HEVC 硬件编码现在会在没有 32 个 QP-delta ROI 区域的驱动上继续工作，并自动关闭空间 AQ；支持 ROI 的驱动仍保留原有空间 AQ 优化。
-- 增加 ROI 能力降级回归测试，并更新 AMD 后端说明。
+- 新增 Debian 13、Fedora 44 / 45、Arch Linux 原生安装包；Fedora 共用一个 RPM。（#19）
+- 新增 Hyprland 单屏实验支持，暂不支持修改显示模式和超级屏。
+- 安装向导可自动下载网易 UU 官方安装包；Wine 11.0 使用官方预编译包。
+- 自动更新按发行版选择安装包，并保留更新前备份、健康检查和失败回滚。
+
+以上新环境为实验性支持，受条件限制暂未做真机测试。欢迎提交 Issue 反馈兼容性，也欢迎提交 PR 一起完善。
 
 ## English
 
-- Fix AMD VA-API setup being rejected when the GPU lacks ROI (spatial AQ) support. (#18)
-- H.264/HEVC hardware encoding now continues on drivers without 32 QP-delta ROI regions and disables spatial AQ automatically; drivers with ROI support keep the existing spatial AQ optimization.
-- Add a regression test for the ROI capability fallback and update the AMD backend documentation.
+- Add native Debian 13, Fedora 44 / 45 and Arch Linux packages, with one shared Fedora RPM. (#19)
+- Add experimental single-monitor Hyprland support; display-mode changes and Super Screen remain unavailable.
+- Download the official NetEase UU installer during setup and use official prebuilt Wine 11.0 packages.
+- Select distribution-specific update assets, with a previous-package backup, health checks and rollback.
+
+These new environments are experimental and have not been tested on real hardware. Compatibility reports and code contributions are welcome.

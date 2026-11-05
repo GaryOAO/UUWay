@@ -7,55 +7,76 @@ on:
     inputs:
       version:
         description: Package version for a test build (no release is created)
-        default: 1.4.1~ci
+        default: 1.5.0~ci
 
 permissions:
   contents: write
 
 jobs:
-  deb:
+  version:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Resolve version
-        id: version
+      - name: Resolve version and validate release notes
+        id: resolve
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then version="${GITHUB_REF_NAME#v}"; else version="$INPUT_VERSION"; fi
-          [[ "$version" =~ ^[0-9][A-Za-z0-9.+~-]*$ ]]
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            test -s packaging/release-notes.md
+            grep -Fxq '## 中文' packaging/release-notes.md
+            grep -Fxq '## English' packaging/release-notes.md
+          else
+            version="$INPUT_VERSION"
+            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+~][A-Za-z0-9.]+)?$ ]]
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Validate release notes
-        if: github.ref_type == 'tag'
+  packages:
+    needs: version
+    uses: ./.github/workflows/linux-packages.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+  release:
+    needs: [version, packages]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: uuway-*
+          merge-multiple: true
+          path: out
+      - name: Assemble and check all release assets
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          test -s packaging/release-notes.md
-          grep -Fxq '## 中文' packaging/release-notes.md
-          grep -Fxq '## English' packaging/release-notes.md
-      # The same scripts a maintainer runs locally: a clean Ubuntu 24.04 container does the build.
-      - name: Build the package
-        run: packaging/build-deb.sh --version "${{ steps.version.outputs.version }}" --output-dir out
-      - name: Install it in a clean container and check it
-        run: packaging/test-deb.sh out/uuway_${{ steps.version.outputs.version }}_amd64.deb
-      - name: Assert both GPU backends are present
-        run: |
-          deb="out/uuway_${{ steps.version.outputs.version }}_amd64.deb"
-          dpkg-deb -c "$deb" | grep '/build/backends/nvidia/native-presenter/' >/dev/null
-          dpkg-deb -c "$deb" | grep '/build/backends/amd/native-presenter/uu-vaapi-probe' >/dev/null
-          dpkg-deb -c "$deb" | grep '/config/dxvk-amd.conf$' >/dev/null
-      - name: Checksums
-        run: cd out && sha256sum uuway_*_amd64.deb > SHA256SUMS && cat SHA256SUMS
+          python3 - <<'PYTHON'
+          import hashlib, os, pathlib
+          version = os.environ['VERSION']
+          root = pathlib.Path('out')
+          arch_version = version.replace('~', '.').replace('+', '.')
+          names = [f'uuway_{version}_amd64.deb', f'uuway_{version}_trixie_amd64.deb',
+                   f'uuway-{version}-1.fedora.x86_64.rpm',
+                   f'uuway-{arch_version}-1-x86_64.pkg.tar.zst']
+          assert all((root / name).is_file() for name in names), names
+          (root / 'SHA256SUMS').write_text(''.join(
+              f'{hashlib.sha256((root / name).read_bytes()).hexdigest()}  {name}\n' for name in names))
+          PYTHON
+          cd out && sha256sum --strict -c SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: uuway-deb
+          name: release-assets
           path: out/
-      # A draft: nothing becomes public until a maintainer reads the notes and publishes it.
-      - name: Draft the GitHub release
+      # Keep latest complete: upload every asset to a draft before publishing.
+      - name: Create complete draft release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "UUWay ${GITHUB_REF_NAME#v}" --notes-file packaging/release-notes.md \
-            out/uuway_*_amd64.deb out/SHA256SUMS
+            out/uuway_*.deb out/uuway-*.rpm out/uuway-*.pkg.tar.zst out/SHA256SUMS

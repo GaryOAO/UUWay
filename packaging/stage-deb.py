@@ -8,6 +8,7 @@ packaging/deb_manifest.py; nothing is picked up by wildcard.
 import argparse
 import gzip
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -182,6 +183,8 @@ def main():
         stage = Path(scratch) / 'uuway'
         stage.mkdir()
         copy_tree(entries, stage, epoch)
+        (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(dict(
+            version=args.version, target='ubuntu', format='deb', ota=True, wine='11.0'), indent=2) + '\n')
         write_changelog(stage, args.version, epoch)
         depends = None if args.no_shlibs else shlibs_depends(stage)
         if depends is None and not args.no_shlibs:

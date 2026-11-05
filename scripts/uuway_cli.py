@@ -412,7 +412,8 @@ def wine_run(ctx):
         return
     if platform.os_release().get('ID') == 'fedora':
         if ctx.confirm('现在从 WineHQ 官方源安装并固定 Wine 11.0？'):
-            ctx.run(ctx.elevate(['bash', ROOT / 'scripts/install-wine11.sh', 'fedora-44']))
+            release = platform.os_release()
+            ctx.run(ctx.elevate(['bash', ROOT / 'scripts/install-wine11.sh', 'fedora-' + release.get('VERSION_ID', '')]))
         else:
             raise SetupError('缺少固定的 Wine 11.0，已停止。')
         if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
@@ -1470,8 +1471,15 @@ def deb_version(ctx):
         return None
     if not platform.ota_supported(ROOT):
         return None
-    result = ctx.probe(['dpkg-query', '-W', '-f=${Version}', 'uuway'])
-    return result.stdout.strip() or None if result.returncode == 0 else None
+    target = update_target()
+    return update_checks.parse_installed(ctx.probe(update_checks.installed_command(target)), target)
+
+
+def update_target():
+    target = platform.package_info(ROOT).get('target', update_checks.DEFAULT_TARGET)
+    if target not in update_checks.TARGETS:
+        raise SetupError('当前安装包没有可用的更新目标，请通过系统包管理器更新。')
+    return target
 
 
 def is_newer(ctx, new, old):
@@ -1483,7 +1491,7 @@ def is_newer(ctx, new, old):
         candidate = tuple(int(value) for value in new.split('.'))
         return candidate > current or (candidate == current and match.group(4).startswith('~'))
     try:
-        return update_checks.version_is_newer(new, old, run=lambda argv, **kwargs: ctx.probe(argv))
+        return update_checks.version_is_newer(new, old, run=lambda argv, **kwargs: ctx.probe(argv), target=update_target())
     except update_checks.VerifyError as error:
         raise SetupError(str(error))
 
@@ -1612,13 +1620,14 @@ def update_status(ctx, args):
 
 def update_recovery_layer(ctx, args):
     """An update that crashes the desktop must not leave the machine at a login screen for good."""
-    timed = timed_state(ctx)
+    hyprland = 'Hyprland' in os.environ.get('XDG_CURRENT_DESKTOP', '').split(':')
+    timed = None if hyprland else timed_state(ctx)
     if timed and timed[0] and timed[1] == getpass.getuser():
         return
     if getattr(args, 'allow_no_recovery', False):
         return  # Explicit GUI/CLI consent; never enables autologin implicitly.
     warn('这台机器在桌面崩溃或注销后不会自动重新登录：万一更新让桌面崩溃，没有人在本机登录，UU 就一直离线。')
-    info('先开启：uuway autologin on')
+    info('请先配置会话自动恢复，或明确允许无自动登录保护的更新。' if hyprland else '先开启：uuway autologin on')
     if ctx.assume_yes or not sys.stdin.isatty():
         raise SetupError('没有开启“崩溃后自动重新登录”，--yes 或非交互运行不会替你冒这个险。'
                          '先运行 uuway autologin on，或在终端里交互运行并明确同意。')
@@ -1719,17 +1728,19 @@ def confirm_default_no(ctx, question):
 
 def update_install(ctx, args):
     if not platform.ota_supported(ROOT):
-        raise SetupError('当前发行版请通过原生包管理器更新；内置 OTA 目前只提供 Ubuntu 包。')
+        raise SetupError('当前安装包未启用内置更新，请通过系统包管理器更新。')
+    target = update_target()
     installed = deb_version(ctx)
     if installed is None:
-        raise SetupError('uuway update install 只支持用安装包（.deb）装的 UUWay；源码目录请自己更新。')
+        raise SetupError('uuway update install 只支持用安装包装的 UUWay；源码目录请自己更新。')
     if installed.startswith('0.0.0~'):
         raise SetupError(f'这是开发构建（{installed}），不能用 OTA 更新。')
     if update_busy(ctx):
         raise SetupError('已经有一个更新在进行；运行 uuway update status 查看。')
-    audit = ctx.probe(['dpkg', '--audit'])
-    if audit.returncode != 0 or audit.stdout.strip():
-        raise SetupError('dpkg 处于未完成状态，先修好它：sudo dpkg --configure -a')
+    audit = ctx.probe(update_checks.audit_command(target))
+    if audit.returncode != 0 or (update_checks.TARGETS[target][0] == 'deb' and audit.stdout.strip()):
+        raise SetupError('dpkg 处于未完成状态，先修好它：sudo dpkg --configure -a' if update_checks.TARGETS[target][0] == 'deb'
+                         else '系统包管理器状态异常，请先修复后再更新。')
     source = getattr(args, 'source', None)
     if source:
         # A rehearsal: a release laid out by hand in a directory (the deb and its SHA256SUMS, see
@@ -1765,8 +1776,9 @@ def update_install(ctx, args):
             shutil.rmtree(ctx.state_dir / 'update', ignore_errors=True)
             uuway_update.download_release(
                 new_fetcher(), tag, stage,
-                before_deb=lambda staged: update_checks.check_checksums(staged, tag))
-        release = update_checks.check_release(stage, tag, installed, run=subprocess.run)
+                before_deb=lambda staged: update_checks.check_checksums(staged, tag, target=target), target=target)
+            uuway_update.download_previous(new_fetcher(), installed, stage, target=target)
+        release = update_checks.check_release(stage, tag, installed, run=subprocess.run, target=target)
     except (uuway_update.FetchError, update_checks.VerifyError) as error:
         raise SetupError(str(error))
     ok(f'已{"读取" if source else "下载"}并校验 {version}（哈希对得上）。')
@@ -1787,7 +1799,7 @@ def update_install(ctx, args):
 
 def update_rollback(ctx, args):
     if not platform.ota_supported(ROOT):
-        raise SetupError('当前发行版请通过原生包管理器降级；内置回滚目前只支持 Ubuntu。')
+        raise SetupError('当前安装包未启用内置回滚，请通过系统包管理器降级。')
     result = read_json(UPDATE_STATE / 'last-result.json')
     target = result.get('rollback_to') if isinstance(result, dict) else None
     previous = Path(str(target.get('deb') or '/nonexistent')) if isinstance(target, dict) else None
