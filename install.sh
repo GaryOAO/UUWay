@@ -11,6 +11,8 @@ prefix="${UUWAY_PREFIX:-$HOME/.local/share/wineprefixes/uu-remote}"
 state_dir="$HOME/.local/state/uurb"
 config_dir="$HOME/.config/uurb"
 wine_dir=/opt/wine-stable/bin
+[[ ! -x /opt/uuway-wine11/bin/wine ]] || wine_dir=/opt/uuway-wine11/bin
+export UURB_WINE_BIN="$wine_dir"
 python=/usr/bin/python3
 server_exe="$prefix/drive_c/Program Files/Netease/GameViewer/bin/GameViewerServer.exe"
 restore_state="$state_dir/portal-probe.json"
@@ -23,6 +25,8 @@ dry_run=0
 login=0
 with_console=1
 gpu_backend=""
+desktop_backend=gnome
+cursor_mode=metadata
 
 packages=(build-essential gcc-mingw-w64-x86-64 meson ninja-build pkg-config jq curl git ripgrep
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev glslang-tools
@@ -34,8 +38,8 @@ usage() {
     cat <<'EOF'
 用法：./install.sh [选项]
 
-  --installer 路径   UU 远程官方 Windows 安装包（例如 ~/Downloads/UURemote_Setup.exe）；
-                     不指定时会在 ~/Downloads 里查找，找不到再询问
+  --installer 路径   本地 UU Windows 安装包（例如 ~/Downloads/UURemote_Setup.exe）；
+                     不指定时查找下载目录，找不到则从 UU 官方下载
   --from 步骤        从第几步开始（1-7），用于中断后继续
   --login            即使 UU 已安装，也重新打开 UU 登录一次
   --no-console       不安装控制台（图形设置工具）
@@ -120,14 +124,24 @@ step_title 1 "检查环境并安装依赖"
 ((EUID != 0)) || die "请不要用 sudo 或 root 运行；脚本会在需要时自己调用 sudo。"
 # shellcheck source=/dev/null
 . /etc/os-release
+command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
+    die "源码安装脚本需要 apt；当前系统请使用原生包，见 docs/linux-packages.md。"
 if [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]]; then
     ok "Ubuntu 24.04"
 else
     warn "UUWay 只在 Ubuntu 24.04 上验证过（当前：${PRETTY_NAME:-未知}），继续但不保证可用。"
 fi
-[[ "${XDG_SESSION_TYPE:-}" == wayland && "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]] ||
-    die "请在 GNOME Wayland 会话里打开终端运行（当前会话：${XDG_SESSION_TYPE:-未知} / ${XDG_CURRENT_DESKTOP:-未知}）。"
-ok "GNOME Wayland 会话"
+[[ "${XDG_SESSION_TYPE:-}" == wayland ]] || die "请在 Wayland 桌面会话中运行。"
+if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
+    desktop_backend=hyprland
+    cursor_mode=embedded
+    hypr_geometry="$("$python" -c 'import sys; sys.path.insert(0, sys.argv[1]); from native_desktop import HyprlandDisplay; m=HyprlandDisplay().current()["modes"][0]; print(m["width"],m["height"])' "$repo_dir/scripts")" || die "Hyprland 实验支持需要原点单屏、100% 缩放、无旋转，刷新率不超过 144 Hz。"
+    read -r hypr_width hypr_height <<< "$hypr_geometry"
+    warn "Hyprland 实验支持：暂不支持修改显示模式和超级屏。"
+else
+    [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]] || die "请在 GNOME Wayland 或 Hyprland 会话中运行。"
+    ok "GNOME Wayland 会话"
+fi
 if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
     gpu_backend=nvidia
     ok "NVIDIA 显卡：$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1)"
@@ -147,19 +161,22 @@ if should_run 1; then
         ok "构建依赖已齐全"
     fi
 
-    if [[ -x "$wine_dir/wine" ]] && "$wine_dir/wine" --version 2>/dev/null | grep -q '^wine-11'; then
+    if [[ -x "$wine_dir/wine" ]] && "$wine_dir/wine" --version 2>/dev/null | grep -Eq '^wine-11\.0(\.[0-9]+)?$'; then
         ok "WineHQ stable：$("$wine_dir/wine" --version)"
     else
         info "需要 WineHQ stable 11（安装在 /opt/wine-stable）。"
         confirm "现在添加 WineHQ 软件源并安装 winehq-stable？" || die "缺少 WineHQ stable 11，已停止。"
         run sudo dpkg --add-architecture i386
         run sudo mkdir -pm755 /etc/apt/keyrings
-        run sudo curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-        run sudo curl -fsSLo /etc/apt/sources.list.d/winehq-noble.sources \
-            https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources
+        run sudo curl -fsSLo /etc/apt/keyrings/winehq-archive.asc https://dl.winehq.org/wine-builds/winehq.key
+        wine_source="$("$python" -c 'import sys; sys.path.insert(0, sys.argv[1]); from uuway_platform import winehq_source; print(*winehq_source())' "$repo_dir/scripts")" || die "没有当前系统的 WineHQ 安装适配，请使用原生包。"
+        read -r wine_source_name wine_source_url <<< "$wine_source"
+        run sudo curl -fsSLo "/etc/apt/sources.list.d/$wine_source_name" "$wine_source_url"
+        run sudo sed -i 's@winehq-archive.key@winehq-archive.asc@' "/etc/apt/sources.list.d/$wine_source_name"
+        run sudo install -m 0644 "$repo_dir/config/uuway-wine.preferences" /etc/apt/preferences.d/uuway-wine
         run sudo apt-get update
-        run sudo apt-get install -y --install-recommends winehq-stable
-        ((dry_run)) || "$wine_dir/wine" --version | grep -q '^wine-11' ||
+        run sudo apt-get install -y --install-recommends 'winehq-stable=11.0.*' 'wine-stable=11.0.*' 'wine-stable-amd64=11.0.*' 'wine-stable-i386:i386=11.0.*'
+        ((dry_run)) || "$wine_dir/wine" --version | grep -Eq '^wine-11\.0(\.[0-9]+)?$' ||
             die "装好的 WineHQ stable 不是 11 版（$("$wine_dir/wine" --version)）。"
     fi
 fi
@@ -185,14 +202,15 @@ if should_run 2; then
         ok "UU 已安装在 $prefix"
     else
         if [[ -z "$installer" ]]; then
-            for candidate in "$HOME"/Downloads/UURemote*.exe "$HOME"/Downloads/*UU*emote*.exe "$HOME"/下载/UURemote*.exe; do
+            for candidate in "$HOME"/Downloads/UURemote*.exe "$HOME"/Downloads/*UU*emote*.exe "$HOME"/Downloads/uuyc_*.exe "$HOME"/下载/UURemote*.exe "$HOME"/下载/uuyc_*.exe; do
                 [[ -f "$candidate" ]] && { installer="$candidate"; break; }
             done
         fi
-        if [[ -z "$installer" && $dry_run -eq 0 ]]; then
-            info "请先从 UU 远程官网下载 Windows 版安装包。"
-            read -r -e -p "   安装包路径：" installer
-            installer="${installer/#\~/$HOME}"
+        if [[ -z "$installer" ]]; then
+            installer="$state_dir/downloads/UURemote_Setup.exe"
+            info "从 UU 官方下载 Windows 安装包。"
+            run mkdir -p -m 0700 "$state_dir"
+            run "$python" "$repo_dir/scripts/uuway_installer.py" --output "$installer"
         fi
         [[ -n "$installer" ]] || installer="$HOME/Downloads/UURemote_Setup.exe"
         ((dry_run)) || [[ -f "$installer" ]] || die "找不到安装包：$installer"
@@ -275,7 +293,10 @@ if should_run 5; then
     fi
 
     run mkdir -p -m 0700 "$state_dir"
-    if [[ -s "$restore_state" ]]; then
+    if [[ "$desktop_backend" == hyprland ]]; then
+        info "请选择并允许共享当前屏幕；连接时可能需要再次在本机确认。"
+        run "$python" "$repo_dir/scripts/probe-wayland-portal.py" --capture-check --expected-size "$hypr_width" "$hypr_height"
+    elif [[ -s "$restore_state" ]]; then
         ok "屏幕共享已授权（$restore_state）"
     else
         info "接下来会检查屏幕共享：请选择一块显示器，并勾选「记住」。"
@@ -305,7 +326,7 @@ if should_run 6; then
     fi
     service_options=()
     if [[ ! -f "$config_dir/native-runtime.json" ]]; then
-        service_options=(--cursor-mode metadata --preserve-display-session)
+        service_options=(--cursor-mode "$cursor_mode" --preserve-display-session)
     fi
     run "$python" scripts/install-uu-native-service.py \
         --bundle "$bundle" --prefix "$prefix" --restore-state "$restore_state" \
@@ -325,6 +346,7 @@ if should_run 6; then
     if [[ ! -f "$config_dir/text-backend.json" ]]; then
         backend=portal
         pgrep -u "$USER" -x fcitx5 >/dev/null && backend=fcitx
+        [[ "$desktop_backend" != hyprland ]] || backend=fcitx
         run mkdir -p "$config_dir"
         if ((dry_run)); then
             info "（演练）会写入 $config_dir/text-backend.json：$backend"
@@ -334,6 +356,9 @@ if should_run 6; then
         ok "手机输入法文字通道：$backend"
     fi
 
+    if [[ "$desktop_backend" == hyprland ]]; then
+        run systemctl --user import-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE
+    fi
     run systemctl --user daemon-reload
     info "加载多屏与超级屏显示服务（移除现有超级屏，保留文字服务）"
     run systemctl --user restart uu-native-display

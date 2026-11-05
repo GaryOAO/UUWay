@@ -9,7 +9,12 @@ revision=70d7508c01201ed3d4bfb33da42ba834eafe3857
 mkdir -p "$repo_dir/build/dxvk-capture"
 exec 9>"$repo_dir/build/dxvk-capture/build.lock"
 flock -n 9 || { printf 'Private DXVK build already running\n' >&2; exit 1; }
-/usr/bin/python3 "$repo_dir/scripts/prepare-dxvk-capture.py"
+cross_file="$repo_dir/config/dxvk-capture-win64.ini"
+if [[ "${UURB_USE_SYSTEM_TOOLCHAIN:-0}" == 1 ]]; then
+    cross_file="$repo_dir/config/dxvk-system-win64.ini"
+else
+    /usr/bin/python3 "$repo_dir/scripts/prepare-dxvk-capture.py"
+fi
 if [[ ! -d "$source_dir/.git" ]]; then
     git clone --depth 1 --branch v3.1 https://github.com/doitsujin/dxvk.git "$source_dir"
 fi
@@ -30,7 +35,7 @@ if ! cmp -s "$repo_dir/src/dxvk_capture_hook.h" "$source_dir/src/dxgi/dxgi_uurb_
 fi
 export PATH="$repo_dir/scripts:$repo_dir/build/dxvk-capture/toolchain/usr/bin:$PATH"
 if [[ ! -f "$build_dir/build.ninja" ]]; then
-    meson setup "$build_dir" "$source_dir" --cross-file "$repo_dir/config/dxvk-capture-win64.ini" \
+    meson setup "$build_dir" "$source_dir" --cross-file "$cross_file" \
         --buildtype=release -Denable_d3d8=false -Denable_d3d9=false -Denable_d3d10=false \
         -Denable_d3d11=true -Denable_dxgi=true -Ddxbc-spirv:enable_tests=false -Ddxbc-spirv:enable_tools=false
 fi

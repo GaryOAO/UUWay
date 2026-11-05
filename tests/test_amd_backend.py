@@ -17,6 +17,14 @@ import uuway_cli as cli
 
 
 class AmdSetupTests(unittest.TestCase):
+    def setUp(self):
+        # A developer's installed dual-backend package must not override fixtures.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        override = patch.object(cli, 'DEB_ROOT', Path(directory.name))
+        override.start()
+        self.addCleanup(override.stop)
+
     def backend_fixture(self, root):
         for backend in ('nvidia', 'amd'):
             (root / 'build/backends' / backend / 'native-presenter').mkdir(parents=True)

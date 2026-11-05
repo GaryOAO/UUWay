@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 base="${UURB_AMD_BASE:-${1:-/usr/lib/uuway}}"
-winegcc="${UURB_WINEGCC:-/opt/wine-stable/bin/winegcc}"
+winegcc="${UURB_WINEGCC:-${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc}"
 stage="$repo_dir/build/native-presenter"
 headers="$repo_dir/build/gpu-relay/nv-codec-headers"
 for tool in gcc x86_64-w64-mingw32-gcc "$winegcc" pkg-config glslangValidator; do

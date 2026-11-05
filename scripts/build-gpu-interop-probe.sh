@@ -9,10 +9,10 @@ wine_revision=db11d0fe6a169c457e23d007e20404643d067aa8
 codec_revision=e844e5b26f46bb77479f063029595293aa8f812d
 header_archive="$work/downloads/libwine-dev_9.0~repack-4build3_amd64.deb"
 header_sha=b9599eb86a630087248394795cb09abe023745f1230057f9762e152f83101f0a
-for tool in gcc git curl sha256sum dpkg-deb /opt/wine-stable/bin/winegcc; do
+for tool in gcc git curl sha256sum dpkg-deb "${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc"; do
     command -v "$tool" >/dev/null || { printf 'Missing dependency: %s\n' "$tool" >&2; exit 1; }
 done
-[[ "$(/opt/wine-stable/bin/wine --version)" == wine-11.0 ]] || {
+[[ "$("${UURB_WINE_BIN:-/opt/wine-stable/bin}/wine" --version)" == wine-11.0 ]] || {
     printf 'Private server protocol requires Wine 11.0.\n' >&2; exit 1;
 }
 [[ -f /usr/local/cuda/include/cuda.h && -f /usr/include/vulkan/vulkan.h ]] || {
@@ -60,7 +60,7 @@ gcc "${common[@]}" -fPIC -I "$work/nv-codec-headers/include" \
     -c "$repo_dir/tests/probes/nvenc_symbol_collision.c" -o "$stage/nvenc_symbol_collision.o"
 gcc "${common[@]}" -fPIC -I "$work/wine-review/include" \
     -c "$repo_dir/src/native_wine11_gpu_fd.c" -o "$stage/native_wine11_gpu_fd.o"
-/opt/wine-stable/bin/winegcc -m64 "${common[@]}" \
+"${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc" -m64 "${common[@]}" \
     -I "$work/wine-dev/usr/include/wine" -I "$work/wine-dev/usr/include/wine/wine/windows" \
     -I "$work/nv-codec-headers/include" \
     -o "$stage/uu-gpu-interop-probe.exe" "$repo_dir/src/uu_gpu_interop_probe.c" \

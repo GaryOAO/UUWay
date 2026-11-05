@@ -11,6 +11,7 @@ int uurb_wine11_gpu_fd(void *shared, void **opened)
 {
     _Static_assert(SERVER_PROTOCOL_VERSION == 930, "Wine protocol version mismatch");
     void *ntdll = dlopen("/opt/wine-stable/lib/wine/x86_64-unix/ntdll.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!ntdll) ntdll = dlopen("/opt/uuway-wine11/lib/wine/x86_64-unix/ntdll.so", RTLD_NOW | RTLD_NOLOAD);
     if (!ntdll) { fprintf(stderr, "Pinned Wine Unix runtime is not loaded\n"); return -1; }
     unsigned int (*server_call)(void *) = dlsym(ntdll, "wine_server_call");
     unsigned int (*to_fd)(HANDLE, unsigned int, int *, unsigned int *) =

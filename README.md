@@ -38,15 +38,15 @@ UUWay 让官方 Windows 版 UU 远程被控端在 Linux 上运行，用手机或
 
 主线使用 **GNOME Wayland** 桌面，搭配支持 NVENC 的 NVIDIA 显卡或支持 H.264/HEVC VA-API 的 AMD 显卡。Ubuntu 24.04 / GNOME 46 是参考环境，Ubuntu 26.04 也已有适配和实测。桌面须保持登录；无显示器时需有可用的桌面输出，例如显示器诱骗器。
 
-1. 从 [Releases](https://github.com/GaryOAO/UUWay/releases/latest) 下载 `.deb`，并准备官方 Windows 版 UU 安装包。
+1. 从 [Releases](https://github.com/GaryOAO/UUWay/releases/latest) 下载 `.deb`。
 2. 安装并以普通用户运行向导：
 
    ```bash
    sudo apt install ./uuway_*_amd64.deb
-   uuway setup --installer ~/Downloads/UURemote_Setup.exe
+   uuway setup
    ```
 
-3. 按提示登录 UU，允许屏幕共享和文字服务。完成后从应用菜单打开 **UUWay 控制台**，即可在控制端连接。
+3. 向导会先查找下载目录中的 UU Windows 安装包，找不到时从 UU 官方下载。也可用 `uuway setup --installer 路径` 指定本地安装包。按提示登录 UU，允许屏幕共享和文字服务。完成后从应用菜单打开 **UUWay 控制台**，即可在控制端连接。
 
 发布包以 Ubuntu 24.04 构建，其他版本如遇依赖差异可[从源码构建](docs/build.md)。向导会安装并固定 Wine 11、验证编码后端、配置用户服务；可重复运行。优先选择 NVIDIA，验证失败后尝试 AMD，不会安装或切换显卡驱动。Fcitx5 插件首次启用后需重启输入法：`fcitx5 -r`。
 
@@ -80,6 +80,10 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 | Arch Linux | Hyprland / 会话未提供 | 未提供 | 未验证 | 暂无 Hyprland 实测结论；该讨论中的可用反馈来自 KDE 环境 | 问询 [#3](https://github.com/GaryOAO/UUWay/issues/3) |
 
 其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。
+
+Debian 13、Fedora 44 和 Arch Linux 提供[实验性支持](docs/linux-packages.md)，受条件限制暂未做真机测试。欢迎提交 [Issue](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) 反馈兼容性，也欢迎提交 [PR](https://github.com/GaryOAO/UUWay/compare) 一起完善。
+
+Hyprland 已加入[单屏实验支持](docs/hyprland.md)，暂不支持修改显示模式和超级屏。
 
 - 最多 8 块活动显示器；暂不支持镜像布局、旋转和 Intel 单显卡编码。AMD 使用内存中转，NVIDIA 使用 GPU 零拷贝链路。
 - 超级屏仍可能出现双光标。分辨率、刷新率和串流性能取决于显示模式、驱动及硬件，最高 144 Hz 模式不代表串流帧率保证。

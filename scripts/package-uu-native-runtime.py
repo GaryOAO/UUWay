@@ -188,7 +188,8 @@ PRESET_INPUT_CONTRACT = INPUT_CONTRACT
 PINNED_MAIN_SCRIPTS = {('scripts/' + name): ('scripts/' + name) for name in (
     'uu-native-service.py', 'uu-native-trial.py', 'uu-native-capture-broker.py',
     'probe-wayland-portal.py', 'mutter-direct-capture.py', 'native_runtime_state.py',
-    'native_display_confirmation.py', 'package-uu-native-runtime.py')}
+    'native_display_confirmation.py', 'native_desktop.py', 'hyprland-capture.py',
+    'uuway_platform.py', 'package-uu-native-runtime.py')}
 # The supervisor applies the default cover from inside its immutable bundle.
 # Keep the artwork beside the pinned Python entrypoints so a source-only
 # repack cannot accidentally point a new service at a missing development

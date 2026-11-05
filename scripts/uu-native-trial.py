@@ -27,8 +27,9 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-WINE = '/opt/wine-stable/bin/wine'
-WINESERVER = '/opt/wine-stable/bin/wineserver'
+from uuway_platform import wine_directory
+WINE = str(wine_directory() / 'wine')
+WINESERVER = str(wine_directory() / 'wineserver')
 spec = importlib.util.spec_from_file_location('native_bundle', ROOT / 'scripts/package-uu-native-runtime.py')
 bundle_tools = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bundle_tools)
@@ -448,6 +449,9 @@ def recover_interrupted(prefix, state_parent):
 
 
 def native_topology():
+    from native_desktop import backend_name, hyprland_topology
+    if backend_name() == 'hyprland':
+        return hyprland_topology()
     # Use the distribution Python owning dbus, independent of the caller's
     # virtualenv. Output only display geometry, never monitor serial numbers.
     # Track the origin output that the portal session captures.  Additional

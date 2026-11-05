@@ -38,15 +38,15 @@ The following common UU features are adapted for Linux. See [supported scope](#s
 
 Mainline targets **GNOME Wayland**, with an NVIDIA GPU supporting NVENC or an AMD GPU supporting H.264/HEVC VA-API. Ubuntu 24.04 / GNOME 46 is the reference environment; Ubuntu 26.04 also has compatibility fixes and hardware validation. Keep the desktop logged in. A machine without a monitor still needs a desktop output, such as a display dummy plug.
 
-1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest) and obtain the official Windows UU installer.
+1. Download the `.deb` from [Releases](https://github.com/GaryOAO/UUWay/releases/latest).
 2. Install the package and run setup as your normal user:
 
    ```bash
    sudo apt install ./uuway_*_amd64.deb
-   uuway setup --installer ~/Downloads/UURemote_Setup.exe
+   uuway setup
    ```
 
-3. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
+3. Setup looks for a UU Windows installer in your Downloads folder, then downloads it from UU's official endpoint if none is found. Use `--installer PATH` to supply a local file. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
 
 Release packages are built on Ubuntu 24.04; [build from source](docs/build.md) if another version has different dependencies. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
 
@@ -80,6 +80,10 @@ Results apply to the listed versions and conditions. “Needs adjustments” mea
 | Arch Linux | Hyprland / session not reported | Not reported | Unverified | No Hyprland test result; working reports in this discussion concern KDE | Inquiry [#3](https://github.com/GaryOAO/UUWay/issues/3) |
 
 Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+
+[Experimental support](docs/linux-packages.md) is available for Debian 13, Fedora 44 and Arch Linux. These builds have not yet been tested on real hardware. Compatibility reports via [Issues](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) and code contributions via [PRs](https://github.com/GaryOAO/UUWay/compare) are welcome.
+
+Hyprland has an [experimental single-monitor backend](docs/hyprland.md). Remote mode changes and Super Screen are not supported yet.
 
 - Up to eight active displays. Mirroring, rotation and Intel-only encoding are unsupported. AMD uses host-memory copies; NVIDIA uses a zero-copy GPU path.
 - Super Screen can still show two cursors. Display modes, drivers and hardware limit resolution, refresh rate and streaming performance; a 144 Hz mode does not guarantee a 144 fps stream.

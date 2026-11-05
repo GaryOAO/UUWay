@@ -16,7 +16,7 @@ configure)
     fi
 
     echo "uuway: installed. Run 'uuway setup' as your normal user to finish (use --system to add WineHQ stable 11)."
-    if [ ! -x /opt/wine-stable/bin/wine ]; then
+    if [ ! -x /opt/wine-stable/bin/wine ] && [ ! -x /opt/uuway-wine11/bin/wine ]; then
         echo "uuway: WineHQ stable 11 is not installed yet; 'uuway setup --system' installs it."
     fi
     ;;

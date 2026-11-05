@@ -16,6 +16,7 @@ from native_display_config import MutterDisplay
 from native_display_guardian import DisplayRouter
 from native_runtime_state import read_private, notify
 from native_virtual_display import VirtualDisplays, VirtualSelectedDisplay, recover_layout
+from native_desktop import backend_name, HyprlandDisplay, HyprlandVirtualDisplays
 
 
 def run(config_path):
@@ -56,14 +57,19 @@ def run(config_path):
             if (current.st_dev, current.st_ino) != (old.st_dev, old.st_ino):
                 raise RuntimeError('Display endpoint changed during recovery')
             endpoint.unlink()
-        recover_layout(config)
-        backend = MutterDisplay()
         manifest = read_private(Path(config['bundle']) / 'manifest.json')
-        virtual = VirtualDisplays(backend, Path(config['bundle']) / 'capture/uu-pipewire-native-probe',
-                                  enabled=manifest.get('contract', {}).get('virtual_display_emulation') is True)
+        if backend_name() == 'hyprland':
+            backend = HyprlandDisplay()
+            virtual = HyprlandVirtualDisplays(backend)
+            selected_factory = HyprlandDisplay
+        else:
+            recover_layout(config)
+            backend = MutterDisplay()
+            virtual = VirtualDisplays(backend, Path(config['bundle']) / 'capture/uu-pipewire-native-probe',
+                                      enabled=manifest.get('contract', {}).get('virtual_display_emulation') is True)
+            selected_factory = lambda connector: VirtualSelectedDisplay(connector, virtual)
         virtual.recovery_path = parent / 'virtual-layout-recovery.json'
-        guardian = DisplayRouter(backend, parent,
-            selected_factory=lambda connector: VirtualSelectedDisplay(connector, virtual))
+        guardian = DisplayRouter(backend, parent, selected_factory=selected_factory)
         guardian.expire()
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC)
         listener.bind(str(endpoint)); endpoint.chmod(0o600); bound = endpoint.lstat()
@@ -200,7 +206,8 @@ if __name__ == '__main__':
     try:
         arguments = parser.parse_args()
         if arguments.recover:
-            recover_layout(read_private(arguments.config))
+            if backend_name() != 'hyprland':
+                recover_layout(read_private(arguments.config))
         else:
             run(arguments.config)
     except Exception as error:

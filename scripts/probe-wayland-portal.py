@@ -218,6 +218,8 @@ def main():
                       help='Explicit private inherited seqpacket FD for GPU frames; no local encoding')
     parser.add_argument('--restore-state', type=Path,
                         help='Opt-in private file for this probe’s own portal restore token')
+    parser.add_argument('--expected-size', nargs=2, type=int,
+                        help='Require the authorized monitor to have this exact compositor size')
     parser.add_argument('--check-color-fixture', action='store_true',
                         help='Require the separately displayed RGB motion target in the decoded sample')
     args = parser.parse_args()
@@ -355,6 +357,8 @@ def main():
             raise RuntimeError('Expected exactly one authorized screen stream')
         if streams[0][1].get('source_type') != source_type:
             raise RuntimeError('Portal selected an unexpected source type')
+        if args.expected_size is not None and list(streams[0][1].get('size', ())) != args.expected_size:
+            raise RuntimeError('Authorized screen does not match the selected desktop output size')
         value, fd_list = bus.call_with_unix_fd_list_sync(SERVICE, PATH, SCREENCAST, 'OpenPipeWireRemote',
             GLib.Variant('(oa{sv})', (session, {})), GLib.VariantType.new('(h)'),
             Gio.DBusCallFlags.NONE, 10000, None, None)
