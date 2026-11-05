@@ -68,11 +68,11 @@ check completeness and the Windows executable header before installation.
 ## Wine and updates
 
 The adapter is compiled against Wine 11.0's private server protocol 930.
-Debian and Fedora use WineHQ's official prebuilt packages, pinned to 11.0.
+Debian and Fedora 44 use WineHQ's official prebuilt packages, pinned to 11.0.
 Fedora 44 and 45 use separate UUWay RPMs because their FFmpeg libraries differ.
-They share the WineHQ 11.0 binaries from the Fedora 44 repository.
-Arch downloads its official Wine 11.0 archive into UUWay's own directory and
-verifies its SHA256 checksum. No target compiles Wine or follows rolling Wine
+Fedora 45 and Arch use Arch's official Wine 11.0 archive in a separate directory
+and verify its SHA256 checksum. Fedora 45 uses `/opt/uuway-wine11`; Arch uses the
+user's UUWay data directory. No target compiles Wine or follows rolling Wine
 updates. Newer Wine versions are outside this change's scope.
 
 Use `uuway update install` or the console to update. Package metadata selects the

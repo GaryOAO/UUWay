@@ -391,7 +391,7 @@ def backend_for_context(ctx):
 
 def wine_done(ctx):
     version = wine_version(ctx)
-    return platform.wine_compatible(version) and (platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file())
+    return platform.wine_compatible(version) and (platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file())
 
 
 def wine_pin_command(ctx):
@@ -411,13 +411,13 @@ def wine_run(ctx):
             raise SetupError('Wine 11.0 安装失败。')
         return
     if platform.os_release().get('ID') == 'fedora':
-        if ctx.confirm('现在从 WineHQ 官方源安装并固定 Wine 11.0？'):
+        if ctx.confirm('现在下载官方预编译包，安装固定的 Wine 11.0？'):
             release = platform.os_release()
             ctx.run(ctx.elevate(['bash', ROOT / 'scripts/install-wine11.sh', 'fedora-' + release.get('VERSION_ID', '')]))
         else:
             raise SetupError('缺少固定的 Wine 11.0，已停止。')
         if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
-            raise SetupError('WineHQ 11.0 安装失败。')
+            raise SetupError('Wine 11.0 安装失败。')
         return
     if WINE_DIR == platform.PRIVATE_WINE:
         if not platform.wine_compatible(version):
@@ -1399,9 +1399,9 @@ def command_doctor(args):
     check('ok' if platform.wine_compatible(version) else 'fail', 'Wine 11.0',
           version or f'没有找到 {WINE_DIR / "wine"}（运行 uuway setup）')
     if platform.wine_compatible(version):
-        pinned = platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file()
+        pinned = platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file()
         check('ok' if pinned else 'warn', 'Wine 已固定在 11.0 系列',
-              str(WINE_DIR) if platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE else
+              str(WINE_DIR) if platform.private_wine() or WINE_DIR == platform.PRIVATE_WINE else
               str(WINE_PIN) if WINE_PIN.is_file() else '升级 WineHQ 可能让 UUWay 无法采集画面；运行 uuway setup --only wine')
     check('ok' if uinput_usable() else 'fail', '/dev/uinput 可写', '' if uinput_usable()
           else '运行 uuway setup --only udev；装好规则后可能需要重新登录')

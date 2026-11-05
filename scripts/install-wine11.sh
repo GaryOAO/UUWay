@@ -27,15 +27,27 @@ case "$target" in
         apt-get install -y --no-install-recommends 'winehq-stable=11.0.*' 'wine-stable=11.0.*' 'wine-stable-amd64=11.0.*' 'wine-stable-i386:i386=11.0.*'
         /opt/wine-stable/bin/wine --version
         ;;
-    fedora-44|fedora-45)
+    fedora-44)
         command -v curl >/dev/null || dnf install -y curl
-        # WineHQ 11.0 is published for Fedora 44. CI also checks these binaries on 45.
         curl -fsSL --proto '=https' --proto-redir '=https' https://dl.winehq.org/wine-builds/fedora/44/winehq.repo -o /etc/yum.repos.d/winehq.repo
         packages=('winehq-stable-11.0*' dnf5-plugins)
         ((tools == 0)) || packages+=('wine-stable-devel-11.0*')
         dnf install -y --setopt=install_weak_deps=False "${packages[@]}"
         dnf versionlock add winehq-stable wine-stable
         /opt/wine-stable/bin/wine --version
+        ;;
+    fedora-45)
+        # WineHQ's Fedora 44 RPM requires FFmpeg 8, absent on Fedora 45.
+        # Use the same checksum-pinned, relocatable official Wine archive as Arch.
+        dnf install -y --setopt=install_weak_deps=False ca-certificates curl python3 libarchive \
+            freetype fontconfig gettext libpcap libunwind libXcursor libxkbcommon libXi libXrandr \
+            libX11 libXfixes libXext libXrender libXinerama gnutls pulseaudio-libs alsa-lib \
+            mesa-libGL systemd-libs
+        if [[ ! -x /opt/uuway-wine11/usr/bin/wine ]]; then
+            python3 "$repo_dir/scripts/uuway_wine_archive.py" --destination /opt/uuway-wine11
+            chmod 755 /opt/uuway-wine11
+        fi
+        /opt/uuway-wine11/usr/bin/wine --version | grep -Fx wine-11.0
         ;;
     arch)
         python3 "$repo_dir/scripts/uuway_wine_archive.py" --destination /opt/uuway-wine11

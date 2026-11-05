@@ -32,6 +32,8 @@ def package_info(root=None):
 def wine_directory():
     if is_arch():
         return Path.home() / '.local/share/uuway/wine11/usr/bin'
+    if os_release().get('ID') == 'fedora' and os_release().get('VERSION_ID') == '45':
+        return Path('/opt/uuway-wine11/usr/bin')
     return PRIVATE_WINE if (PRIVATE_WINE / 'wine').is_file() else Path('/opt/wine-stable/bin')
 
 
@@ -42,6 +44,10 @@ def is_arch():
 
 def wine_pin_path():
     return Path('/etc/dnf/versionlock.toml') if os_release().get('ID') == 'fedora' else Path('/etc/apt/preferences.d/uuway-wine')
+
+
+def private_wine():
+    return is_arch() or wine_directory().is_relative_to(Path('/opt/uuway-wine11'))
 
 
 def wine_compatible(version):

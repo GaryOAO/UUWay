@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install Arch's official Wine 11.0 binary in an isolated directory."""
+"""Install Arch's official Wine 11.0 binary in an isolated directory (Arch/Fedora 45)."""
 import argparse
 import hashlib
 import json

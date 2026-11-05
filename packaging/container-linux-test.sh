@@ -25,6 +25,7 @@ if [[ "$target" == arch ]]; then
 else
     bash /source/scripts/install-wine11.sh "$target"
     wine_bin=/opt/wine-stable/bin
+    [[ "$target" != fedora-45 ]] || wine_bin=/opt/uuway-wine11/usr/bin
 fi
 "$wine_bin/wine" --version | grep -Fx wine-11.0
 timeout 120 runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke WINEDEBUG=-all \

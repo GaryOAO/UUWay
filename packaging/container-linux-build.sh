@@ -51,7 +51,7 @@ cuda-driver-dev-12-1_12.1.105-1_amd64.deb 49a0807b1f37da920a9417b3fa16d5e281c306
 CUDA
 ln -sfn cuda-12.1 /usr/local/cuda
 UURB_WINE_BIN=/opt/wine-stable/bin
-[[ "$target" != arch ]] || UURB_WINE_BIN=/opt/uuway-wine11/usr/bin
+[[ "$target" != arch && "$target" != fedora-45 ]] || UURB_WINE_BIN=/opt/uuway-wine11/usr/bin
 export UURB_WINE_BIN
 export UURB_USE_SYSTEM_TOOLCHAIN=1 UURB_PIPEWIRE_HEADERS=/usr/include
 UURB_GLSLANG="$(command -v glslangValidator)"
