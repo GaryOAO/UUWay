@@ -33,12 +33,13 @@ import uuway_update  # noqa: E402
 import uuway_update_apply as update_checks  # noqa: E402
 import uuway_platform as platform  # noqa: E402
 import uuway_installer  # noqa: E402
+import uuway_wine_archive  # noqa: E402
 from native_desktop import backend_name, HyprlandDisplay  # noqa: E402
 
 PYTHON = '/usr/bin/python3'
 WINE_DIR = platform.wine_directory()
 WINE_SERIES = 'wine-11.0'
-WINE_PIN = Path('/etc/apt/preferences.d/uuway-wine')
+WINE_PIN = platform.wine_pin_path()
 SERVICES = ('uu-native-display', 'uu-native-text', 'uu-native-bridge')
 GDM_CONFIGS = (Path('/etc/gdm3/custom.conf'), Path('/etc/gdm/custom.conf'))  # Debian/Ubuntu, Fedora/Arch
 AUTOLOGIN_KEYS = ('AutomaticLoginEnable', 'AutomaticLogin')
@@ -390,7 +391,7 @@ def backend_for_context(ctx):
 
 def wine_done(ctx):
     version = wine_version(ctx)
-    return platform.wine_compatible(version) and (WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file())
+    return platform.wine_compatible(version) and (platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file())
 
 
 def wine_pin_command(ctx):
@@ -400,6 +401,23 @@ def wine_pin_command(ctx):
 
 def wine_run(ctx):
     version = wine_version(ctx)
+    if platform.is_arch():
+        if platform.wine_compatible(version):
+            ok('Wine 11.0 官方归档包')
+            return
+        info('下载 Arch 官方 Wine 11.0 归档包，安装到 UUWay 独立目录。')
+        ctx.run([PYTHON, ROOT / 'scripts/uuway_wine_archive.py'])
+        if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
+            raise SetupError('Wine 11.0 安装失败。')
+        return
+    if platform.os_release().get('ID') == 'fedora':
+        if ctx.confirm('现在从 WineHQ 官方源安装并固定 Wine 11.0？'):
+            ctx.run(ctx.elevate(['bash', ROOT / 'scripts/install-wine11.sh', 'fedora-44']))
+        else:
+            raise SetupError('缺少固定的 Wine 11.0，已停止。')
+        if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
+            raise SetupError('WineHQ 11.0 安装失败。')
+        return
     if WINE_DIR == platform.PRIVATE_WINE:
         if not platform.wine_compatible(version):
             raise SetupError('配套 Wine 不是 11.0，请重新安装 uuway-wine11。')
@@ -1380,9 +1398,9 @@ def command_doctor(args):
     check('ok' if platform.wine_compatible(version) else 'fail', 'Wine 11.0',
           version or f'没有找到 {WINE_DIR / "wine"}（运行 uuway setup）')
     if platform.wine_compatible(version):
-        pinned = WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file()
+        pinned = platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE or WINE_PIN.is_file()
         check('ok' if pinned else 'warn', 'Wine 已固定在 11.0 系列',
-              str(WINE_DIR) if WINE_DIR == platform.PRIVATE_WINE else
+              str(WINE_DIR) if platform.is_arch() or WINE_DIR == platform.PRIVATE_WINE else
               str(WINE_PIN) if WINE_PIN.is_file() else '升级 WineHQ 可能让 UUWay 无法采集画面；运行 uuway setup --only wine')
     check('ok' if uinput_usable() else 'fail', '/dev/uinput 可写', '' if uinput_usable()
           else '运行 uuway setup --only udev；装好规则后可能需要重新登录')

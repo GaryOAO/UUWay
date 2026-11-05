@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build distribution-native UUWay and its private Wine 11.0 in a clean container.
+# Build distribution-native UUWay using official prebuilt Wine 11.0.
 # Usage: packaging/build-linux.sh --target debian-13|fedora-44|arch --version 1.4.3
 set -Eeuo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,5 +44,6 @@ docker cp "$name:/work/out/." "$output_dir/"
 # Resolve runtime dependencies again in a pristine image, without build packages.
 output_dir="$(cd "$output_dir" && pwd)"
 docker run --rm -i --mount "type=bind,source=$output_dir,target=/packages,readonly" \
+    --mount "type=bind,source=$repo_dir,target=/source,readonly" \
     "$image" bash -s -- "$target" /packages < "$repo_dir/packaging/container-linux-test.sh"
 printf '\nBuilt and install-checked %s packages in %s\n' "$target" "$output_dir"

@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 """Assemble target-native packages from this container's completed build.
 
-Wine and UUWay are separate packages. Never convert Ubuntu ELF binaries into
-RPM/Arch archives. The common manifest is also used by the existing Ubuntu deb.
+Wine comes from official prebuilt packages. Never convert Ubuntu UUWay binaries
+into RPM/Arch archives. The common manifest also serves the existing Ubuntu deb.
 """
 import argparse
 import hashlib
@@ -22,14 +22,9 @@ deb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deb)
 
 RUNTIME = {
-    'deb': 'python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd',
-    'rpm': 'python3, python3-gobject, python3-dbus, gtk3, at-spi2-core, xorg-x11-server-Xvfb, xorg-x11-xauth, xclip, procps-ng, gtk-update-icon-cache, systemd, systemd-udev',
-    'arch': 'python python-gobject python-dbus gtk3 at-spi2-core xorg-server-xvfb xorg-xauth xclip procps-ng gtk-update-icon-cache systemd json-c libx11 libxfixes pipewire vulkan-icd-loader gstreamer gst-plugins-base-libs ffmpeg libva',
-}
-WINE_RUNTIME = {
-    'deb': 'fontconfig, libfreetype6, libgnutls30t64, libx11-6, libxext6, libxrandr2, libxrender1, libxinerama1, libxcursor1, libxfixes3, libxi6, libasound2t64, libpulse0, libudev1, libvulkan1',
-    'rpm': 'fontconfig, freetype, gnutls, libX11, libXext, libXrandr, libXrender, libXinerama, libXcursor, libXfixes, libXi, alsa-lib, pulseaudio-libs, systemd-libs, vulkan-loader',
-    'arch': 'glibc fontconfig freetype2 gnutls libx11 libxext libxrandr libxrender libxinerama libxcursor libxfixes libxi alsa-lib libpulse systemd-libs vulkan-icd-loader',
+    'deb': 'python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd, ca-certificates, curl',
+    'rpm': 'python3, python3-gobject, python3-dbus, gtk3, at-spi2-core, xorg-x11-server-Xvfb, xorg-x11-xauth, xclip, procps-ng, gtk-update-icon-cache, systemd, systemd-udev, ca-certificates, curl',
+    'arch': 'python python-gobject python-dbus gtk3 at-spi2-core xorg-server-xvfb xorg-xauth xclip procps-ng gtk-update-icon-cache systemd json-c libx11 libxfixes pipewire vulkan-icd-loader gstreamer gst-plugins-base-libs ffmpeg libva ca-certificates curl libarchive desktop-file-utils fontconfig freetype2 gettext libpcap libunwind libxcursor libxkbcommon libxi libxrandr wayland gnutls libpulse libxext libxrender libxinerama alsa-lib',
 }
 
 
@@ -130,7 +125,7 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='uuway-stage-') as temporary:
         work = Path(temporary)
-        stage, wine = work / 'runtime', work / 'wine'
+        stage = work / 'runtime'
         stage.mkdir()
         entries = [entry for entry in deb.deb_manifest.files()
                    if target['format'] == 'deb' or 'lintian' not in entry[1]]
@@ -139,27 +134,19 @@ def main():
         (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(dict(
             version=args.version, target=args.target, format=target['format'], ota=False,
             desktop='GNOME Wayland / Hyprland (single-output experiment)', status='experimental', wine='11.0'), indent=2) + '\n')
-        shutil.copytree('/opt/uuway-wine11', wine / 'opt/uuway-wine11', symlinks=True)
         fmt = target['format']
         if fmt == 'deb':
             native = deb.shlibs_depends(stage)
-            wine_native = deb.shlibs_depends(wine)
-            if native is None or wine_native is None:
+            if native is None:
                 raise SystemExit('dpkg-shlibdeps is required')
-            build_deb(wine, args.output_dir, 'uuway-wine11', '11.0-1', ', '.join([WINE_RUNTIME[fmt], *wine_native]), target['suite'])
             build_deb(stage, args.output_dir, 'uuway', args.version,
-                      ', '.join([RUNTIME[fmt], 'uuway-wine11 (= 11.0-1)', *native]), target['suite'], runtime=True)
+                      ', '.join([RUNTIME[fmt], *native]), target['suite'], runtime=True)
         elif fmt == 'rpm':
-            build_rpm(wine, work, args.output_dir, 'uuway-wine11', '11.0', WINE_RUNTIME[fmt], target['suite'])
             build_rpm(stage, work, args.output_dir, 'uuway', args.version,
-                      RUNTIME[fmt] + ', uuway-wine11 = 11.0-1', target['suite'], runtime=True)
+                      RUNTIME[fmt], target['suite'], runtime=True)
         else:
-            build_arch(wine, work, args.output_dir, 'uuway-wine11', '11.0', WINE_RUNTIME[fmt])
             build_arch(stage, work, args.output_dir, 'uuway', args.version,
-                       RUNTIME[fmt] + ' uuway-wine11=11.0-1', runtime=True)
-    # LGPL corresponding source is distributed beside the private Wine binaries.
-    shutil.copyfile(ROOT / 'build/multidistro/downloads/wine-11.0.tar.xz', args.output_dir / 'wine-11.0.tar.xz')
-    shutil.copyfile(ROOT / 'packaging/build-wine11.sh', args.output_dir / 'build-wine11.sh')
+                       RUNTIME[fmt], runtime=True)
     lines = [f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'
              for path in sorted(args.output_dir.iterdir()) if path.is_file() and path.name != 'SHA256SUMS']
     (args.output_dir / 'SHA256SUMS').write_text(''.join(lines))

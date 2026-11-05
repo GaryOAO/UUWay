@@ -15,18 +15,25 @@ case "$target" in
         ;;
     *) exit 2 ;;
 esac
-/opt/uuway-wine11/bin/wine --version | grep -Fx wine-11.0
 uuway --version
 uuway --help >/dev/null
 uuway-console --status >/dev/null
 useradd -m uuway-test
+if [[ "$target" == arch ]]; then
+    runuser -u uuway-test -- python3 /usr/lib/uuway/scripts/uuway_wine_archive.py
+    wine_bin=/home/uuway-test/.local/share/uuway/wine11/usr/bin
+else
+    bash /source/scripts/install-wine11.sh "$target"
+    wine_bin=/opt/wine-stable/bin
+fi
+"$wine_bin/wine" --version | grep -Fx wine-11.0
 timeout 120 runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke WINEDEBUG=-all \
-    WINEDLLOVERRIDES=mscoree,mshtml= xvfb-run -a /opt/uuway-wine11/bin/wine cmd /c echo UUWAY_WINE64_OK | tr -d '\r' | grep -Fx UUWAY_WINE64_OK
+    WINEDLLOVERRIDES=mscoree,mshtml= xvfb-run -a "$wine_bin/wine" cmd /c echo UUWAY_WINE64_OK | tr -d '\r' | grep -Fx UUWAY_WINE64_OK
 timeout 60 runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke WINEDEBUG=-all \
-    WINEDLLOVERRIDES=mscoree,mshtml= xvfb-run -a /opt/uuway-wine11/bin/wine \
+    WINEDLLOVERRIDES=mscoree,mshtml= xvfb-run -a "$wine_bin/wine" \
     'C:\windows\syswow64\cmd.exe' /c echo UUWAY_WINE32_OK | tr -d '\r' | grep -Fx UUWAY_WINE32_OK
-runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke /opt/uuway-wine11/bin/wineserver -k || true
-timeout 30 runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke /opt/uuway-wine11/bin/wineserver -w
+runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke "$wine_bin/wineserver" -k || true
+timeout 30 runuser -u uuway-test -- env WINEPREFIX=/home/uuway-test/wine-smoke "$wine_bin/wineserver" -w
 runuser -u uuway-test -- mkdir -m 700 /home/uuway-test/releases
 for backend in nvidia amd; do
     runuser -u uuway-test -- /usr/bin/python3 /usr/lib/uuway/scripts/package-uu-native-runtime.py \
@@ -40,7 +47,7 @@ for backend in ('nvidia', 'amd'):
     subprocess.run(['runuser', '-u', 'uuway-test', '--', '/usr/bin/python3',
                     str(root / 'scripts/package-uu-native-runtime.py'), 'verify', bundle], check=True)
 errors = []
-for path in [*root.rglob('*'), *pathlib.Path('/opt/uuway-wine11').rglob('*')]:
+for path in root.rglob('*'):
     if not path.is_file() or path.is_symlink():
         continue
     with path.open('rb') as stream:

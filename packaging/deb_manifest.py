@@ -43,6 +43,7 @@ RUNTIME_SCRIPTS = (
     'uuway_cli.py',
     'uuway_platform.py',
     'uuway_installer.py',
+    'uuway_wine_archive.py',
     'uuway_console.py',
     'uuway_update.py',
     'uuway_update_apply.py',
@@ -112,6 +113,7 @@ def files():
     for name in RUNTIME_SCRIPTS:
         entries.append((f'scripts/{name}', f'{LIB}/scripts/{name}', script_mode(name)))
     entries.append(('scripts/uuway-amd.sh', f'{LIB}/scripts/uuway-amd.sh', 0o755))
+    entries.append(('scripts/install-wine11.sh', f'{LIB}/scripts/install-wine11.sh', 0o755))
     for name in SYSTEMD_TEMPLATES:
         entries.append((f'systemd/{name}', f'{LIB}/systemd/{name}', 0o644))
     entries += [

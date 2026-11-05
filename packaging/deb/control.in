@@ -3,7 +3,7 @@ Version: @VERSION@
 Architecture: amd64
 Maintainer: GaryOAO <62834599+GaryOAO@users.noreply.github.com>
 Installed-Size: @SIZE@
-Depends: python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd@SHLIBS@
+Depends: python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd, ca-certificates, curl@SHLIBS@
 Recommends: fcitx5
 Suggests: winehq-stable (>= 11.0)
 Section: utils
