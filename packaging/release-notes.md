@@ -1,17 +1,17 @@
 ## 中文
 
-- 新增 Debian 13、Fedora 44 / 45、Arch Linux 原生安装包；Fedora 44 / 45 共用一个 RPM。（#19）
-- 新增 Hyprland 单屏实验支持，暂不支持修改显示模式和超级屏。
-- 安装向导可自动下载网易 UU 官方安装包；Wine 11.0 使用官方预编译包。
-- 自动更新按发行版选择安装包，并保留更新前备份、健康检查和失败回滚。
+- 支持 UU 4.46.0.4716，已在 Ubuntu 24.04 / GNOME Wayland / NVIDIA RTX 3090 上验证连接及常用功能。
+- 修复 UU 内置升级重命名 `bin` 后被 UUWay 中断、导致被控端一直离线的问题。识别原有适配链接的目录迁移，等待安装完成，再清理旧链接并自动重启。
+- UU 更新后自动恢复缺失的远程终端入口；保留已有的第三方文件。
+- 增加更新等待、超时、取消、旧目录清理和服务重启的回归测试；已重放官方 4.42 → 4.46 升级提交并验证自动恢复。
 
-以上新环境为实验性支持，受条件限制暂未做真机测试。欢迎提交 Issue 反馈兼容性，也欢迎提交 PR 一起完善。
+已被旧版 UUWay 中断的 UU 更新，需要先停止 `uu-native-bridge.service` 并重新运行官方安装包完成安装，再启动服务。本次修复防止后续内置更新再次被中断。
 
 ## English
 
-- Add native Debian 13, Fedora 44 / 45 and Arch Linux packages, with one shared Fedora RPM. (#19)
-- Add experimental single-monitor Hyprland support; display-mode changes and Super Screen remain unavailable.
-- Download the official NetEase UU installer during setup and use official prebuilt Wine 11.0 packages.
-- Select distribution-specific update assets, with a previous-package backup, health checks and rollback.
+- Support UU 4.46.0.4716, with connection and common features verified on Ubuntu 24.04 / GNOME Wayland / NVIDIA RTX 3090.
+- Fix UUWay interrupting UU's in-app upgrade after it renames `bin`, leaving the host offline. Recognize relocation of the original bridge links, wait for the installer to finish, then clean up and restart automatically.
+- Restore the missing remote-terminal entrypoint after UU updates while preserving existing third-party files.
+- Add regression tests for installer waits, timeouts, cancellation, retired-directory cleanup and service restarts. Replay the official 4.42 → 4.46 upgrade commit and verify automatic recovery.
 
-These new environments are experimental and have not been tested on real hardware. Compatibility reports and code contributions are welcome.
+An update already interrupted by an older UUWay needs the bridge service stopped and the official UU installer rerun before restarting the service. This fix prevents subsequent in-app updates from being interrupted again.

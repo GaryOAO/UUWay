@@ -73,6 +73,98 @@ TOPOLOGY_RETRY_DELAY_SECONDS = 0.5
 # a live capture generation. This coalesces a short mode negotiation into one
 # GPU allocation restart instead of making the remote desktop visibly jump.
 TOPOLOGY_STABILITY_POLLS = 3
+VENDOR_UPDATE_RESTART = 'UU vendor update completed'
+VENDOR_UPDATE_TIMEOUT = 180
+VENDOR_UPDATE_SETTLE_SECONDS = 2
+
+
+def owned_loader_link(path, target, identity):
+    try:
+        info = path.lstat()
+        return ((info.st_dev, info.st_ino) == identity and
+                stat.S_ISLNK(info.st_mode) and os.readlink(path) == str(target))
+    except OSError:
+        return False
+
+
+def relocated_loader_aliases(aliases):
+    """Recognize UU's bin -> old-version rename by our exact link inodes.
+
+    A copied backup, a replaced link or a symlinked directory is not evidence
+    of an installer transition and must retain the usual fail-closed behavior.
+    The same lookup lets cold recovery remove our links from the retired bin.
+    """
+    app_links = [(p, t, i) for p, t, i in aliases if p.parent.name == 'bin']
+    if not app_links:
+        return []
+    app = app_links[0][0].parent.parent
+    try:
+        candidates = sorted(app.iterdir())
+        for directory in candidates:
+            if (not re.fullmatch(r'[0-9]{1,5}(?:\.[0-9]{1,5}){3}', directory.name) or
+                    directory.is_symlink() or not directory.is_dir()):
+                continue
+            moved = [(directory / p.name, t, i) for p, t, i in app_links]
+            if all(owned_loader_link(*entry) for entry in moved):
+                return moved
+    except OSError:
+        pass
+    return []
+
+
+def uu_updater_alive(prefix, proc=Path('/proc')):
+    for process in prefix_processes(prefix):
+        try:
+            command = (proc / str(process['pid']) / 'cmdline').read_bytes().split(b'\0')[0]
+            name = re.split(rb'[\\/]', command.strip(b'"'))[-1].lower()
+            if name == b'upgrade.exe' or (name.startswith(b'uuremote_setup') and name.endswith(b'.exe')):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def wait_for_vendor_update(prefix, app, stop_requested):
+    """Keep Wine alive until the official installer has committed its new bin.
+
+    Readiness, server liveness and the old bootstrap can disappear during the
+    commit. The supervisor must keep feeding systemd without killing that same
+    Wine prefix until the installer exits and its payload stops changing.
+    """
+    event('vendor_update_waiting_for_installer')
+    state_tools.notify('STATUS=UU update in progress; waiting for installer')
+    deadline = time.monotonic() + VENDOR_UPDATE_TIMEOUT
+    stable_since = None
+    previous = None
+    watchdog_at = 0
+    required = ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe',
+                'bin/GameViewerHealthd.exe', 'bin/streamer.dll')
+    while not stop_requested():
+        now = time.monotonic()
+        if now >= deadline:
+            event('vendor_update_timed_out')
+            raise RuntimeError('UU update did not finish within its deadline')
+        if now >= watchdog_at:
+            state_tools.notify('WATCHDOG=1\nEXTEND_TIMEOUT_USEC=30000000')
+            watchdog_at = now + 5
+        snapshot = []
+        for name in required:
+            try:
+                info = (app / name).lstat()
+                if not stat.S_ISREG(info.st_mode) or not info.st_size:
+                    break
+                snapshot.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
+            except OSError:
+                break
+        if len(snapshot) != len(required) or uu_updater_alive(prefix):
+            stable_since = previous = None
+        elif snapshot != previous:
+            previous, stable_since = snapshot, now
+        elif now - stable_since >= VENDOR_UPDATE_SETTLE_SECONDS:
+            event('vendor_update_installer_finished')
+            return True
+        time.sleep(.25)
+    return False
 
 
 @contextlib.contextmanager
@@ -325,7 +417,7 @@ def cleanup_trial(launcher, broker, env, directory, arguments, token, created_al
         attempt('stop_native_input', lambda: end_process(native_input))
     removed = 0
     preserved = 0
-    for path, target, identity in created_aliases:
+    for path, target, identity in [*created_aliases, *relocated_loader_aliases(created_aliases)]:
         def remove_owned_link():
             nonlocal removed, preserved
             try:
@@ -916,6 +1008,16 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             display_confirmation = confirmation_tools.MultiDisplayConfirmation(directory, prefix,
                 app / 'bin/GameViewerServer.exe', bundle, topology, state_tools.read_private) if display_socket else None
             while not is_stopping() and time.monotonic() < deadline:
+                if not all(owned_loader_link(*entry) for entry in created_aliases):
+                    moved = relocated_loader_aliases(created_aliases)
+                    other_links = [entry for entry in created_aliases if entry[0].parent != app / 'bin']
+                    if continuous and moved and all(owned_loader_link(*entry) for entry in other_links):
+                        if wait_for_vendor_update(prefix, app, is_stopping):
+                            failure = VENDOR_UPDATE_RESTART
+                    else:
+                        event('component_changed_stopping_for_upgrade_review')
+                        failure = 'Native components changed; upgrade review required'
+                    break
                 for item in boot_events(directory / 'wine.log', cursor):
                     event('bootstrap', detail=item)
                     if item['code'] == 0:
@@ -977,10 +1079,6 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                                     break
                             topology_observed_ns = observation_ns
                             topology_check = time.monotonic() + 1
-                if any(not path.is_symlink() or os.readlink(path) != str(target) for path, target in aliases):
-                    event('component_changed_stopping_for_upgrade_review')
-                    failure = 'Native components changed; upgrade review required'
-                    break
                 if display_confirmation:
                     result = display_confirmation.tick(notified_ready, display_socket)
                     if result:
@@ -992,7 +1090,10 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
     except Exception as error:
         # Cleanup can run for a long time; record what ended the worker first.
         # Type only: exception text may carry private process arguments.
-        event('native_worker_failed', error_type=type(error).__name__)
+        if isinstance(error, RuntimeError) and str(error) == VENDOR_UPDATE_RESTART:
+            event('native_worker_restarting_after_vendor_update')
+        else:
+            event('native_worker_failed', error_type=type(error).__name__)
         raise
     finally:
         try:

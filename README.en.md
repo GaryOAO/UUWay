@@ -77,7 +77,7 @@ Results apply to the listed versions and conditions. “Needs adjustments” mea
 
 | Distribution | Desktop / session | GPU | Result | Versions and conditions | Source |
 | --- | --- | --- | --- | --- | --- |
-| Ubuntu 24.04 | GNOME 46 / Wayland | NVIDIA RTX 3090 | Works | Mainline; daily use and regression checks | Maintainer |
+| Ubuntu 24.04 | GNOME 46 / Wayland | NVIDIA RTX 3090 | Works | Mainline; UU 4.46.0.4716 connection, common features and in-app upgrade regression checks | Maintainer |
 | Ubuntu 26.04.1 | GNOME / Wayland | AMD Radeon 780M | Works | Wine 11.0 / UU 4.42.1; Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included | Community [#4](https://github.com/GaryOAO/UUWay/pull/4) |
 | Debian 13 (trixie) | GNOME 48.7 / session not reported | NVIDIA RTX 3090 | Needs adjustments | UUWay 1.2.0 / Wine 11.0 / driver 550.163.01; 1080p 75 Hz; a startup hang was resolved through local source changes, whose details were not provided | Community [#15](https://github.com/GaryOAO/UUWay/issues/15) |
 | Manjaro | Plasma / KWin 6.7.4 / Wayland | NVIDIA RTX 4060 Laptop | Needs adjustments | Community KDE branch `60f5c8c`; single-display validation, with extra displays temporarily disabled at the time; mainline setup targets GNOME | Community [#14](https://github.com/GaryOAO/UUWay/issues/14) |

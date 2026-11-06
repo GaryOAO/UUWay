@@ -88,6 +88,33 @@ class ServiceLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_count, 1)
             event.assert_not_called()
 
+    def test_completed_vendor_update_restarts_terminal_and_trial(self):
+        calls = [0]
+
+        def worker(*args, **kwargs):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise RuntimeError(service.trial.VENDOR_UPDATE_RESTART)
+
+        with self.fixture(worker) as (path, launch, event, notify), \
+                patch.object(service.TerminalBridge, 'start', return_value=False) as start, \
+                patch.object(service.TerminalBridge, 'stop') as stop:
+            service.run(path)
+            self.assertEqual(launch.call_count, 2)
+            self.assertEqual(start.call_count, 2)
+            self.assertEqual(stop.call_count, 2)
+            event.assert_called_once_with('native_service_vendor_update_restart')
+
+    def test_stop_during_vendor_update_does_not_restart(self):
+        def worker(*args, **kwargs):
+            signal.raise_signal(signal.SIGTERM)
+            raise RuntimeError(service.trial.VENDOR_UPDATE_RESTART)
+
+        with self.fixture(worker) as (path, launch, event, notify):
+            service.run(path)
+            self.assertEqual(launch.call_count, 1)
+            event.assert_not_called()
+
     def test_cancelled_trial_does_not_touch_prefix(self):
         with patch.object(service.trial, 'private_directory') as private:
             service.trial.run(None, None, None, None, None, stop_requested=lambda: True)
@@ -145,6 +172,26 @@ class ServiceLifecycleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TerminalProxyUpdateTests(unittest.TestCase):
+    def test_missing_proxy_is_restored_and_existing_vendor_or_user_files_are_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bridge = service.TerminalBridge(root / 'prefix', root / 'state')
+            bridge.proxy.parent.mkdir(parents=True)
+            bridge.compat_proxy.parent.mkdir(parents=True)
+            bridge.compat_proxy.write_bytes(b'MZ trusted proxy')
+            bridge._restore_missing_proxy()
+            self.assertEqual(bridge.proxy.read_bytes(), b'MZ trusted proxy')
+            bridge.proxy.write_bytes(b'MZ vendor PowerShell')
+            bridge._restore_missing_proxy()
+            self.assertEqual(bridge.proxy.read_bytes(), b'MZ vendor PowerShell')
+            bridge.proxy.unlink()
+            bridge.proxy.symlink_to(root / 'absent')
+            bridge._restore_missing_proxy()
+            self.assertTrue(bridge.proxy.is_symlink())
+            self.assertFalse((root / 'absent').exists())
 
 
 class TerminalMuxProxyTests(unittest.TestCase):

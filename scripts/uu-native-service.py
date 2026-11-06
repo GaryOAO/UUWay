@@ -10,6 +10,7 @@ import shlex
 import signal
 import shutil
 import subprocess
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,7 @@ class TerminalBridge:
     def start(self):
         # A missing compatibility payload must not prevent screen sharing;
         # terminal support is optional until the normal installer supplies it.
+        self._restore_missing_proxy()
         try:
             compatible = (self.helper.is_file() and os.access(self.helper, os.X_OK) and
                           self.proxy.is_file() and self.compat_proxy.is_file() and
@@ -114,6 +116,24 @@ class TerminalBridge:
                 self.stop()
                 return False
         return True
+
+    def _restore_missing_proxy(self):
+        """UU updates omit PowerShell; restore our entrypoint only if absent."""
+        if self.proxy.exists() or self.proxy.is_symlink() or not self.proxy.parent.is_dir():
+            return
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.proxy.parent, prefix='.uurb-terminal-', delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(self.compat_proxy.read_bytes())
+                os.fchmod(stream.fileno(), 0o755)
+            # A concurrent vendor/user file wins, including a dangling symlink.
+            os.link(temporary, self.proxy)
+        except OSError:
+            pass
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def _install_mux_proxy(self):
         """Put the proxy on psmux's PowerShell path, keeping Wine's placeholder.
@@ -591,6 +611,14 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
                 return
             except RuntimeError as error:
                 # Cleanup failures remain fail-closed, even during shutdown.
+                if str(error) == trial.VENDOR_UPDATE_RESTART:
+                    if stopping:
+                        return
+                    terminal_bridge.stop()
+                    if terminal_bridge.start():
+                        trial.event('native_terminal_bridge_ready')
+                    trial.event('native_service_vendor_update_restart')
+                    continue
                 if str(error) != DISPLAY_REMAP_FAILURE:
                     raise
                 if stopping:
