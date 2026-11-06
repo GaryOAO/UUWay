@@ -1729,6 +1729,28 @@ class AutologinTests(CliCase):
         self.assertIn("十几秒内桌面和 UU 会回来", output)
 
 
+class VendorRecoveryNoticeTests(CliCase):
+    def test_missing_checkpoint_does_not_claim_protection_for_an_older_runtime(self):
+        self.assertEqual(cli.vendor_update_notices(self.context()), [])
+
+    def test_doctor_distinguishes_a_recovery_point_candidate_and_rollback(self):
+        ctx = self.context()
+        directory = ctx.state_dir / 'vendor-update'
+        directory.mkdir(mode=0o700, parents=True)
+        name = 'snapshot-' + 'a' * 32 + '.zip'
+        (directory / name).write_bytes(b'fixture archive')
+        state = dict(schema=1, prefix=str(self.prefix), known=dict(archive=name), pending=None, outcome='healthy')
+        for phase, outcome, expected in [(None, 'healthy', 'UU 升级恢复点'),
+                                          ('booting', 'updating', 'UU 新版本尚未完成验证'),
+                                          (None, 'rolled_back', '上次 UU 升级已自动回退')]:
+            with self.subTest(phase=phase, outcome=outcome):
+                state.update(pending=phase, outcome=outcome)
+                (directory / 'state.json').write_text(json.dumps(state))
+                self.assertEqual(cli.vendor_update_notices(ctx)[0][1], expected)
+        (directory / name).unlink()
+        self.assertEqual(cli.vendor_update_notices(ctx)[0][1], 'UU 升级恢复点不可用')
+
+
 class DoctorTests(CliCase):
     def test_a_bare_home_reports_failures_and_exits_nonzero(self):
         args = Namespace(prefix=self.prefix, json=True)

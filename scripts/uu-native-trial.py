@@ -9,6 +9,7 @@ import argparse
 import contextlib
 import fcntl
 import getpass
+import hashlib
 import importlib.util
 import json
 import os
@@ -25,6 +26,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 from uuway_platform import wine_directory
@@ -76,6 +78,302 @@ TOPOLOGY_STABILITY_POLLS = 3
 VENDOR_UPDATE_RESTART = 'UU vendor update completed'
 VENDOR_UPDATE_TIMEOUT = 180
 VENDOR_UPDATE_SETTLE_SECONDS = 2
+VENDOR_UPDATE_ROLLBACK = 'UU vendor update rolled back'
+VENDOR_HEALTH_SECONDS = 30
+VENDOR_CANDIDATE_TIMEOUT = 180
+
+
+class VendorUpdateRecovery:
+    """Keep private code-only snapshots; never restore account or user data.
+
+    The worker calls these methods under its prefix lock. Pending state is
+    durable before waiting or trying the new code, so a process/power failure
+    takes the same rollback path at the next start.
+    """
+    REQUIRED = ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe',
+                'bin/GameViewerHealthd.exe', 'bin/streamer.dll')
+    REGISTRY = {
+        'system.reg': {r'Software\\Netease\\GameViewerSetup': ('Version', 'LastVersion')},
+        'user.reg': {r'Software\\Netease\\GameViewer': ('Version',),
+                     r'Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\GameViewer': ('DisplayVersion',)},
+    }
+
+    def __init__(self, prefix, state_parent):
+        self.prefix = prefix.resolve()
+        self.app = self.prefix / 'drive_c/Program Files/Netease/GameViewer'
+        self.root = state_parent / 'vendor-update'
+        self.path = self.root / 'state.json'
+        self.state = None
+        self.healthy_since = None
+        self.frame_seen = False
+        self.probe_started = None
+
+    def load(self):
+        self.root.mkdir(mode=0o700, exist_ok=True)
+        private_directory(self.root)
+        self.state = (state_tools.read_private(self.path) if self.path.exists() or self.path.is_symlink()
+                      else dict(schema=1, prefix=str(self.prefix), known=None, pending=None))
+        if self.state.get('schema') != 1 or self.state.get('prefix') != str(self.prefix):
+            raise ValueError('Invalid vendor recovery checkpoint')
+        if self.state.get('pending') not in (None, 'installing', 'ready', 'booting', 'restoring'):
+            raise ValueError('Invalid vendor recovery phase')
+        failed = self.state.get('failed_payloads', [])
+        if (not isinstance(failed, list) or len(failed) > 2 or
+                any(not isinstance(name, str) or not re.fullmatch(r'\.uuway-failed-[0-9a-f]{32}', name) for name in failed)):
+            raise ValueError('Invalid failed vendor payload list')
+
+    def save(self):
+        state_tools.write_private(self.path, self.state)
+
+    @staticmethod
+    def digest(path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 2 << 30:
+                raise ValueError('Invalid vendor snapshot component')
+            value = hashlib.sha256()
+            for block in iter(lambda: source.read(1 << 20), b''):
+                value.update(block)
+        return value.hexdigest()
+
+    def fingerprint(self):
+        digest = hashlib.sha256()
+        try:
+            for name in self.REQUIRED:
+                path = self.app / name
+                if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+                    return None
+                digest.update(bytes.fromhex(self.digest(path)))
+        except OSError:
+            return None
+        return digest.hexdigest()
+
+    def versions(self):
+        values = {}
+        for name, sections in self.REGISTRY.items():
+            text = (self.prefix / name).read_text()
+            values[name] = {}
+            for section, keys in sections.items():
+                match = re.search(r'^\[' + re.escape(section) + r'\][^\n]*\n(.*?)(?=^\[|\Z)', text, re.M | re.S)
+                body = match.group(1) if match else ''
+                values[name][section] = {}
+                for key in keys:
+                    value = re.search(r'^"' + key + r'"="([0-9.]{0,64})"$', body, re.M)
+                    values[name][section][key] = value.group(1) if value else None
+        return values
+
+    def capture(self):
+        before = self.fingerprint()
+        versions = self.versions()
+        if before is None:
+            raise RuntimeError('Cannot back up an incomplete UU payload')
+        skipped = {Path(name).name for name in bundle_tools.INPUTS if name.startswith('app/bin/')}
+        skipped |= {'uu-terminal-bridge.runtime', 'uu-conpty.trace'}
+        proxy, compat_proxy = self.app / 'bin/powershell.exe', self.prefix / 'compat/uu-terminal-proxy.exe'
+        if proxy.is_file() and compat_proxy.is_file() and self.digest(proxy) == self.digest(compat_proxy):
+            skipped.add('powershell.exe')
+        paths = [p for p in self.app.iterdir() if p.suffix.lower() in ('.exe', '.dll')]
+        for path in (self.app / 'bin').rglob('*'):
+            if path.parent == self.app / 'bin' and path.name in skipped:
+                continue
+            if path.is_symlink():
+                raise ValueError('Refusing a symlink in the vendor backup')
+            if path.is_file():
+                paths.append(path)
+        if len(paths) > 16384 or sum(p.stat().st_size for p in paths) > 2 << 30:
+            raise ValueError('Vendor backup exceeds its size limit')
+        def identity(path):
+            info = path.stat()
+            return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+        identities = [identity(path) for path in paths]
+        name = 'snapshot-' + uuid.uuid4().hex + '.zip'
+        archive = self.root / name
+        beat = 0
+        try:
+            with archive.open('xb') as output:
+                os.fchmod(output.fileno(), 0o600)
+                with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as payload:
+                    for path in paths:
+                        if path.is_symlink() or not path.is_file():
+                            raise ValueError('Vendor file changed during backup')
+                        source = path
+                        if path == self.app / 'bin/conpty.dll':
+                            shim, vendor = self.prefix / 'compat/uu-conpty.dll', path.with_name('conpty.dll.uurb-vendor')
+                            if shim.is_file() and vendor.is_file() and not vendor.is_symlink() and self.digest(path) == self.digest(shim):
+                                source = vendor
+                        payload.write(source, path.relative_to(self.app).as_posix())
+                        if time.monotonic() >= beat:
+                            state_tools.notify('WATCHDOG=1\nEXTEND_TIMEOUT_USEC=30000000')
+                            beat = time.monotonic() + 5
+                output.flush()
+                os.fsync(output.fileno())
+            if (before != self.fingerprint() or versions != self.versions() or
+                    identities != [identity(path) for path in paths]):
+                raise RuntimeError('UU changed during backup')
+            known = dict(archive=name, sha256=self.digest(archive), fingerprint=before,
+                         versions=versions)
+            previous = self.state.get('known')
+            previous_state = self.state
+            self.state = dict(self.state, known=known, previous=previous, pending=None, outcome='healthy')
+            try:
+                self.save()
+            except BaseException:
+                self.state = previous_state
+                raise
+            # Keep the previous snapshot as well; never accumulate one per restart.
+            retained = {name, previous['archive']} if previous else {name}
+            for old in self.root.glob('snapshot-*.zip'):
+                if old.name not in retained and re.fullmatch(r'snapshot-[0-9a-f]{32}\.zip', old.name) and not old.is_symlink():
+                    try:
+                        old.unlink()
+                    except OSError:
+                        event('vendor_snapshot_cleanup_deferred')
+        except BaseException:
+            if not self.state.get('known') or self.state['known'].get('archive') != name:
+                archive.unlink(missing_ok=True)
+            raise
+
+    def begin(self):
+        if not self.state.get('pending'):
+            self.state.update(pending='installing', outcome='updating')
+            self.save()
+
+    def installed(self):
+        self.state['pending'] = 'ready'
+        self.save()
+
+    def prepare(self):
+        self.load()
+        pending = self.state.get('pending')
+        restored = False
+        if pending in ('installing', 'booting', 'restoring') or (self.state.get('known') and self.fingerprint() is None):
+            self.rollback()
+            restored = True
+        elif pending == 'ready' or (self.state.get('known') and self.fingerprint() != self.state['known']['fingerprint']):
+            self.state['pending'] = 'booting'
+            self.save()
+        elif not self.state.get('known'):
+            self.capture()
+        self.healthy_since = None
+        self.frame_seen = False
+        self.probe_started = time.monotonic()
+        return restored
+
+    def tick(self, ready, frame_accepted=False):
+        if self.state.get('pending') != 'booting':
+            return
+        self.frame_seen = self.frame_seen or frame_accepted
+        if not self.frame_seen and time.monotonic() - self.probe_started >= VENDOR_CANDIDATE_TIMEOUT:
+            raise RuntimeError('UU update produced no verified capture frame before its deadline')
+        if not ready:
+            self.healthy_since = None
+        elif self.healthy_since is None:
+            self.healthy_since = time.monotonic()
+        elif self.frame_seen and time.monotonic() - self.healthy_since >= VENDOR_HEALTH_SECONDS and uu_server_alive(self.prefix):
+            try:
+                self.capture()
+                event('vendor_update_health_confirmed', remote_presentation_verified=False)
+            except (OSError, ValueError, RuntimeError) as error:
+                # A full disk must not kill a working candidate or replace its
+                # old recovery point. Keep it pending and retry in one minute.
+                self.healthy_since = time.monotonic() + 30
+                event('vendor_update_snapshot_promotion_deferred', error_type=type(error).__name__)
+
+    def restore_versions(self, values):
+        for name, sections in self.REGISTRY.items():
+            path = self.prefix / name
+            if path.is_symlink():
+                raise ValueError('Refusing a symlinked Wine registry')
+            text = path.read_text()
+            for section, keys in sections.items():
+                pattern = re.compile(r'(^\[' + re.escape(section) + r'\][^\n]*\n)(.*?)(?=^\[|\Z)', re.M | re.S)
+                match = pattern.search(text)
+                body = match.group(2) if match else ''
+                for key in keys:
+                    body = re.sub(r'^"' + key + r'"=[^\n]*\n?', '', body, flags=re.M)
+                    value = values[name][section][key]
+                    if value is not None:
+                        if not isinstance(value, str) or not re.fullmatch(r'[0-9.]{0,64}', value):
+                            raise ValueError('Invalid saved vendor version')
+                        body += f'"{key}"="{value}"\n'
+                replacement = (match.group(1) if match else '[' + section + ']\n') + body + '\n'
+                text = text[:match.start()] + replacement + text[match.end():] if match else text + '\n' + replacement
+            fd, temporary = tempfile.mkstemp(prefix='.uurb-registry-', dir=self.prefix)
+            try:
+                with os.fdopen(fd, 'w') as output:
+                    output.write(text); output.flush(); os.fsync(output.fileno())
+                os.replace(temporary, path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+
+    def rollback(self):
+        if prefix_processes(self.prefix):
+            raise RuntimeError('Vendor rollback requires the owned prefix idle')
+        known = self.state.get('known') or {}
+        name = known.get('archive', '')
+        if not re.fullmatch(r'snapshot-[0-9a-f]{32}\.zip', name):
+            raise ValueError('Invalid vendor snapshot name')
+        source = self.root / name
+        if source.is_symlink() or self.digest(source) != known.get('sha256'):
+            raise ValueError('Vendor snapshot failed integrity verification')
+        if self.app.is_symlink():
+            raise ValueError('Refusing a symlinked vendor directory')
+        self.app.mkdir(mode=0o700, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix='.uuway-restore-', dir=self.app))
+        self.state['pending'] = 'restoring'
+        self.save()
+        try:
+            with zipfile.ZipFile(source) as payload:
+                entries = payload.infolist()
+                if len(entries) > 16384 or sum(e.file_size for e in entries) > 2 << 30:
+                    raise ValueError('Vendor snapshot exceeds its size limit')
+                for entry in entries:
+                    relative = Path(entry.filename)
+                    if (relative.is_absolute() or '..' in relative.parts or not relative.parts or
+                            (relative.parts[0] != 'bin' and (len(relative.parts) != 1 or relative.suffix.lower() not in ('.exe', '.dll')))):
+                        raise ValueError('Unexpected vendor snapshot path')
+                    target = stage / relative
+                    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    with payload.open(entry) as data, target.open('xb') as output:
+                        shutil.copyfileobj(data, output)
+                        output.flush(); os.fsync(output.fileno())
+                    target.chmod((entry.external_attr >> 16) & 0o777)
+                    state_tools.notify('WATCHDOG=1\nEXTEND_TIMEOUT_USEC=30000000')
+            if any(not (stage / name).is_file() for name in self.REQUIRED):
+                raise ValueError('Vendor snapshot is incomplete')
+            quarantine = self.app / ('.uuway-failed-' + uuid.uuid4().hex)
+            quarantine.mkdir(mode=0o700)
+            # Atomic directory moves keep an interrupted rollback resumable.
+            if (self.app / 'bin').exists() or (self.app / 'bin').is_symlink():
+                (self.app / 'bin').rename(quarantine / 'bin')
+            (stage / 'bin').rename(self.app / 'bin')
+            for path in list(self.app.iterdir()):
+                if path.suffix.lower() in ('.exe', '.dll'):
+                    path.rename(quarantine / path.name)
+            for path in stage.iterdir():
+                path.rename(self.app / path.name)
+            # The native runtime owns these lookup slots. Preserve updater
+            # replacements outside the search path before reattaching it.
+            for name in bundle_tools.INPUTS:
+                if name.startswith('system32/'):
+                    path = self.prefix / 'drive_c/windows/system32' / Path(name).name
+                    if path.exists() or path.is_symlink():
+                        path.rename(quarantine / ('runtime-' + path.name))
+            self.restore_versions(known['versions'])
+            failed = self.state.get('failed_payloads', [])
+            self.state.update(pending=None, outcome='rolled_back', failed_payloads=[*failed[-1:], quarantine.name])
+            self.save()
+            for name in failed[:-1]:
+                old = self.app / name
+                if re.fullmatch(r'\.uuway-failed-[0-9a-f]{32}', name) and not old.is_symlink() and old.is_dir():
+                    try:
+                        shutil.rmtree(old)
+                    except OSError:
+                        event('vendor_failed_payload_cleanup_deferred')
+            event('vendor_update_rolled_back', failed_payload_preserved=True)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 def owned_loader_link(path, target, identity):
@@ -101,8 +399,7 @@ def relocated_loader_aliases(aliases):
     try:
         candidates = sorted(app.iterdir())
         for directory in candidates:
-            if (not re.fullmatch(r'[0-9]{1,5}(?:\.[0-9]{1,5}){3}', directory.name) or
-                    directory.is_symlink() or not directory.is_dir()):
+            if directory.name == 'bin' or directory.is_symlink() or not directory.is_dir():
                 continue
             moved = [(directory / p.name, t, i) for p, t, i in app_links]
             if all(owned_loader_link(*entry) for entry in moved):
@@ -307,6 +604,22 @@ def boot_events(path, cursor=None):
         if cursor is not None:
             cursor[0] = stream.tell()
     return result
+
+
+def bootstrap_progress(items, ready_events, with_input, vendor_candidate=False):
+    required = {'gui_started', 'service_bootstrap_accepted'}
+    if with_input:
+        required.add('native_input_hook_ready')
+        if vendor_candidate:
+            required.update(('native_gui_hook_ready', 'native_service_hook_ready'))
+    failed = False
+    for item in items:
+        event('bootstrap', detail=item)
+        if item['code'] == 0:
+            ready_events.add(item['event'])
+        elif item['event'] in required:
+            failed = True
+    return 'failed' if failed else 'ready' if required <= ready_events else 'waiting'
 
 
 def end_process(process):
@@ -804,9 +1117,6 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         raise RuntimeError('The selected prefix is busy; no existing Wine process will be stopped')
     app = prefix / 'drive_c/Program Files/Netease/GameViewer'
     gui = app / 'GameViewer.exe'
-    for name in ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe'):
-        if not (app / name).is_file():
-            raise RuntimeError('Official UU component missing: ' + name)
     if not (prefix / 'system.reg').is_file():
         raise RuntimeError('An existing installed UU prefix is required')
     state_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -819,6 +1129,8 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
     arguments = token = None
     directory = None
     env = None
+    recovery = None
+    worker_error = None
     stopping = False
 
     def request_stop(signum, frame):
@@ -836,7 +1148,16 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
         if prefix_processes(prefix):
             raise RuntimeError('The prefix became busy before native startup')
         if continuous:
+            recovery = VendorUpdateRecovery(prefix, state_parent)
+            restored = recovery.prepare()
             recover_interrupted(prefix, state_parent)
+            if restored:
+                # The terminal owner may have started while bin was absent.
+                # Let the supervisor restore its entrypoint before launch.
+                raise RuntimeError(VENDOR_UPDATE_ROLLBACK)
+        for name in ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe'):
+            if not (app / name).is_file():
+                raise RuntimeError('Official UU component missing: ' + name)
         if is_stopping():
             return
         directory = Path(tempfile.mkdtemp(prefix='trial-', dir=state_parent))
@@ -993,13 +1314,13 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             deadline = float('inf') if continuous else time.monotonic() + duration
             startup_deadline = time.monotonic() + 60
             ready_events = set()
-            required_events = {'gui_started', 'service_bootstrap_accepted'}
-            if with_input:
-                required_events.add('native_input_hook_ready')
+            vendor_candidate = bool(recovery and recovery.state.get('pending') == 'booting')
             notified_ready = False
             server_liveness = ServerLiveness(lambda: uu_server_alive(prefix))
             watchdog_at = 0
             failure = None
+            updater_check = 0
+            updater_alive = False
             cursor = [0]
             topology_failures = [0]
             topology_check = time.monotonic()
@@ -1007,31 +1328,51 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             topology_stabilizer = TopologyStabilizer(topology)
             display_confirmation = confirmation_tools.MultiDisplayConfirmation(directory, prefix,
                 app / 'bin/GameViewerServer.exe', bundle, topology, state_tools.read_private) if display_socket else None
+            upgrade_confirmation = (confirmation_tools.DisplayConfirmation(directory, prefix,
+                app / 'bin/GameViewerServer.exe', bundle, topology, state_tools.read_private)
+                if recovery and recovery.state.get('pending') == 'booting' else None)
             while not is_stopping() and time.monotonic() < deadline:
+                if recovery and time.monotonic() >= updater_check:
+                    updater_alive = uu_updater_alive(prefix)
+                    updater_check = time.monotonic() + 1
+                    if updater_alive:
+                        recovery.begin()
                 if not all(owned_loader_link(*entry) for entry in created_aliases):
                     moved = relocated_loader_aliases(created_aliases)
                     other_links = [entry for entry in created_aliases if entry[0].parent != app / 'bin']
-                    if continuous and moved and all(owned_loader_link(*entry) for entry in other_links):
+                    app_changed = any(not owned_loader_link(*entry) for entry in created_aliases if entry[0].parent == app / 'bin')
+                    if recovery and (app_changed or updater_alive):
+                        recovery.begin()
+                    if continuous and (moved or updater_alive) and all(owned_loader_link(*entry) for entry in other_links):
                         if wait_for_vendor_update(prefix, app, is_stopping):
+                            if recovery:
+                                recovery.installed()
                             failure = VENDOR_UPDATE_RESTART
                     else:
                         event('component_changed_stopping_for_upgrade_review')
                         failure = 'Native components changed; upgrade review required'
                     break
-                for item in boot_events(directory / 'wine.log', cursor):
-                    event('bootstrap', detail=item)
-                    if item['code'] == 0:
-                        ready_events.add(item['event'])
-                if required_events <= ready_events and not notified_ready:
+                progress = bootstrap_progress(boot_events(directory / 'wine.log', cursor),
+                                              ready_events, with_input, vendor_candidate)
+                if progress == 'failed':
+                    failure = 'UU update bootstrap hook rejected'
+                    break
+                if progress == 'ready' and not notified_ready:
                     notified_ready = True
                     state_tools.notify('READY=1\nSTATUS=UU native bridge workers ready; remote acceptance separate')
                 if not notified_ready and time.monotonic() >= startup_deadline:
                     failure = 'Native service bootstrap readiness timed out'
                     break
                 if time.monotonic() >= watchdog_at:
-                    state_tools.notify('WATCHDOG=1')
+                    state_tools.notify('WATCHDOG=1' + ('\nEXTEND_TIMEOUT_USEC=30000000'
+                        if recovery and recovery.state.get('pending') == 'booting' else ''))
                     watchdog_at = time.monotonic() + 5
                 if launcher.poll() is not None or broker.poll() is not None:
+                    if recovery and updater_alive:
+                        if wait_for_vendor_update(prefix, app, is_stopping):
+                            recovery.installed()
+                            failure = VENDOR_UPDATE_RESTART
+                        break
                     event('native_worker_exited', launcher_exit=launcher.poll(), broker_exit=broker.poll())
                     failure = 'Native service worker exited'
                     break
@@ -1084,25 +1425,44 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                     if result:
                         event('display_frame_confirmation', result=result, remote_presentation_verified=False,
                               remote_presentation_observation='local_gpu_ack_only')
+                if recovery:
+                    frame_accepted = False
+                    if upgrade_confirmation:
+                        try:
+                            upgrade_confirmation.consume()
+                            evidence = upgrade_confirmation.evidence
+                            frame_accepted = bool(evidence and confirmation_tools.owned_consumer(
+                                evidence, prefix, app / 'bin/GameViewerServer.exe', bundle / 'app/bin/dxgi.dll'))
+                        except (OSError, ValueError, KeyError, TypeError):
+                            pass
+                    recovery.tick(notified_ready, frame_accepted)
                 time.sleep(0.25)
             if failure is not None:
                 raise RuntimeError(failure)
     except Exception as error:
+        worker_error = error
         # Cleanup can run for a long time; record what ended the worker first.
         # Type only: exception text may carry private process arguments.
-        if isinstance(error, RuntimeError) and str(error) == VENDOR_UPDATE_RESTART:
-            event('native_worker_restarting_after_vendor_update')
+        if isinstance(error, RuntimeError) and str(error) in (VENDOR_UPDATE_RESTART, VENDOR_UPDATE_ROLLBACK):
+            event('native_worker_restarting_after_vendor_update' if str(error) == VENDOR_UPDATE_RESTART
+                  else 'native_worker_restarting_after_vendor_rollback')
         else:
             event('native_worker_failed', error_type=type(error).__name__)
         raise
     finally:
         try:
+            if recovery and recovery.state and recovery.state.get('pending'):
+                state_tools.notify('EXTEND_TIMEOUT_USEC=180000000')
             state_tools.notify(('STOPPING=1' if stop_requested is None else 'WATCHDOG=1') +
                                '\nSTATUS=Cleaning up owned UU runtime')
             with cleanup_heartbeat(stop_requested is not None):
                 failures = cleanup_trial(launcher, broker, env, directory, arguments, token, created_aliases, native_input)
             if failures:
                 raise RuntimeError('Native trial cleanup incomplete; inspect its private cleanup.json')
+            if (recovery and recovery.state and recovery.state.get('pending') and
+                    worker_error is not None and str(worker_error) != VENDOR_UPDATE_RESTART and not is_stopping()):
+                recovery.rollback()
+                raise RuntimeError(VENDOR_UPDATE_ROLLBACK) from worker_error
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)

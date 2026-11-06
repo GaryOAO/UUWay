@@ -67,6 +67,8 @@ uuway refresh --restart-display # Reload display service; removes Super Screens
 
 The console checks for updates every six hours while open; automatic checks can be disabled. Updating briefly disconnects remote sessions. Package installations select the matching distribution's update asset; source installations should rebuild from updated source.
 
+UU host upgrades also retain a program recovery point. Failed installation or startup/capture checks trigger rollback while preserving accounts, downloads and user configuration. See [upgrade recovery](docs/vendor-upgrade-recovery.md).
+
 For remote-only use, `uuway autologin on` enables GDM login and relogin after the desktop exits. Anyone with physical access can also enter the desktop; consider that before enabling it. Disable with `uuway autologin off`.
 
 To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine prefix and UU login are retained.

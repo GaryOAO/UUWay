@@ -611,13 +611,14 @@ def run(config_path, preserve_display_session=False, allow_display_reconfigure=F
                 return
             except RuntimeError as error:
                 # Cleanup failures remain fail-closed, even during shutdown.
-                if str(error) == trial.VENDOR_UPDATE_RESTART:
+                if str(error) in (trial.VENDOR_UPDATE_RESTART, trial.VENDOR_UPDATE_ROLLBACK):
                     if stopping:
                         return
                     terminal_bridge.stop()
                     if terminal_bridge.start():
                         trial.event('native_terminal_bridge_ready')
-                    trial.event('native_service_vendor_update_restart')
+                    trial.event('native_service_vendor_update_restart' if str(error) == trial.VENDOR_UPDATE_RESTART
+                                else 'native_service_vendor_update_rollback_restart')
                     continue
                 if str(error) != DISPLAY_REMAP_FAILURE:
                     raise

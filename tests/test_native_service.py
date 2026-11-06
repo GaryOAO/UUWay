@@ -105,6 +105,14 @@ class ServiceLifecycleTests(unittest.TestCase):
             self.assertEqual(stop.call_count, 2)
             event.assert_called_once_with('native_service_vendor_update_restart')
 
+    def test_cold_vendor_rollback_restarts_terminal_before_launching_restored_uu(self):
+        with self.fixture([RuntimeError(service.trial.VENDOR_UPDATE_ROLLBACK), None]) as (path, launch, event, notify), \
+                patch.object(service.TerminalBridge, 'start', return_value=False) as start:
+            service.run(path)
+            self.assertEqual(start.call_count, 2)
+            self.assertEqual(launch.call_count, 2)
+            event.assert_called_once_with('native_service_vendor_update_rollback_restart')
+
     def test_stop_during_vendor_update_does_not_restart(self):
         def worker(*args, **kwargs):
             signal.raise_signal(signal.SIGTERM)

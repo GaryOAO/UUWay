@@ -67,6 +67,8 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 
 控制台默认在打开期间每 6 小时检查一次更新，可关闭自动检查。更新会短暂断开远程连接。安装包用户可直接更新，系统会选择对应发行版的包；源码安装请更新源码后重新构建。
 
+UU 被控端自身升级也会保留程序恢复点；安装失败或新版未通过启动、采集检查时自动回退，账号、下载和用户配置保留。见[升级恢复机制](docs/vendor-upgrade-recovery.md)。
+
 仅远程使用可手动启用 `uuway autologin on`，让 GDM 自动登录并在桌面退出后重新登录；任何能接触机器的人也能进入桌面，启用前请了解这一影响。关闭：`uuway autologin off`。
 
 卸载：先运行 `uuway uninstall`，再运行 `sudo apt remove uuway`。Wine 前缀和 UU 登录信息会保留。

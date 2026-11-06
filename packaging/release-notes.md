@@ -1,17 +1,19 @@
 ## 中文
 
-- 支持 UU 4.46.0.4716。
-- 修复 UU 内置升级重命名 `bin` 后被 UUWay 中断、导致被控端一直离线的问题。识别原有适配链接的目录迁移，等待安装完成，再清理旧链接并自动重启。
-- UU 更新后自动恢复缺失的远程终端入口；保留已有的第三方文件。
-- 增加更新等待、超时、取消、旧目录清理和服务重启的回归测试；已重放官方 4.42 → 4.46 升级提交并验证自动恢复。
+- 为 UU 被控端自身升级增加本地程序快照和失败回退；安装中断、目录缺失或新版启动失败时自动恢复之前的程序。
+- 新版必须通过 GUI、服务和输入适配检查，稳定运行 30 秒，并获得当前 UU 进程的真实采集帧确认，才会更新恢复点。采集验证最多等待 3 分钟，未通过则自动回退。
+- 升级和回退状态持久保存，服务异常退出或机器重启后继续恢复；目录迁移识别不再依赖具体版本号命名。
+- 回退不覆盖账号、下载文件或用户配置，自动重建远程终端入口；保留最近两份程序快照及两次失败程序以便排查。
+- `uuway doctor` 可查看恢复点、待验证版本和自动回退结果。增加中断、坏备份、新版适配失败、采集超时及重复回退的回归测试。
 
-已被旧版 UUWay 中断的 UU 更新，需要先停止 `uu-native-bridge.service` 并重新运行官方安装包完成安装，再启动服务。本次修复防止后续内置更新再次被中断。
+自动恢复依赖已建立且完整的本地程序快照。此机制降低升级失败后持续离线的风险，不代表对尚未发布的 UU 版本作出兼容性保证。
 
 ## English
 
-- Support UU 4.46.0.4716.
-- Fix UUWay interrupting UU's in-app upgrade after it renames `bin`, leaving the host offline. Recognize relocation of the original bridge links, wait for the installer to finish, then clean up and restart automatically.
-- Restore the missing remote-terminal entrypoint after UU updates while preserving existing third-party files.
-- Add regression tests for installer waits, timeouts, cancellation, retired-directory cleanup and service restarts. Replay the official 4.42 → 4.46 upgrade commit and verify automatic recovery.
+- Add local program snapshots and rollback for UU host upgrades. Restore the previous program after an interrupted install, missing program directory or new-version startup failure.
+- Require successful GUI, service and input adaptation, 30 seconds of stable operation, and a real capture-frame acknowledgement from the current UU process before replacing the recovery point. Roll back if capture verification does not succeed within three minutes.
+- Persist upgrade and rollback state for recovery after process exits or machine restarts. Recognize relocated directories without requiring a numeric version name.
+- Preserve accounts, downloads and user configuration during rollback, and restore the remote-terminal entrypoint. Retain the latest two program snapshots and two failed payloads for troubleshooting.
+- Report recovery points, pending validation and rollback results through `uuway doctor`. Add regression tests for interruptions, corrupt backups, rejected adaptation, capture timeouts and repeated rollback.
 
-An update already interrupted by an older UUWay needs the bridge service stopped and the official UU installer rerun before restarting the service. This fix prevents subsequent in-app updates from being interrupted again.
+Automatic recovery requires an existing, intact local program snapshot. It reduces prolonged offline failures after upgrades; it does not guarantee compatibility with unreleased UU versions.

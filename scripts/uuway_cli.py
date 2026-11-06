@@ -1358,6 +1358,24 @@ def command_refresh(args):
 
 # --------------------------------------------------------------------- doctor
 
+def vendor_update_notices(ctx):
+    directory = ctx.state_dir / 'vendor-update'
+    state = read_json(directory / 'state.json')
+    if not isinstance(state, dict) or state.get('schema') != 1 or state.get('prefix') != str(ctx.prefix.resolve()):
+        return []
+    known = state.get('known')
+    known = known if isinstance(known, dict) else {}
+    archive = known.get('archive', '')
+    if (directory.is_symlink() or not isinstance(archive, str) or not re.fullmatch(r'snapshot-[0-9a-f]{32}\.zip', archive)
+            or (directory / archive).is_symlink() or not (directory / archive).is_file()):
+        return [('warn', 'UU 升级恢复点不可用', '检查磁盘空间和 vendor-update 日志，暂时不要在 UU 内升级。')]
+    if state.get('pending'):
+        return [('warn', 'UU 新版本尚未完成验证', '保留旧程序恢复点；需要适配钩子正常、稳定运行及当前 UU 进程的采集帧确认。')]
+    if state.get('outcome') == 'rolled_back':
+        return [('warn', '上次 UU 升级已自动回退', '已恢复之前的程序；详情：journalctl --user -u uu-native-bridge。')]
+    return [('ok', 'UU 升级恢复点', '已保留本地程序快照；回退保留账号、下载和用户配置。')]
+
+
 def command_doctor(args):
     ctx = Context(args)
     results = []
@@ -1429,6 +1447,8 @@ def command_doctor(args):
         check('ok' if unit_active(ctx, name) else 'fail', f'{name} 运行中')
         for dropin in sorted((ctx.unit_dir / (name + '.service.d')).glob('*.conf')):
             check('warn', f'{name} 有 drop-in 覆盖', str(dropin))
+    for level, name, detail in vendor_update_notices(ctx):
+        check(level, name, detail)
     login = autologin_state(ctx)
     if login:
         path, enabled, user = login
