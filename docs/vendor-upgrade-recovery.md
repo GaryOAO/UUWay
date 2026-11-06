@@ -1,6 +1,6 @@
 # UU host upgrade recovery
 
-UUWay 1.5.2 adds recovery for the vendor UU host's own upgrade flow. UUWay
+UUWay 1.5.3 adds recovery for the vendor UU host's own upgrade flow. UUWay
 package updates continue to use their existing package backup, health checks
 and rollback. Neither mechanism guarantees compatibility with unreleased UU.
 

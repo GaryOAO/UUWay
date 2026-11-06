@@ -350,3 +350,26 @@ class VendorRecoveryTests(unittest.TestCase):
         self.assertEqual(len(self.recovery.state['failed_payloads']), 2)
         self.assertEqual(len(list(self.app.glob('.uuway-failed-*'))), 3)
         self.assertTrue(unrelated.is_dir())
+
+    def test_restored_directories_are_durable_before_rollback_is_marked_complete(self):
+        self.recovery.begin()
+        self.payload('new')
+        synced = []
+        save = self.recovery.save
+        sync = self.recovery.sync_directory
+
+        def sync_directory(path):
+            sync(path)
+            synced.append(path)
+
+        def save_checkpoint():
+            if self.recovery.state['pending'] is None:
+                self.assertIn(self.app, synced)
+                self.assertIn(self.prefix, synced)
+            save()
+
+        with patch.object(trial, 'prefix_processes', return_value=[]), \
+                patch.object(self.recovery, 'sync_directory', side_effect=sync_directory), \
+                patch.object(self.recovery, 'save', side_effect=save_checkpoint):
+            self.recovery.rollback()
+        self.assert_old()

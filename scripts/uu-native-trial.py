@@ -137,6 +137,15 @@ class VendorUpdateRecovery:
                 value.update(block)
         return value.hexdigest()
 
+    @staticmethod
+    def sync_directory(path):
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        state_tools.notify('WATCHDOG=1\nEXTEND_TIMEOUT_USEC=30000000')
+
     def fingerprint(self):
         digest = hashlib.sha256()
         try:
@@ -342,6 +351,9 @@ class VendorUpdateRecovery:
                     state_tools.notify('WATCHDOG=1\nEXTEND_TIMEOUT_USEC=30000000')
             if any(not (stage / name).is_file() for name in self.REQUIRED):
                 raise ValueError('Vendor snapshot is incomplete')
+            for directory in sorted((p for p in stage.rglob('*') if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                self.sync_directory(directory)
+            self.sync_directory(stage)
             quarantine = self.app / ('.uuway-failed-' + uuid.uuid4().hex)
             quarantine.mkdir(mode=0o700)
             # Atomic directory moves keep an interrupted rollback resumable.
@@ -361,6 +373,10 @@ class VendorUpdateRecovery:
                     if path.exists() or path.is_symlink():
                         path.rename(quarantine / ('runtime-' + path.name))
             self.restore_versions(known['versions'])
+            # The checkpoint may live on another filesystem. Commit every
+            # restored directory/registry rename before clearing its journal.
+            for directory in (quarantine, self.app, self.prefix):
+                self.sync_directory(directory)
             failed = self.state.get('failed_payloads', [])
             self.state.update(pending=None, outcome='rolled_back', failed_payloads=[*failed[-1:], quarantine.name])
             self.save()

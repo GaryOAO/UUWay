@@ -7,13 +7,13 @@ on:
     inputs:
       version:
         description: Package version (no release is published)
-        default: 1.5.2~ci
+        default: 1.5.3~ci
         required: true
   workflow_call:
     inputs:
       version:
         type: string
-        default: 1.5.2~ci
+        default: 1.5.3~ci
 
 permissions:
   contents: read
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and install-check UUWay with official Wine 11.0 binaries
         env:
-          VERSION: ${{ inputs.version || '1.5.2~ci' }}
+          VERSION: ${{ inputs.version || '1.5.3~ci' }}
           TARGET: ${{ matrix.target }}
           UUWAY_BUILD_JOBS: 4
           UUWAY_BUILD_CPUS: 4
@@ -73,7 +73,7 @@ jobs:
           path: input45
       - name: Assemble one Fedora RPM with automatic FFmpeg ABI selection
         env:
-          VERSION: ${{ inputs.version || '1.5.2~ci' }}
+          VERSION: ${{ inputs.version || '1.5.3~ci' }}
         run: |
           mkdir -p out
           docker run --rm -e VERSION -v "$PWD:/source:ro" -v "$PWD/out:/result" fedora:44 bash -c '
@@ -116,7 +116,7 @@ jobs:
           fetch-depth: 0
       - name: Build and install-check the Ubuntu package, including OTA regression tests
         env:
-          VERSION: ${{ inputs.version || '1.5.2~ci' }}
+          VERSION: ${{ inputs.version || '1.5.3~ci' }}
           UUWAY_BUILD_JOBS: 4
         run: |
           packaging/build-deb.sh --version "$VERSION" --output-dir out
