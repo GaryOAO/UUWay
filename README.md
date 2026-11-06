@@ -73,21 +73,38 @@ uuway refresh --restart-display # 重载显示服务，会移除现有超级屏
 
 ## 支持范围
 
-验证结果仅对应列出的版本与条件。「需调整」表示经本地修改或额外操作后可用；「未验证」表示暂无实测结论。缺失的信息标为「未提供」。
+当前提供以下 **x86_64 原生安装包**，均包含 NVIDIA NVENC 和 AMD VA-API 后端：
 
-| 发行版 | 桌面 / 会话 | 显卡 | 结果 | 版本与条件 | 来源 |
-| --- | --- | --- | --- | --- | --- |
-| Ubuntu 24.04 | GNOME 46 / Wayland | NVIDIA RTX 3090 | 可用 | 主线；UU 4.46.0.4716 连接、常用功能及内置升级回归验证 | 维护者 |
-| Ubuntu 26.04.1 | GNOME / Wayland | AMD Radeon 780M | 可用 | Wine 11.0 / UU 4.42.1；已适配 Python 3.14 文字服务与 [OSC 3008 终端乱码](https://github.com/GaryOAO/UUWay/issues/2) | 社区 [#4](https://github.com/GaryOAO/UUWay/pull/4) |
-| Debian 13 (trixie) | GNOME 48.7 / 会话未提供 | NVIDIA RTX 3090 | 需调整 | UUWay 1.2.0 / Wine 11.0 / 驱动 550.163.01；1080p 75 Hz；启动卡住经本地源码调整解决，具体改动未提供 | 社区 [#15](https://github.com/GaryOAO/UUWay/issues/15) |
-| Manjaro | Plasma / KWin 6.7.4 / Wayland | NVIDIA RTX 4060 Laptop | 需调整 | 社区 KDE 分支 `60f5c8c`；单屏验证，当时多屏需临时关闭副屏；主线安装器面向 GNOME | 社区 [#14](https://github.com/GaryOAO/UUWay/issues/14) |
-| Arch Linux | Hyprland / 会话未提供 | 未提供 | 未验证 | 暂无 Hyprland 实测结论；该讨论中的可用反馈来自 KDE 环境 | 问询 [#3](https://github.com/GaryOAO/UUWay/issues/3) |
+| 发行版 | 安装包 | 当前支持状态 |
+| --- | --- | --- |
+| Ubuntu 24.04 | `.deb` | 主要维护与日常使用环境 |
+| Ubuntu 26.04 | `.deb` | 已有社区真机实测 |
+| Debian 13 (trixie) | `.deb` | 实验性支持 |
+| Fedora 44 / 45 | 共用 `.rpm` | 实验性支持 |
+| Arch Linux | `.pkg.tar.zst` | 实验性支持 |
 
-其他环境欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)。
+Debian、Fedora 和 Arch 已通过构建、干净环境安装、库依赖及自动更新/回滚检查；实际桌面与 GPU 串流仍待真机反馈。安装方法和包的选择见[各发行版安装说明](docs/linux-packages.md)。Arch 衍生发行版需要分别验证。
 
-Debian 13、Fedora 44 / 45 和 Arch Linux 提供[实验性支持](docs/linux-packages.md)，受条件限制暂未做真机测试。欢迎提交 [Issue](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) 反馈兼容性，也欢迎提交 [PR](https://github.com/GaryOAO/UUWay/compare) 一起完善。
+桌面适配范围：
 
-Hyprland 已加入[单屏实验支持](docs/hyprland.md)，暂不支持修改显示模式和超级屏。
+- **GNOME Wayland**：主线支持，提供多屏、分辨率/刷新率/缩放切换和超级屏。
+- **Hyprland**：[单屏实验支持](docs/hyprland.md)，支持采集和基础键鼠控制；暂不支持远程修改显示模式、多屏和超级屏。
+- **KDE Plasma / X11**：暂不在主线支持范围内；KDE 的早期社区分支反馈见 [#14](https://github.com/GaryOAO/UUWay/issues/14)。
+
+<details>
+<summary>历史社区实测与排错记录</summary>
+
+以下记录对应当时的版本和环境，当前支持状态以上方列表为准。
+
+| 环境 | 当时的版本与反馈 | 来源 |
+| --- | --- | --- |
+| Ubuntu 26.04.1 / GNOME Wayland / AMD Radeon 780M | Wine 11.0 / UU 4.42.1；已合入 Python 3.14 文字服务适配和 OSC 3008 终端修复 | [#4](https://github.com/GaryOAO/UUWay/pull/4) |
+| Debian 13 / GNOME 48.7 / NVIDIA RTX 3090 | UUWay 1.2.0；启动卡住经本地源码调整解决，具体改动未提供 | [#15](https://github.com/GaryOAO/UUWay/issues/15) |
+| Manjaro / Plasma KWin 6.7.4 / NVIDIA RTX 4060 Laptop | 社区 KDE 分支 `60f5c8c`；当时仅验证单屏，多屏需临时关闭副屏 | [#14](https://github.com/GaryOAO/UUWay/issues/14) |
+
+</details>
+
+欢迎提交[兼容性报告](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml)或 [PR](https://github.com/GaryOAO/UUWay/compare)。
 
 - 最多 8 块活动显示器；暂不支持镜像布局、旋转和 Intel 单显卡编码。AMD 使用内存中转，NVIDIA 使用 GPU 零拷贝链路。
 - 超级屏仍可能出现双光标。分辨率、刷新率和串流性能取决于显示模式、驱动及硬件，最高 144 Hz 模式不代表串流帧率保证。

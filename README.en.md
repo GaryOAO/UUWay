@@ -73,21 +73,38 @@ To uninstall, run `uuway uninstall`, then `sudo apt remove uuway`. The Wine pref
 
 ## Supported scope
 
-Results apply to the listed versions and conditions. “Needs adjustments” means local changes or extra steps were required; “Unverified” means no test result is available. Missing information is marked “Not reported”.
+The following **native x86_64 packages** include both NVIDIA NVENC and AMD VA-API backends:
 
-| Distribution | Desktop / session | GPU | Result | Versions and conditions | Source |
-| --- | --- | --- | --- | --- | --- |
-| Ubuntu 24.04 | GNOME 46 / Wayland | NVIDIA RTX 3090 | Works | Mainline; UU 4.46.0.4716 connection, common features and in-app upgrade regression checks | Maintainer |
-| Ubuntu 26.04.1 | GNOME / Wayland | AMD Radeon 780M | Works | Wine 11.0 / UU 4.42.1; Python 3.14 text-service support and the [OSC 3008 terminal fix](https://github.com/GaryOAO/UUWay/issues/2) are included | Community [#4](https://github.com/GaryOAO/UUWay/pull/4) |
-| Debian 13 (trixie) | GNOME 48.7 / session not reported | NVIDIA RTX 3090 | Needs adjustments | UUWay 1.2.0 / Wine 11.0 / driver 550.163.01; 1080p 75 Hz; a startup hang was resolved through local source changes, whose details were not provided | Community [#15](https://github.com/GaryOAO/UUWay/issues/15) |
-| Manjaro | Plasma / KWin 6.7.4 / Wayland | NVIDIA RTX 4060 Laptop | Needs adjustments | Community KDE branch `60f5c8c`; single-display validation, with extra displays temporarily disabled at the time; mainline setup targets GNOME | Community [#14](https://github.com/GaryOAO/UUWay/issues/14) |
-| Arch Linux | Hyprland / session not reported | Not reported | Unverified | No Hyprland test result; working reports in this discussion concern KDE | Inquiry [#3](https://github.com/GaryOAO/UUWay/issues/3) |
+| Distribution | Package | Current support |
+| --- | --- | --- |
+| Ubuntu 24.04 | `.deb` | Primary development and daily-use environment |
+| Ubuntu 26.04 | `.deb` | Community hardware validation available |
+| Debian 13 (trixie) | `.deb` | Experimental support |
+| Fedora 44 / 45 | One shared `.rpm` | Experimental support |
+| Arch Linux | `.pkg.tar.zst` | Experimental support |
 
-Reports from other setups are welcome through the [compatibility template](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml).
+Debian, Fedora and Arch pass build, clean-install, library-dependency and update/rollback checks; desktop and GPU streaming still need hardware feedback. See the [distribution installation guide](docs/linux-packages.md) for package selection and installation. Arch derivatives require separate validation.
 
-[Experimental support](docs/linux-packages.md) is available for Debian 13, Fedora 44 / 45 and Arch Linux. These builds have not yet been tested on real hardware. Compatibility reports via [Issues](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) and code contributions via [PRs](https://github.com/GaryOAO/UUWay/compare) are welcome.
+Desktop support:
 
-Hyprland has an [experimental single-monitor backend](docs/hyprland.md). Remote mode changes and Super Screen are not supported yet.
+- **GNOME Wayland**: the main backend, including multiple displays, resolution/refresh-rate/scaling changes and Super Screen.
+- **Hyprland**: [experimental single-monitor support](docs/hyprland.md) for capture and basic keyboard/mouse input; remote display-mode changes, multiple displays and Super Screen are not supported yet.
+- **KDE Plasma / X11**: outside the current mainline support scope. Early community KDE-branch feedback is recorded in [#14](https://github.com/GaryOAO/UUWay/issues/14).
+
+<details>
+<summary>Historical community tests and troubleshooting</summary>
+
+These reports describe their original versions and environments. The list above describes current support.
+
+| Environment | Versions and feedback at the time | Source |
+| --- | --- | --- |
+| Ubuntu 26.04.1 / GNOME Wayland / AMD Radeon 780M | Wine 11.0 / UU 4.42.1; Python 3.14 text-service support and the OSC 3008 terminal fix have been merged | [#4](https://github.com/GaryOAO/UUWay/pull/4) |
+| Debian 13 / GNOME 48.7 / NVIDIA RTX 3090 | UUWay 1.2.0; a startup hang was resolved through local source changes whose details were not provided | [#15](https://github.com/GaryOAO/UUWay/issues/15) |
+| Manjaro / Plasma KWin 6.7.4 / NVIDIA RTX 4060 Laptop | Community KDE branch `60f5c8c`; only a single display was validated, with extra displays temporarily disabled | [#14](https://github.com/GaryOAO/UUWay/issues/14) |
+
+</details>
+
+[Compatibility reports](https://github.com/GaryOAO/UUWay/issues/new?template=compatibility-report.yml) and [PRs](https://github.com/GaryOAO/UUWay/compare) are welcome.
 
 - Up to eight active displays. Mirroring, rotation and Intel-only encoding are unsupported. AMD uses host-memory copies; NVIDIA uses a zero-copy GPU path.
 - Super Screen can still show two cursors. Display modes, drivers and hardware limit resolution, refresh rate and streaming performance; a 144 Hz mode does not guarantee a 144 fps stream.
