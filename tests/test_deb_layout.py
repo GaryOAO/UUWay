@@ -163,6 +163,8 @@ class MetadataTests(unittest.TestCase):
                 dependencies = packages[target].replace(',', ' ').split()
                 self.assertIn('adwaita-icon-theme', dependencies)
                 self.assertIn(svg, dependencies)
+        self.assertIn('gobject-introspection', packages['rpm'].replace(',', ' ').split())
+        self.assertIn('gobject-introspection-runtime', packages['arch'].split())
 
     def test_control_template_has_the_fields_stage_deb_fills(self):
         control = (ROOT / "packaging/deb/control.in").read_text()

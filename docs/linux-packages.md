@@ -23,7 +23,9 @@ are preserved. An explicit `GTK_THEME` environment override still takes
 precedence over the widget theme, as in other GTK applications.
 Packages require `adwaita-icon-theme` and the SVG loader (`librsvg2-common` on
 Debian/Ubuntu, `librsvg2` on Fedora, `librsvg` on Arch); source installs and
-downstream repackaging need these dependencies too.
+downstream repackaging need these dependencies too. Fedora also needs
+`gobject-introspection`, and Arch needs `gobject-introspection-runtime`, for
+the typelibs imported by GTK (including `xlib-2.0`).
 
 ## Build
 
