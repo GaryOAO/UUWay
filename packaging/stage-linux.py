@@ -22,9 +22,9 @@ deb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deb)
 
 RUNTIME = {
-    'deb': 'python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd, ca-certificates, curl',
-    'rpm': 'python3, python3-gobject, python3-dbus, gtk3, at-spi2-core, xorg-x11-server-Xvfb, xorg-x11-xauth, xclip, procps-ng, gtk-update-icon-cache, systemd, systemd-udev, ca-certificates, curl',
-    'arch': 'python python-gobject python-dbus gtk3 at-spi2-core xorg-server-xvfb xorg-xauth xclip procps-ng gtk-update-icon-cache systemd json-c libx11 libxfixes pipewire vulkan-icd-loader gstreamer gst-plugins-base-libs ffmpeg libva ca-certificates curl libarchive desktop-file-utils fontconfig freetype2 gettext libpcap libunwind libxcursor libxkbcommon libxi libxrandr wayland gnutls libpulse libxext libxrender libxinerama alsa-lib',
+    'deb': 'python3, python3-gi, python3-dbus, gir1.2-gtk-3.0, gir1.2-atspi-2.0, adwaita-icon-theme, librsvg2-common, xvfb, xauth, xclip, procps, libgtk-3-bin, udev, systemd, ca-certificates, curl',
+    'rpm': 'python3, python3-gobject, python3-dbus, gtk3, adwaita-icon-theme, librsvg2, at-spi2-core, xorg-x11-server-Xvfb, xorg-x11-xauth, xclip, procps-ng, gtk-update-icon-cache, systemd, systemd-udev, ca-certificates, curl',
+    'arch': 'python python-gobject python-dbus gtk3 adwaita-icon-theme librsvg at-spi2-core xorg-server-xvfb xorg-xauth xclip procps-ng gtk-update-icon-cache systemd json-c libx11 libxfixes pipewire vulkan-icd-loader gstreamer gst-plugins-base-libs ffmpeg libva ca-certificates curl libarchive desktop-file-utils fontconfig freetype2 gettext libpcap libunwind libxcursor libxkbcommon libxi libxrandr wayland gnutls libpulse libxext libxrender libxinerama alsa-lib',
 }
 
 

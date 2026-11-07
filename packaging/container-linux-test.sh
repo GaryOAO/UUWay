@@ -19,6 +19,8 @@ uuway --version
 uuway --help >/dev/null
 uuway-console --status >/dev/null
 useradd -m uuway-test
+timeout 30 runuser -u uuway-test -- env GDK_BACKEND=x11 GIO_USE_VFS=local \
+    xvfb-run -a uuway-console --smoke-test
 if [[ "$target" == arch ]]; then
     runuser -u uuway-test -- python3 /usr/lib/uuway/scripts/uuway_wine_archive.py
     wine_bin=/home/uuway-test/.local/share/uuway/wine11/usr/bin

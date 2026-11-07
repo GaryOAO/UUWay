@@ -69,6 +69,84 @@ class ConsoleInteractionTests(unittest.TestCase):
             value, error = None, problem
         done(value, error)
 
+    def test_console_and_dialog_icons_ignore_a_broken_desktop_theme(self):
+        # Supply a real competing icon theme, not just a nonexistent theme that
+        # GTK would silently fall back from. A solid square stands in for the
+        # broken symbolic glyphs reported in #22.
+        theme = Gtk.IconTheme.get_default()
+        settings = Gtk.Settings.get_default()
+        properties = ('gtk-theme-name', 'gtk-icon-theme-name', 'gtk-decoration-layout',
+                      'gtk-font-name', 'gtk-application-prefer-dark-theme')
+        original = {name: settings.get_property(name) for name in properties}
+        self.addCleanup(lambda: [settings.set_property(k, v) for k, v in original.items()])
+        search_path = theme.get_search_path()
+        self.addCleanup(theme.set_search_path, search_path)
+        icons = self.config / 'icons'
+        fixture = icons / 'UUWayBrokenTest'
+        (fixture / 'scalable/actions').mkdir(parents=True)
+        (fixture / 'index.theme').write_text(
+            '[Icon Theme]\nName=UUWayBrokenTest\nInherits=Adwaita\n'
+            'Directories=scalable/actions\n\n[scalable/actions]\n'
+            'Size=16\nType=Scalable\nMinSize=8\nMaxSize=128\n')
+        names = ('window-minimize-symbolic', 'window-maximize-symbolic',
+                 'window-restore-symbolic', 'window-close-symbolic',
+                 'view-refresh-symbolic', 'view-grid-symbolic', 'video-display-symbolic',
+                 'input-mouse-symbolic', 'folder-symbolic', 'folder-download-symbolic',
+                 'software-update-available-symbolic', 'dialog-information-symbolic',
+                 'document-send-symbolic', 'image-missing',
+                 'go-previous-symbolic', 'go-up-symbolic', 'folder-new-symbolic')
+        for name in names:
+            (fixture / 'scalable/actions' / (name + '.svg')).write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
+                '<path d="M0 0h16v16H0z"/></svg>')
+        theme.prepend_search_path(str(icons))
+        settings.set_property('gtk-theme-name', 'Breeze')
+        settings.set_property('gtk-icon-theme-name', 'UUWayBrokenTest')
+        settings.set_property('gtk-decoration-layout', 'minimize,maximize:close')
+        settings.set_property('gtk-font-name', 'Sans 14')
+        settings.set_property('gtk-application-prefer-dark-theme', True)
+        self.assertIn(str(fixture), theme.lookup_icon(names[0], 16, 0).get_filename())
+
+        self.ui.window.destroy()
+        self.ui = console.Console(Gtk, GLib, Gio)
+        self.ui._async = self.inline
+        self.ui.build(self.app)
+        self.addCleanup(self.ui.window.destroy)
+        settle()
+        self.assertEqual(settings.get_property('gtk-theme-name'), 'Adwaita')
+        self.assertEqual(settings.get_property('gtk-decoration-layout'), 'minimize,maximize:close')
+        self.assertEqual(settings.get_property('gtk-font-name'), 'Sans 14')
+        self.assertTrue(settings.get_property('gtk-application-prefer-dark-theme'))
+        self.assertTrue(self.ui.window.get_titlebar().get_show_close_button())
+
+        dialog = Gtk.FileChooserDialog(title='Icons', transient_for=self.ui.window,
+                                       action=Gtk.FileChooserAction.OPEN)
+        self.addCleanup(dialog.destroy)
+        dialog.show_all()
+        settle()
+        self.assertIs(dialog.get_settings(), settings)
+        reference = Gtk.IconTheme.new()
+        reference.set_custom_theme('Adwaita')
+        # Exercise symbolic recolouring and HiDPI selection, including native
+        # file-chooser actions and the image-error fallback, in light and dark.
+        for dark in (False, True):
+            settings.set_property('gtk-application-prefer-dark-theme', dark)
+            settle()
+            for name in names:
+                for size, scale in ((16, 1), (24, 1), (32, 1), (16, 2)):
+                    with self.subTest(name=name, dark=dark, size=size, scale=scale):
+                        actual = theme.lookup_icon_for_scale(name, size, scale, Gtk.IconLookupFlags.FORCE_SIZE)
+                        expected = reference.lookup_icon_for_scale(name, size, scale, Gtk.IconLookupFlags.FORCE_SIZE)
+                        self.assertIsNotNone(actual)
+                        self.assertIsNotNone(expected)
+                        self.assertNotIn(str(fixture), actual.get_filename())
+                        context = dialog.get_style_context()
+                        rendered, _ = actual.load_symbolic_for_context(context)
+                        baseline, _ = expected.load_symbolic_for_context(context)
+                        self.assertEqual(rendered.get_pixels(), baseline.get_pixels())
+                        self.assertEqual((rendered.get_width(), rendered.get_height()),
+                                         (size * scale, size * scale))
+
     def test_input_draft_survives_navigation_and_requires_save(self):
         self.ui.relative.set_value(175)
         self.ui.invert.set_active(True)

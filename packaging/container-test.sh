@@ -116,6 +116,8 @@ PY
 check "uuway --version reports the package version" bash -c "uuway --version | grep -F \"\$(dpkg-query -W -f='\${Version}' uuway)\""
 check "uuway --help lists setup, refresh, doctor, uninstall" bash -c "uuway --help | grep -q setup && uuway --help | grep -q refresh && uuway --help | grep -q doctor && uuway --help | grep -q uninstall"
 check "the console starts from the installed tree through its /usr/bin link (GTK bindings, assets)" bash -c "runuser -u tester -- env HOME=/home/tester uuway-console --status | grep -q 'UUWay 状态与能力'"
+check "the console renders with the installed GTK and SVG/icon dependencies" \
+    as_user timeout 30 env GDK_BACKEND=x11 GIO_USE_VFS=local xvfb-run -a uuway-console --smoke-test
 
 section "Per-user runtime from the read-only tree (what 'uuway setup' does after the UU install)"
 as_user mkdir -m 700 -p /home/tester/.local/share/uuway/releases

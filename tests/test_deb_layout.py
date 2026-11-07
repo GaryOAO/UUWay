@@ -152,6 +152,18 @@ class CommandAndIntegrationTests(unittest.TestCase):
 
 
 class MetadataTests(unittest.TestCase):
+    def test_all_runtime_packages_require_console_icons_and_svg_loading(self):
+        native = load("stage_linux", "packaging/stage-linux.py")
+        control = (ROOT / 'packaging/deb/control.in').read_text()
+        ubuntu = re.search(r'^Depends: (.*)$', control, re.M).group(1).replace('@SHLIBS@', '')
+        packages = dict(native.RUNTIME, ubuntu=ubuntu)
+        for target, svg in (('ubuntu', 'librsvg2-common'), ('deb', 'librsvg2-common'),
+                            ('rpm', 'librsvg2'), ('arch', 'librsvg')):
+            with self.subTest(target=target):
+                dependencies = packages[target].replace(',', ' ').split()
+                self.assertIn('adwaita-icon-theme', dependencies)
+                self.assertIn(svg, dependencies)
+
     def test_control_template_has_the_fields_stage_deb_fills(self):
         control = (ROOT / "packaging/deb/control.in").read_text()
         for field in ("@VERSION@", "@SIZE@", "@SHLIBS@"):

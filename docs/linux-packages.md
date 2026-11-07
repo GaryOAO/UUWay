@@ -15,6 +15,16 @@ and the UU Windows program are not included. Arch derivatives require separate
 validation; sharing a package manager does not establish desktop compatibility.
 KDE needs its own backend. Hyprland has a separate [single-monitor experiment](hyprland.md).
 
+The console uses Adwaita widgets and icons within its own process to avoid
+desktop-theme rendering problems such as [Breeze symbolic icons in #22](https://github.com/GaryOAO/UUWay/issues/22).
+It does not write GTK/KDE settings or change other applications. Native window
+controls retain the desktop's button layout; font and dark-mode preferences
+are preserved. An explicit `GTK_THEME` environment override still takes
+precedence over the widget theme, as in other GTK applications.
+Packages require `adwaita-icon-theme` and the SVG loader (`librsvg2-common` on
+Debian/Ubuntu, `librsvg2` on Fedora, `librsvg` on Arch); source installs and
+downstream repackaging need these dependencies too.
+
 ## Build
 
 Docker, Git, Python 3 and tar are required on the host. Only tracked and

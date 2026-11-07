@@ -1220,6 +1220,13 @@ class Console:
 
     def build(self, application):
         Gtk = self.Gtk
+        # The console supplies its own palette. Use one known GTK/icon baseline
+        # for native decorations, named icons and transient dialogs as well:
+        # Breeze's GTK symbolic-icon path can render clipped glyphs (#22).
+        # GtkSettings overrides are process-local; never edit desktop settings.
+        settings = Gtk.Settings.get_default()
+        settings.set_property("gtk-theme-name", "Adwaita")
+        settings.set_property("gtk-icon-theme-name", "Adwaita")
         self.window = Gtk.ApplicationWindow(application=application, title="UUWay 控制台")
         self.style(self.window, "uuway")
         self.window.set_default_size(1120, 800)
@@ -1272,7 +1279,7 @@ class Console:
                  ("input", "鼠标与输入", "input-mouse-symbolic"),
                  ("files", "文件传输", "folder-symbolic"),
                  ("updates", "软件更新", "software-update-available-symbolic"),
-                 ("diagnostics", "诊断", "utilities-system-monitor-symbolic"))
+                 ("diagnostics", "诊断", "dialog-information-symbolic"))
         for name, title, icon in pages:
             row = Gtk.ListBoxRow()
             row.set_name(name)
