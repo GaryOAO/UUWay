@@ -13,20 +13,28 @@ StartLimitBurst=5
 [Service]
 Type=notify
 NotifyAccess=main
+# graphical-session.target does not reliably import the D-Bus/Wayland
+# environment into the long-lived user manager.  The native topology and
+# portal paths need these values even when UU is launched by systemd.
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-service.py" --config "%h/.config/uurb/native-runtime.json"@DISPLAY_POLICY@ --allow-display-reconfigure
 Restart=on-failure
 RestartSec=10
 WatchdogSec=30
-TimeoutStartSec=90
+TimeoutStartSec=120
 TimeoutStopSec=150
 KillMode=mixed
 UMask=0077
 NoNewPrivileges=yes
 LimitCORE=0
 LimitNOFILE=65536
-MemoryHigh=3G
-MemoryMax=4G
-MemorySwapMax=1G
+# UU 4K/NVENC plus its embedded WebView can exceed 3 GiB.  A 3 GiB
+# memory.high caused direct reclaim stalls and made D-Bus/cleanup helpers
+# miss their deadlines during otherwise healthy streaming sessions.
+MemoryHigh=5G
+MemoryMax=6G
+MemorySwapMax=2G
 TasksMax=1024
 OOMPolicy=stop
 StandardOutput=journal
