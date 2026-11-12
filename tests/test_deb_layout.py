@@ -95,6 +95,18 @@ class ManifestCoverageTests(unittest.TestCase):
         self.assertEqual(sorted(deb_manifest.SYSTEMD_TEMPLATES),
                          sorted(f"uu-native-{name}.service.in" for name in ("text", "display", "bridge")))
 
+    def test_graphical_session_services_receive_the_session_bus(self):
+        for name in ("text", "display", "bridge"):
+            text = (ROOT / f"systemd/uu-native-{name}.service.in").read_text()
+            self.assertIn("Environment=XDG_RUNTIME_DIR=%t\n", text)
+            self.assertIn("Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus\n", text)
+
+    def test_bridge_memory_limits_cover_the_native_webview_working_set(self):
+        text = (ROOT / "systemd/uu-native-bridge.service.in").read_text()
+        self.assertIn("MemoryHigh=5G\n", text)
+        self.assertIn("MemoryMax=6G\n", text)
+        self.assertIn("MemorySwapMax=2G\n", text)
+
     def test_helpers_are_exactly_what_build_helpers_produces(self):
         build = (ROOT / "scripts/build-helpers.sh").read_text()
         produced = set(re.findall(r'-o "\$output_dir/([^"]+)"', build))
