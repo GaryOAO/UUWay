@@ -133,14 +133,19 @@ static int native_ready(DWORD pid, const WCHAR *path)
                                   PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, pid);
     if (!process) return 1;
     int result = 1;
-    ULONGLONG deadline = GetTickCount64() + 5000;
+    /* Wine can briefly block the remote readiness export while UU finishes
+     * loading its service imports. Keep each query bounded, but allow the
+     * complete readiness check to ride out that startup window. */
+    ULONGLONG deadline = GetTickCount64() + 20000;
     while (GetTickCount64() < deadline) {
         HANDLE thread = CreateRemoteThread(process, NULL, 0, (LPTHREAD_START_ROUTINE)address, NULL, 0, NULL);
         if (!thread) break;
         DWORD value = 0;
-        DWORD waited = WaitForSingleObject(thread, 1000);
+        DWORD waited = WaitForSingleObject(thread, 5000);
         BOOL got = waited == WAIT_OBJECT_0 && GetExitCodeThread(thread, &value);
         CloseHandle(thread);
+        /* A timed-out remote thread cannot be reclaimed safely. Treat it as
+         * failure instead of creating one more thread against the same export. */
         if (!got || value == 2) break;
         if (value == 1) { result = 0; break; }
         Sleep(50);

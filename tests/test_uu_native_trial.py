@@ -45,6 +45,23 @@ class ServerLivenessTests(unittest.TestCase):
 
 
 class CleanupTests(unittest.TestCase):
+    def test_session_environment_is_filled_without_overriding_the_desktop(self):
+        with tempfile.TemporaryDirectory() as name:
+            runtime = Path(name)
+            environment = trial.graphical_session_environment({}, runtime)
+            self.assertEqual(environment['XDG_RUNTIME_DIR'], str(runtime))
+            self.assertEqual(environment['DBUS_SESSION_BUS_ADDRESS'], f'unix:path={runtime}/bus')
+
+            environment = trial.graphical_session_environment({'XDG_RUNTIME_DIR': str(runtime)})
+            self.assertEqual(environment['DBUS_SESSION_BUS_ADDRESS'], f'unix:path={runtime}/bus')
+
+            environment = trial.graphical_session_environment({
+                'XDG_RUNTIME_DIR': '/custom/runtime',
+                'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/custom/bus',
+            }, runtime)
+            self.assertEqual(environment['XDG_RUNTIME_DIR'], '/custom/runtime')
+            self.assertEqual(environment['DBUS_SESSION_BUS_ADDRESS'], 'unix:path=/custom/bus')
+
     def test_cursor_environment_retains_native_metadata_for_every_output(self):
         directory = Path('/private/trial')
         for mode, embedded, expected in [('metadata', False, True), ('composited', False, True),

@@ -65,8 +65,15 @@ CLEANUP_HEARTBEAT_SECONDS = 150
 # transaction or a user service is being restarted.  Three seconds was short
 # enough to turn that normal transition into a bridge crash.
 TOPOLOGY_POLL_FAILURE_LIMIT = 10
+# Leave enough headroom for a loaded compositor to answer after a 4K capture
+# starts.  The old five-second deadline was reached only under memory reclaim;
+# a successful manual DisplayConfig query normally completes in milliseconds.
+TOPOLOGY_QUERY_TIMEOUT_SECONDS = 10
+# GUI/service diagnostics can each take 20 s before the bounded 70 s server
+# hook phase. Allow Wine startup overhead before declaring bootstrap failure.
+BOOTSTRAP_STARTUP_TIMEOUT_SECONDS = 120
 # Startup and post-input topology reads use a bounded retry as well.  These
-# reads happen outside the one-second polling loop and must absorb the same
+# reads happen outside the periodic polling loop and must absorb the same
 # short-lived D-Bus disconnect without tearing down the whole service.
 TOPOLOGY_RETRY_LIMIT = 12
 TOPOLOGY_RETRY_DELAY_SECONDS = 0.5
@@ -508,8 +515,24 @@ def cleanup_heartbeat(managed):
         thread.join(timeout=1)
 
 
+def graphical_session_environment(environment=None, runtime_root=None):
+    """Fill in the standard session bus values when systemd did not import them."""
+    environment = os.environ if environment is None else environment
+    default_runtime = Path(runtime_root) if runtime_root is not None else Path(f'/run/user/{os.getuid()}')
+    runtime_dir = Path(environment.get('XDG_RUNTIME_DIR') or default_runtime)
+    if runtime_dir.is_dir():
+        if not environment.get('XDG_RUNTIME_DIR'):
+            environment['XDG_RUNTIME_DIR'] = str(runtime_dir)
+        if not environment.get('DBUS_SESSION_BUS_ADDRESS'):
+            environment['DBUS_SESSION_BUS_ADDRESS'] = f'unix:path={runtime_dir}/bus'
+    return environment
+
+
 def worker_environment():
     values = dict(os.environ)
+    # Keep direct trial launches working when systemd did not pass the
+    # graphical-session D-Bus variables through to the long-lived manager.
+    graphical_session_environment(values)
     # Only this supervisor reports readiness/watchdog, not Wine/Xvfb/children.
     for name in ('NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC'):
         values.pop(name, None)
@@ -907,8 +930,9 @@ if selected is None:
 v,spec=selected
 print(json.dumps(dict(generation=int(s),connectors=[str(spec[0])],layout=[dict(x=int(v[0]),y=int(v[1]),scale=float(v[2]),transform=int(v[3]),outputs=len(v[5]))],modes=current(spec))))
 '''
-    value = json.loads(subprocess.check_output(['/usr/bin/python3', '-c', code], text=True, timeout=5,
-                                              env=worker_environment()))
+    value = json.loads(subprocess.check_output(
+        ['/usr/bin/python3', '-c', code], text=True,
+        timeout=TOPOLOGY_QUERY_TIMEOUT_SECONDS, env=worker_environment()))
     if len(value['layout']) != 1 or len(value['modes']) != 1:
         raise RuntimeError('Native input requires one origin output')
     layout = value['layout'][0]
@@ -1328,7 +1352,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             event('native_runtime_started' if continuous else 'native_trial_started', state_directory=str(directory), release_id=verified['release_id'],
                   uu_session_tested=False, capture_cursor_mode=cursor_mode)
             deadline = float('inf') if continuous else time.monotonic() + duration
-            startup_deadline = time.monotonic() + 60
+            startup_deadline = time.monotonic() + BOOTSTRAP_STARTUP_TIMEOUT_SECONDS
             ready_events = set()
             vendor_candidate = bool(recovery and recovery.state.get('pending') == 'booting')
             notified_ready = False

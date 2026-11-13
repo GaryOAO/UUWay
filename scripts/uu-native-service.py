@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_service_trial', ROOT / 'scripts/uu-native-trial.py')
 trial = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trial)
+# Some graphical-session managers start `systemd --user` before importing the
+# desktop environment, leaving long-lived services without the session bus.
+trial.graphical_session_environment()
 
 DISPLAY_REMAP_FAILURE = 'Native display remap requires restart'
 DISPLAY_REMAP_LIMIT = 3

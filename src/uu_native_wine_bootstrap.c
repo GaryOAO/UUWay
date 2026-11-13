@@ -110,7 +110,7 @@ static DWORD settle_server(HANDLE process, HANDLE stop, DWORD milliseconds)
     return GetLastError();
 }
 
-static DWORD attach_input(const WCHAR *folder, DWORD pid)
+static DWORD attach_input(const WCHAR *folder, DWORD pid, DWORD timeout_ms)
 {
     WCHAR executable[32768], command[32768];
     if (wcslen(folder) > 15000) return ERROR_INVALID_PARAMETER;
@@ -121,11 +121,17 @@ static DWORD attach_input(const WCHAR *folder, DWORD pid)
     if (!CreateProcessW(executable, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child))
         return GetLastError();
     DWORD code = ERROR_TIMEOUT;
-    if (WaitForSingleObject(child.hProcess, 18000) == WAIT_OBJECT_0) GetExitCodeProcess(child.hProcess, &code);
-    else TerminateProcess(child.hProcess, ERROR_TIMEOUT);
+    if (WaitForSingleObject(child.hProcess, timeout_ms) == WAIT_OBJECT_0) {
+        GetExitCodeProcess(child.hProcess, &code);
+    } else {
+        TerminateProcess(child.hProcess, ERROR_TIMEOUT);
+        WaitForSingleObject(child.hProcess, 5000);
+    }
     CloseHandle(child.hThread); CloseHandle(child.hProcess);
     return code;
 }
+
+#include "uu_native_input_startup.h"
 
 /* Login uses the same documented Windows service bootstrap as the runtime,
  * without capture hooks, registry changes or account access. Recent UU builds
@@ -310,7 +316,7 @@ int wmain(int argc, WCHAR **argv)
          * the existing input path. */
         DWORD attached_service = 0;
         if (gui.dwProcessId) {
-            DWORD hook_status = attach_input(folder, gui.dwProcessId);
+            DWORD hook_status = attach_input(folder, gui.dwProcessId, INPUT_DIAGNOSTIC_TIMEOUT_MS);
             event("native_gui_hook_ready", hook_status);
         }
         DWORD attached = 0;
@@ -319,7 +325,7 @@ int wmain(int argc, WCHAR **argv)
             if (WaitForSingleObject(input.hProcess, 0) == WAIT_OBJECT_0) { status = ERROR_BROKEN_PIPE; break; }
             DWORD service = service_pid();
             if (service && service != attached_service) {
-                DWORD hook_status = attach_input(folder, service);
+                DWORD hook_status = attach_input(folder, service, INPUT_DIAGNOSTIC_TIMEOUT_MS);
                 event("native_service_hook_ready", hook_status);
                 if (!hook_status) attached_service = service;
             }
@@ -339,8 +345,7 @@ int wmain(int argc, WCHAR **argv)
              * and keep shutdown/process exit responsive during the grace. */
             HANDLE target_process = OpenProcess(SYNCHRONIZE, FALSE, target);
             if (!target_process) { status = GetLastError(); break; }
-            status = settle_server(target_process, stop, 8000);
-            if (!status) status = attach_input(folder, target);
+            status = hook_server_input(folder, target, target_process, stop);
             CloseHandle(target_process);
             if (status == ERROR_CANCELLED) { status = 0; break; }
             event("native_input_hook_ready", status);

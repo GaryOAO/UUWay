@@ -11,6 +11,8 @@ StartLimitBurst=5
 [Service]
 Type=notify
 NotifyAccess=main
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart=/usr/bin/python3 "@ROOT@/scripts/uu-native-display-service.py" --config "%h/.config/uurb/native-runtime.json"
 ExecStopPost=/usr/bin/python3 "@ROOT@/scripts/uu-native-display-service.py" --config "%h/.config/uurb/native-runtime.json" --recover
 Restart=on-failure
