@@ -8,7 +8,7 @@
 
 ### 贡献者
 
-感谢 [@lihenga](https://github.com/lihenga) 提交 [#23](https://github.com/GaryOAO/UUWay/pull/23)，改进原生桥接在高负载下的启动稳定性，并提供问题复现与真机验证。
+感谢 @lihenga 提交 [#23](https://github.com/GaryOAO/UUWay/pull/23)，改进原生桥接在高负载下的启动稳定性，并提供问题复现与真机验证。
 
 ## English
 
@@ -20,4 +20,4 @@
 
 ### Contributors
 
-Thanks to [@lihenga](https://github.com/lihenga) for [#23](https://github.com/GaryOAO/UUWay/pull/23), improving native bridge startup under load and providing reproduction details and validation on the affected host.
+Thanks to @lihenga for [#23](https://github.com/GaryOAO/UUWay/pull/23), improving native bridge startup under load and providing reproduction details and validation on the affected host.
