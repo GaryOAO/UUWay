@@ -130,8 +130,26 @@ cd UUWay
 
 [构建与排错](docs/build.md) · [架构设计](docs/design.md) · [超级屏与故障恢复](docs/super-screen-lifecycle.md) · [AMD 后端](docs/amd-vaapi.md)
 
+## Contributors
+
+感谢所有参与代码贡献、测试和问题反馈的朋友。
+
+<a href="https://github.com/GaryOAO/UUWay/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=GaryOAO/UUWay" alt="UUWay contributors">
+</a>
+
 ## 许可证与致谢
 
 [GNU AGPL-3.0](LICENSE)。UUWay 是独立的非官方项目，与网易无关。
 
 源于 [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge)，并建立在 [Wine](https://www.winehq.org/)、[DXVK](https://github.com/doitsujin/dxvk)、PipeWire 与 Mutter 之上。
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=GaryOAO%2FUUWay&amp;type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date&amp;theme=dark">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date">
+    <img src="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date" alt="UUWay Star History" width="100%">
+  </picture>
+</a>

@@ -130,8 +130,26 @@ cd UUWay
 
 [Build and troubleshooting](docs/build.md) · [Design](docs/design.md) · [Super Screen and recovery](docs/super-screen-lifecycle.md) · [AMD backend](docs/amd-vaapi.md)
 
+## Contributors
+
+Thank you to everyone who contributes code, tests and issue reports.
+
+<a href="https://github.com/GaryOAO/UUWay/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=GaryOAO/UUWay" alt="UUWay contributors">
+</a>
+
 ## License and credits
 
 [GNU AGPL-3.0](LICENSE). UUWay is an independent, unofficial project, unaffiliated with NetEase.
 
 Derived from [uu-remote-ubuntu-bridge](https://github.com/lachlanchen/uu-remote-ubuntu-bridge), and built on [Wine](https://www.winehq.org/), [DXVK](https://github.com/doitsujin/dxvk), PipeWire and Mutter.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=GaryOAO%2FUUWay&amp;type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date&amp;theme=dark">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date">
+    <img src="https://api.star-history.com/svg?repos=GaryOAO/UUWay&amp;type=Date" alt="UUWay Star History" width="100%">
+  </picture>
+</a>
