@@ -69,6 +69,9 @@ TOPOLOGY_POLL_FAILURE_LIMIT = 10
 # starts.  The old five-second deadline was reached only under memory reclaim;
 # a successful manual DisplayConfig query normally completes in milliseconds.
 TOPOLOGY_QUERY_TIMEOUT_SECONDS = 10
+# GUI/service diagnostics can each take 20 s before the bounded 70 s server
+# hook phase. Allow Wine startup overhead before declaring bootstrap failure.
+BOOTSTRAP_STARTUP_TIMEOUT_SECONDS = 120
 # Startup and post-input topology reads use a bounded retry as well.  These
 # reads happen outside the periodic polling loop and must absorb the same
 # short-lived D-Bus disconnect without tearing down the whole service.
@@ -1349,7 +1352,7 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
             event('native_runtime_started' if continuous else 'native_trial_started', state_directory=str(directory), release_id=verified['release_id'],
                   uu_session_tested=False, capture_cursor_mode=cursor_mode)
             deadline = float('inf') if continuous else time.monotonic() + duration
-            startup_deadline = time.monotonic() + 60
+            startup_deadline = time.monotonic() + BOOTSTRAP_STARTUP_TIMEOUT_SECONDS
             ready_events = set()
             vendor_candidate = bool(recovery and recovery.state.get('pending') == 'booting')
             notified_ready = False
