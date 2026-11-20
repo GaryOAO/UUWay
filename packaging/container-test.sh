@@ -105,7 +105,7 @@ elf_missing() {
                 uurb-nvenc-encode.dll.so|uu-pipewire-native-probe|uu-vaapi-probe) continue ;;
             esac
         fi
-        [ "$(head -c4 "$file" | tail -c3)" = ELF ] || continue
+        [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" = 7f454c46 ] || continue
         ldd "$file" 2>/dev/null | awk -v f="$file" '/not found/ {print f ": " $1}'
     done < <(find "$lib" -type f)
 }
