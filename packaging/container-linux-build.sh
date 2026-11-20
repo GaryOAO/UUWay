@@ -17,7 +17,7 @@ case "$target:${ID:-}:${VERSION_ID:-}" in
             glslang-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libfcitx5core-dev \
             libfcitx5utils-dev libavcodec-dev libavutil-dev libswscale-dev libva-dev
         ;;
-    fedora-44:fedora:44|fedora-45:fedora:45)
+    fedora:fedora:44)
         dnf install -y --setopt=install_weak_deps=False ca-certificates curl git ripgrep python3 gcc gcc-c++ \
             make mingw64-gcc mingw64-gcc-c++ meson ninja-build \
             pkgconf-pkg-config xz dpkg rpm-build python3-rpm \
@@ -36,7 +36,9 @@ case "$target:${ID:-}:${VERSION_ID:-}" in
     *) echo "Target $target does not match ${PRETTY_NAME:-unknown}" >&2; exit 2 ;;
 esac
 cd "$repo_dir"
-bash scripts/install-wine11.sh "$target" --build-tools
+wine_target="$target"
+if [[ "$target" == fedora ]]; then wine_target=fedora-44; fi
+bash scripts/install-wine11.sh "$wine_target" --build-tools
 # CUDA link stubs and headers are build inputs, never installed in a runtime package.
 mkdir -p build/multidistro/downloads
 cuda_base=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64
@@ -51,7 +53,7 @@ cuda-driver-dev-12-1_12.1.105-1_amd64.deb 49a0807b1f37da920a9417b3fa16d5e281c306
 CUDA
 ln -sfn cuda-12.1 /usr/local/cuda
 UURB_WINE_BIN=/opt/wine-stable/bin
-[[ "$target" != arch && "$target" != fedora-45 ]] || UURB_WINE_BIN=/opt/uuway-wine11/usr/bin
+[[ "$target" != arch ]] || UURB_WINE_BIN=/opt/uuway-wine11/usr/bin
 export UURB_WINE_BIN
 export UURB_USE_SYSTEM_TOOLCHAIN=1 UURB_PIPEWIRE_HEADERS=/usr/include
 UURB_GLSLANG="$(command -v glslangValidator)"

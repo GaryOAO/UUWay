@@ -139,11 +139,17 @@ def main():
         stage.mkdir()
         entries = [entry for entry in deb.deb_manifest.files()
                    if target['format'] == 'deb' or 'lintian' not in entry[1]]
+        metadata = dict(version=args.version, target=args.target, format=target['format'], ota=True,
+                        desktop='GNOME Wayland / Hyprland (single-output experiment)', status='experimental', wine='11.0')
+        if args.target == 'fedora':
+            metadata['fedora_versions'] = ['44', '45']
+            for name in deb.deb_manifest.FFMPEG_AMD_COMPONENTS:
+                source = f'build/compat/fedora45/{name}'
+                mode = 0o755 if name in deb.deb_manifest.EXECUTABLE_ELF else 0o644
+                entries.append((source, f'{deb.deb_manifest.LIB}/{source}', mode))
         deb.check_sources(entries)
         deb.copy_tree(entries, stage, epoch)
-        (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(dict(
-            version=args.version, target=target.get('package_target', args.target), format=target['format'], ota=True,
-            desktop='GNOME Wayland / Hyprland (single-output experiment)', status='experimental', wine='11.0'), indent=2) + '\n')
+        (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(metadata, indent=2) + '\n')
         fmt = target['format']
         if fmt == 'deb':
             native = deb.shlibs_depends(stage)

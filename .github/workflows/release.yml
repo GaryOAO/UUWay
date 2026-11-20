@@ -63,7 +63,7 @@ jobs:
                    f'uuway-{version}-1.fedora.x86_64.rpm',
                    f'uuway-{arch_version}-1-x86_64.pkg.tar.zst']
           assert all((root / name).is_file() for name in names), names
-          # Version-specific Fedora builds are CI inputs; publish only the shared RPM.
+          # Keep the release packages and generate one checksum file for all of them.
           for path in root.iterdir():
               if path.is_file() and path.name not in names:
                   path.unlink()

@@ -7,7 +7,7 @@ and code contributions via [PRs](https://github.com/GaryOAO/UUWay/compare) are w
 | Target | Build image | Outputs |
 | --- | --- | --- |
 | `debian-13` | Debian 13 | UUWay `.deb` |
-| Fedora | Fedora 44 + 45 | one shared UUWay `.rpm` |
+| `fedora` | Fedora 44 + 45 | one shared UUWay `.rpm` |
 | `arch` | Arch Linux | UUWay `.pkg.tar.zst`, generated PKGBUILD |
 
 All builds are x86_64 and carry NVIDIA NVENC and AMD VA-API backends. GPU drivers
@@ -35,6 +35,7 @@ Compiled host artifacts and host packages are never used or changed.
 
 ```bash
 packaging/build-linux.sh --target debian-13 --version 1.5.0
+packaging/build-linux.sh --target fedora --version 1.5.0
 packaging/build-linux.sh --target arch --version 1.5.0
 ```
 
@@ -43,8 +44,10 @@ Outputs go to `build/linux/<target>/`. Use `--output-dir DIR` to override it;
 `UUWAY_BUILD_CPUS` default to 8; set both to 4 for concurrent local builds. The
 build downloads official prebuilt Wine 11.0 and compiles only UUWay.
 The **Experimental Linux packages** GitHub Actions workflow builds Ubuntu and all
-the native targets and uploads artifacts. Fedora builds are combined into one RPM,
-then that same package is install-checked on both Fedora 44 and 45.
+the native targets and uploads artifacts. The Fedora target compiles the common
+files on Fedora 44 and builds three AMD components against Fedora 45's FFmpeg
+libraries as well. It packages the files directly into one RPM, then checks
+installation, updates and rollback with that RPM on both Fedora 44 and 45.
 The **Release** workflow runs these checks before assembling a complete draft release.
 
 A second, clean container installs the resulting packages without the build
