@@ -8,6 +8,7 @@
 # acceptance on a real machine; everything that does not need a GPU is asserted here.
 set -uo pipefail
 . /etc/os-release
+export VERSION_ID
 
 deb="${1:?usage: container-test.sh path/to/uuway.deb}"
 export DEBIAN_FRONTEND=noninteractive
