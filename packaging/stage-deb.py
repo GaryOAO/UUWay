@@ -26,6 +26,7 @@ MAINTAINER_SCRIPTS = ('postinst', 'prerm', 'postrm')
 CONFFILES = ()  # nothing under /etc: the package must not change apt's behaviour on its own
 # Provided by the NVIDIA driver on the user's machine, never by a package we depend on.
 DRIVER_LIBS = re.compile(r'libcuda\.so|libnvidia-')
+FFMPEG_LIBS = re.compile(r'lib(?:avcodec|avutil|swscale)')
 ELF_MAGIC = b'\x7fELF'
 PE_MAGIC = b'MZ'
 
@@ -72,6 +73,8 @@ def elf_files(stage):
     for path in sorted(stage.rglob('*')):
         if path.is_symlink() or not path.is_file():
             continue
+        if 'compat' in path.relative_to(stage).parts:
+            continue
         # The Fcitx5 add-on is only ever loaded by fcitx5, which brings its own libraries;
         # fcitx5 stays a Recommends so a UUWay install does not pull the framework in.
         if 'fcitx5' in path.relative_to(stage).parts:
@@ -82,7 +85,7 @@ def elf_files(stage):
     return found
 
 
-def shlibs_depends(stage):
+def shlibs_depends(stage, *, exclude_ffmpeg=False):
     """Let dpkg-shlibdeps name the packages that provide the native libraries."""
     binaries = elf_files(stage)
     if not binaries or not shutil.which('dpkg-shlibdeps'):
@@ -110,7 +113,8 @@ def shlibs_depends(stage):
         sys.stderr.write(result.stderr)
     match = re.search(r'^shlibs:Depends=(.*)$', result.stdout, re.M)
     names = [item.strip() for item in match.group(1).split(',')] if match else []
-    return [item for item in names if item and not DRIVER_LIBS.search(item)]
+    return [item for item in names if item and not DRIVER_LIBS.search(item)
+            and not (exclude_ffmpeg and FFMPEG_LIBS.search(item))]
 
 
 DAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
@@ -186,7 +190,10 @@ def main():
         (stage / 'usr/lib/uuway/package-info.json').write_text(json.dumps(dict(
             version=args.version, target='ubuntu', format='deb', ota=True, wine='11.0'), indent=2) + '\n')
         write_changelog(stage, args.version, epoch)
-        depends = None if args.no_shlibs else shlibs_depends(stage)
+        # FFmpeg is a generic runtime dependency. The package carries both
+        # Ubuntu 24.04 and 26.04 AMD binaries and chooses the matching ABI at
+        # runtime, so dpkg must not record one build's SONAME here.
+        depends = None if args.no_shlibs else shlibs_depends(stage, exclude_ffmpeg=True)
         if depends is None and not args.no_shlibs:
             print('warning: dpkg-shlibdeps unavailable; native library dependencies not computed',
                   file=sys.stderr)

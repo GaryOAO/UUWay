@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check the uuway .deb the way a user meets it, inside a clean Ubuntu 24.04 (root, no GPU,
+# Check the uuway .deb the way a user meets it, inside a clean Ubuntu release (root, no GPU,
 # no Wine, no desktop session).  packaging/test-deb.sh runs this in a throwaway container.
 #
 #     packaging/container-test.sh /path/uuway_X_amd64.deb
@@ -7,6 +7,7 @@
 # What a container cannot show (live capture, NVENC, the phone) is covered by the manual
 # acceptance on a real machine; everything that does not need a GPU is asserted here.
 set -uo pipefail
+. /etc/os-release
 
 deb="${1:?usage: container-test.sh path/to/uuway.deb}"
 export DEBIAN_FRONTEND=noninteractive
@@ -78,7 +79,7 @@ need.add('build/native-presenter/uu-pipewire-dmabuf-probe')
 have = {str(path.relative_to('/usr/lib/uuway')) for path in pathlib.Path('/usr/lib/uuway/build').rglob('*') if path.is_file()}
 missing, extra = sorted(need - have), sorted(have - need - {f'build/helpers/{n}' for n in (
     'uu-clipboard-bridge', 'uu-clipboard-files.exe', 'uu-conpty.dll', 'uu-terminal-bridge', 'uu-terminal-proxy.exe')})
-extra = [path for path in extra if not path.startswith('build/backends/')]
+extra = [path for path in extra if not path.startswith('build/backends/') and not path.startswith('build/compat/ubuntu26/')]
 for backend in ('nvidia', 'amd'):
     for required in (f'build/backends/{backend}/native-presenter',
                      f'build/backends/{backend}/dxvk-capture/stage',
@@ -94,6 +95,16 @@ elf_missing() {
     # the Fcitx5 libraries (the add-on is only ever loaded by fcitx5, which has them).
     local file
     while IFS= read -r file; do
+        # The package carries both Ubuntu FFmpeg ABIs. Only the host-matching
+        # AMD files are loaded, so the other ABI is intentionally unresolved.
+        if [[ "${VERSION_ID:-}" != 26.04 && "$file" == "$lib/build/compat/ubuntu26/"* ]]; then
+            continue
+        fi
+        if [[ "${VERSION_ID:-}" == 26.04 && ("$file" == "$lib/build/backends/amd/native-presenter/"* || "$file" == "$lib/build/native-presenter/"*) ]]; then
+            case "$(basename "$file")" in
+                uurb-nvenc-encode.dll.so|uu-pipewire-native-probe|uu-vaapi-probe) continue ;;
+            esac
+        fi
         [ "$(head -c4 "$file" | tail -c3)" = ELF ] || continue
         ldd "$file" 2>/dev/null | awk -v f="$file" '/not found/ {print f ": " $1}'
     done < <(find "$lib" -type f)

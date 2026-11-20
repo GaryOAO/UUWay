@@ -1,5 +1,6 @@
 ## 中文
 
+- Ubuntu 安装包同时携带 Ubuntu 24.04 和 26.04 的 FFmpeg ABI，按本机系统自动选择 AMD 运行时，修复 Ubuntu 26.04 无法安装旧版依赖的问题。（#24）
 - 提高原生桥接在高负载和 UU 4.46 启动较慢时的稳定性，延长显示拓扑查询、输入就绪检测和启动等待时间。（#23）
 - 为显示、文本和桥接用户服务补齐会话 D-Bus 环境，并为直接启动增加环境回退。
 - 将桥接服务内存软限制/硬限制提高至 5/6 GiB，允许最多 2 GiB swap，减少 4K/NVENC 与内置 WebView 同时运行时的内存回收停顿。
@@ -12,6 +13,7 @@
 
 ## English
 
+- Carry both Ubuntu 24.04 and 26.04 FFmpeg ABIs in the Ubuntu package and select the matching AMD runtime locally, fixing installation on Ubuntu 26.04 with the old dependency set. (#24)
 - Improve native bridge startup under load and during slower UU 4.46 initialization, with longer display-topology, input-readiness and startup deadlines. (#23)
 - Supply session D-Bus environment variables to display, text and bridge user services, with an environment fallback for direct launches.
 - Raise the bridge memory high/max limits to 5/6 GiB and allow up to 2 GiB swap, reducing reclaim stalls with 4K/NVENC and the embedded WebView.

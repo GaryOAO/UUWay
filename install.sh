@@ -126,10 +126,10 @@ step_title 1 "检查环境并安装依赖"
 . /etc/os-release
 command -v apt-get >/dev/null && command -v dpkg-query >/dev/null ||
     die "源码安装脚本需要 apt；当前系统请使用原生包，见 docs/linux-packages.md。"
-if [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]]; then
-    ok "Ubuntu 24.04"
+if [[ "${ID:-}" == ubuntu && ("${VERSION_ID:-}" == 24.04 || "${VERSION_ID:-}" == 26.04) ]]; then
+    ok "Ubuntu ${VERSION_ID}"
 else
-    warn "UUWay 只在 Ubuntu 24.04 上验证过（当前：${PRETTY_NAME:-未知}），继续但不保证可用。"
+    warn "UUWay 只在 Ubuntu 24.04 和 26.04 上验证过（当前：${PRETTY_NAME:-未知}），继续但不保证可用。"
 fi
 [[ "${XDG_SESSION_TYPE:-}" == wayland ]] || die "请在 Wayland 桌面会话中运行。"
 if [[ "${XDG_CURRENT_DESKTOP:-}" == *Hyprland* ]]; then
@@ -166,7 +166,11 @@ if should_run 1; then
     else
         info "需要 WineHQ stable 11（安装在 /opt/wine-stable）。"
         confirm "现在添加 WineHQ 软件源并安装 winehq-stable？" || die "缺少 WineHQ stable 11，已停止。"
-        run sudo dpkg --add-architecture i386
+        wine_packages=('winehq-stable=11.0.*' 'wine-stable=11.0.*')
+        if [[ "${VERSION_ID:-}" != 26.04 ]]; then
+            run sudo dpkg --add-architecture i386
+            wine_packages+=('wine-stable-amd64=11.0.*' 'wine-stable-i386:i386=11.0.*')
+        fi
         run sudo mkdir -pm755 /etc/apt/keyrings
         run sudo curl -fsSLo /etc/apt/keyrings/winehq-archive.asc https://dl.winehq.org/wine-builds/winehq.key
         wine_source="$("$python" -c 'import sys; sys.path.insert(0, sys.argv[1]); from uuway_platform import winehq_source; print(*winehq_source())' "$repo_dir/scripts")" || die "没有当前系统的 WineHQ 安装适配，请使用原生包。"
@@ -175,7 +179,7 @@ if should_run 1; then
         run sudo sed -i 's@winehq-archive.key@winehq-archive.asc@' "/etc/apt/sources.list.d/$wine_source_name"
         run sudo install -m 0644 "$repo_dir/config/uuway-wine.preferences" /etc/apt/preferences.d/uuway-wine
         run sudo apt-get update
-        run sudo apt-get install -y --install-recommends 'winehq-stable=11.0.*' 'wine-stable=11.0.*' 'wine-stable-amd64=11.0.*' 'wine-stable-i386:i386=11.0.*'
+        run sudo apt-get install -y --install-recommends "${wine_packages[@]}"
         ((dry_run)) || "$wine_dir/wine" --version | grep -Eq '^wine-11\.0(\.[0-9]+)?$' ||
             die "装好的 WineHQ stable 不是 11 版（$("$wine_dir/wine" --version)）。"
     fi

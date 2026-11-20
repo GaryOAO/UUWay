@@ -57,6 +57,9 @@ exceptions do not replace real GPU or logged-in desktop tests.
 
 Install the package for your distribution:
 
+Ubuntu 24.04 and 26.04 use the same release `.deb`. It contains both FFmpeg ABI
+builds and selects the matching AMD files on the host.
+
 ```bash
 # Debian 13
 sudo apt install ./uuway_*_trixie_amd64.deb
