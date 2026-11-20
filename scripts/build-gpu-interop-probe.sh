@@ -7,9 +7,7 @@ work="$repo_dir/build/gpu-relay"
 stage="$repo_dir/build/native-presenter"
 wine_revision=db11d0fe6a169c457e23d007e20404643d067aa8
 codec_revision=e844e5b26f46bb77479f063029595293aa8f812d
-header_archive="$work/downloads/libwine-dev_9.0~repack-4build3_amd64.deb"
-header_sha=b9599eb86a630087248394795cb09abe023745f1230057f9762e152f83101f0a
-for tool in gcc git curl sha256sum dpkg-deb "${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc"; do
+for tool in gcc git "${UURB_WINE_BIN:-/opt/wine-stable/bin}/winegcc"; do
     command -v "$tool" >/dev/null || { printf 'Missing dependency: %s\n' "$tool" >&2; exit 1; }
 done
 [[ "$("${UURB_WINE_BIN:-/opt/wine-stable/bin}/wine" --version)" == wine-11.0 ]] || {
@@ -38,18 +36,8 @@ for source in wine-review nv-codec-headers; do
         printf 'Untracked dependency headers: %s\n' "$source" >&2; exit 1;
     }
 done
-mkdir -p "$work/downloads" "$stage"
-if [[ ! -f "$header_archive" ]]; then
-    curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
-        'https://archive.ubuntu.com/ubuntu/pool/universe/w/wine/libwine-dev_9.0~repack-4build3_amd64.deb' \
-        -o "$header_archive.part"
-    printf '%s  %s\n' "$header_sha" "$header_archive.part" | sha256sum --strict -c -
-    mv -- "$header_archive.part" "$header_archive"
-fi
-printf '%s  %s\n' "$header_sha" "$header_archive" | sha256sum --strict -c -
-# Wine 9 generated COM headers provide the unchanged D3D11 declarations. Wine 11
-# private server headers are compiled in a separate native translation unit.
-dpkg-deb -x "$header_archive" "$work/wine-dev"
+mkdir -p "$stage"
+bash "$repo_dir/scripts/prepare-wine-headers.sh"
 bash "$repo_dir/scripts/build-native-presenter.sh"
 common=(-std=c11 -O2 -Wall -Wextra -Werror)
 gcc "${common[@]}" -fPIC -I /usr/local/cuda/include -I "$work/nv-codec-headers/include" \

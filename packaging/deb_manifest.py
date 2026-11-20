@@ -82,6 +82,7 @@ NATIVE_PRESENTER = (
 )
 BACKEND_NAMES = ('nvidia', 'amd')
 AMD_BACKEND_EXTRA = ('uu-vaapi-probe',)
+FFMPEG_AMD_COMPONENTS = (*AMD_BACKEND_EXTRA, 'uurb-nvenc-encode.dll.so', 'uu-pipewire-native-probe')
 EXECUTABLE_ELF = {'uu-native-input', 'uu-pipewire-native-probe', 'uu-pipewire-dmabuf-probe', 'uu-vaapi-probe'}
 
 DXVK_STAGE = ('dxgi.dll', 'd3d11.dll', 'DXVK_LICENSE')
@@ -160,8 +161,7 @@ def files():
         entries.append((f'build/helpers/{name}', f'{LIB}/build/helpers/{name}', mode))
     # Ubuntu 26.04 ships a newer FFmpeg ABI. Keep its three ABI-dependent AMD
     # binaries beside the Ubuntu 24.04 build and select them at runtime.
-    compat_names = sorted(AMD_BACKEND_EXTRA + ('uurb-nvenc-encode.dll.so', 'uu-pipewire-native-probe'))
-    compat = [f'build/compat/ubuntu26/{name}' for name in compat_names]
+    compat = [f'build/compat/ubuntu26/{name}' for name in sorted(FFMPEG_AMD_COMPONENTS)]
     if all((Path(__file__).resolve().parents[1] / source).is_file() for source in compat):
         entries.extend((source, f'{LIB}/{source}', 0o755) for source in compat)
     return entries
