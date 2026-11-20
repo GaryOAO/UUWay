@@ -100,7 +100,7 @@ elf_missing() {
         if [[ "${VERSION_ID:-}" != 26.04 && "$file" == "$lib/build/compat/ubuntu26/"* ]]; then
             continue
         fi
-        if [[ "${VERSION_ID:-}" == 26.04 && ("$file" == "$lib/build/backends/amd/native-presenter/"* || "$file" == "$lib/build/native-presenter/"*) ]]; then
+        if [[ "${VERSION_ID:-}" == 26.04 && "$file" != "$lib/build/compat/ubuntu26/"* ]]; then
             case "$(basename "$file")" in
                 uurb-nvenc-encode.dll.so|uu-pipewire-native-probe|uu-vaapi-probe) continue ;;
             esac
