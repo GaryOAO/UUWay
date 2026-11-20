@@ -70,9 +70,11 @@ if ! dpkg-query -W -f='${Version}' winehq-stable 2>/dev/null | grep -qx "$wine_v
         dpkg --add-architecture i386
     fi
     install -d -m 0755 /etc/apt/keyrings
-    curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
+    curl -fsSLo /etc/apt/keyrings/winehq-archive.asc https://dl.winehq.org/wine-builds/winehq.key
     curl -fsSLo "/etc/apt/sources.list.d/winehq-${codename}.sources" \
         "https://dl.winehq.org/wine-builds/ubuntu/dists/${codename}/winehq-${codename}.sources"
+    sed -i 's@winehq-archive.key@winehq-archive.asc@' \
+        "/etc/apt/sources.list.d/winehq-${codename}.sources"
     apt-get update -qq
     wine_packages=("winehq-stable=$wine_version" "wine-stable=$wine_version")
     if [[ "$target" == ubuntu-24.04 ]]; then
