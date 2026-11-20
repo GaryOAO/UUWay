@@ -441,7 +441,12 @@ def wine_run(ctx):
     if not ctx.confirm('现在用 sudo 添加 WineHQ 软件源并安装 winehq-stable 11.0？'):
         raise SetupError('缺少 WineHQ stable 11.0，已停止。')
     sudo = ['sudo']
-    ctx.run(sudo + ['dpkg', '--add-architecture', 'i386'])
+    release = platform.os_release()
+    series = '=11.0.*'
+    wine_packages = ['winehq-stable' + series, 'wine-stable' + series]
+    if release.get('VERSION_ID') != '26.04':
+        ctx.run(sudo + ['dpkg', '--add-architecture', 'i386'])
+        wine_packages += ['wine-stable-amd64' + series, 'wine-stable-i386:i386' + series]
     if not list(Path('/etc/apt/sources.list.d').glob('winehq*')):
         ctx.run(sudo + ['install', '-d', '-m', '0755', '/etc/apt/keyrings'])
         ctx.run(sudo + ['curl', '-fsSLo', '/etc/apt/keyrings/winehq-archive.asc',
@@ -454,10 +459,7 @@ def wine_run(ctx):
         info('已有 WineHQ 软件源配置，保持不变。')
     ctx.run(wine_pin_command(ctx))
     ctx.run(sudo + ['apt-get', 'update'])
-    series = '=11.0.*'
-    ctx.run(sudo + ['apt-get', 'install', '-y', '--install-recommends',
-                    'winehq-stable' + series, 'wine-stable' + series, 'wine-stable-amd64' + series,
-                    'wine-stable-i386:i386' + series])
+    ctx.run(sudo + ['apt-get', 'install', '-y', '--install-recommends'] + wine_packages)
     if not ctx.dry_run and not platform.wine_compatible(wine_version(ctx)):
         raise SetupError(f'装好的 WineHQ 不是 11.0 版（{wine_version(ctx) or "未找到"}）。')
 

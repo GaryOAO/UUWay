@@ -9,8 +9,11 @@ import re
 
 PACKAGE_ROOT = Path('/usr/lib/uuway')
 PRIVATE_WINE = Path('/opt/uuway-wine11/bin')
-# Only these AMD files link FFmpeg. Fedora's shared RPM carries both ABIs.
-FEDORA_AMD_VARIANTS = frozenset(('uurb-nvenc-encode.dll.so', 'uu-pipewire-native-probe', 'uu-vaapi-probe'))
+# Only these AMD files link FFmpeg. The Ubuntu package carries both ABI builds
+# and selects the one matching the host, just like the shared Fedora RPM.
+FFMPEG_AMD_VARIANTS = frozenset(('uurb-nvenc-encode.dll.so', 'uu-pipewire-native-probe', 'uu-vaapi-probe'))
+FEDORA_AMD_VARIANTS = FFMPEG_AMD_VARIANTS
+UBUNTU_AMD_VARIANTS = FFMPEG_AMD_VARIANTS
 
 
 def os_release(path=Path('/etc/os-release')):
@@ -55,10 +58,15 @@ def private_wine():
 def backend_file(root, backend, name, release=None):
     root = Path(root)
     release = os_release() if release is None else release
-    if backend == 'amd' and name in FEDORA_AMD_VARIANTS and release.get('ID') == 'fedora' and release.get('VERSION_ID') == '45':
-        variant = root / 'build/compat/fedora45' / name
-        if variant.is_file():
-            return variant
+    if backend == 'amd' and name in FFMPEG_AMD_VARIANTS:
+        if release.get('ID') == 'fedora' and release.get('VERSION_ID') == '45':
+            variant = root / 'build/compat/fedora45' / name
+            if variant.is_file():
+                return variant
+        if release.get('ID') == 'ubuntu' and release.get('VERSION_ID') == '26.04':
+            variant = root / 'build/compat/ubuntu26' / name
+            if variant.is_file():
+                return variant
     return root / 'build/backends' / backend / 'native-presenter' / name
 
 

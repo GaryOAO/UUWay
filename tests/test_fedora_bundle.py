@@ -26,6 +26,19 @@ class FedoraBundleTests(unittest.TestCase):
             self.assertEqual(platform.backend_file(root, 'amd', 'uu-native-input',
                 dict(ID='fedora', VERSION_ID='45')), root / 'build/backends/amd/native-presenter/uu-native-input')
 
+    def test_only_ffmpeg_components_switch_on_ubuntu26(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            compat = root / 'build/compat/ubuntu26'
+            compat.mkdir(parents=True)
+            for name in platform.UBUNTU_AMD_VARIANTS:
+                (compat / name).write_bytes(b'variant')
+                self.assertEqual(platform.backend_file(root, 'amd', name,
+                    dict(ID='ubuntu', VERSION_ID='26.04')), compat / name)
+                self.assertEqual(platform.backend_file(root, 'amd', name,
+                    dict(ID='ubuntu', VERSION_ID='24.04')),
+                    root / 'build/backends/amd/native-presenter' / name)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build every native artifact and the uuway .deb inside a clean Ubuntu 24.04.
+# Build every native artifact and the uuway .deb inside a clean Ubuntu release.
 #
 # Run as root from the repository root, in a container or a CI job:
 #     packaging/container-build.sh --version 1.0.0
@@ -13,15 +13,15 @@ set -Eeuo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 version=""
+target="ubuntu-24.04"
 output_dir="$repo_dir/build/deb"
 
-wine_version='11.0.0.0~noble-1'
 cuda_base='https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64'
 cuda_debs=(
     'cuda-cudart-dev-12-1_12.1.105-1_amd64.deb 531c1cc54bc76e383a4a43f04a60f5bb1b6e34e79fc3a4156422057e87031240'
     'cuda-driver-dev-12-1_12.1.105-1_amd64.deb 49a0807b1f37da920a9417b3fa16d5e281c306595412e40ba4af04195d1655f4'
 )
-packages=(ca-certificates curl gnupg git ripgrep python3 build-essential gcc-11 g++-11
+packages=(ca-certificates curl gnupg git ripgrep python3 build-essential
           gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 meson ninja-build pkg-config
           libjson-c-dev libx11-dev libxfixes-dev libpipewire-0.3-dev libspa-0.2-dev libvulkan-dev
           glslang-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
@@ -33,18 +33,32 @@ step() { printf '\n━━ %s\n' "$*"; }
 
 while (($#)); do
     case "$1" in
+        --target) target="${2:?--target needs a value}"; shift 2 ;;
         --version) version="${2:?--version needs a value}"; shift 2 ;;
         --output-dir) output_dir="${2:?--output-dir needs a path}"; shift 2 ;;
         -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
+case "$target" in
+    ubuntu-24.04) ubuntu_version=24.04; codename=noble ;;
+    ubuntu-26.04) ubuntu_version=26.04; codename=resolute ;;
+    *) ubuntu_version=""; codename="" ;;
+esac
+wine_version="11.0.0.0~${codename}-1"
 [[ -n "$version" ]] || die "--version is required (for example 1.0.0)"
-((EUID == 0)) || die "run as root inside a disposable Ubuntu 24.04 container"
+[[ -n "$ubuntu_version" ]] || die "unsupported Ubuntu target: $target"
+((EUID == 0)) || die "run as root inside a disposable Ubuntu container"
 # shellcheck source=/dev/null
 . /etc/os-release
-[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || die "needs Ubuntu 24.04 (found ${PRETTY_NAME:-unknown})"
+[[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == "$ubuntu_version" ]] || die "needs Ubuntu $ubuntu_version (found ${PRETTY_NAME:-unknown})"
 export DEBIAN_FRONTEND=noninteractive
+
+if [[ "$target" == ubuntu-24.04 ]]; then
+    packages+=(gcc-11 g++-11)
+else
+    packages+=(gcc g++)
+fi
 
 step "Build packages"
 apt-get update -qq
@@ -52,14 +66,21 @@ apt-get install -y -qq --no-install-recommends "${packages[@]}"
 
 step "WineHQ stable $wine_version (winegcc and import libraries)"
 if ! dpkg-query -W -f='${Version}' winehq-stable 2>/dev/null | grep -qx "$wine_version"; then
-    dpkg --add-architecture i386
+    if [[ "$target" == ubuntu-24.04 ]]; then
+        dpkg --add-architecture i386
+    fi
     install -d -m 0755 /etc/apt/keyrings
-    curl -fsSLo /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
-    curl -fsSLo /etc/apt/sources.list.d/winehq-noble.sources \
-        https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources
+    curl -fsSLo /etc/apt/keyrings/winehq-archive.asc https://dl.winehq.org/wine-builds/winehq.key
+    curl -fsSLo "/etc/apt/sources.list.d/winehq-${codename}.sources" \
+        "https://dl.winehq.org/wine-builds/ubuntu/dists/${codename}/winehq-${codename}.sources"
+    sed -i 's@winehq-archive.key@winehq-archive.asc@' \
+        "/etc/apt/sources.list.d/winehq-${codename}.sources"
     apt-get update -qq
-    apt-get install -y -qq --no-install-recommends "winehq-stable=$wine_version" \
-        "wine-stable=$wine_version" "wine-stable-amd64=$wine_version" "wine-stable-i386:i386=$wine_version"
+    wine_packages=("winehq-stable=$wine_version" "wine-stable=$wine_version")
+    if [[ "$target" == ubuntu-24.04 ]]; then
+        wine_packages+=("wine-stable-amd64=$wine_version" "wine-stable-i386:i386=$wine_version")
+    fi
+    apt-get install -y -qq --no-install-recommends "${wine_packages[@]}"
 fi
 [[ "$(/opt/wine-stable/bin/wine --version)" == wine-11.0 ]] || die "Wine is not 11.0"
 
@@ -75,9 +96,11 @@ done
 ln -sfn cuda-12.1 /usr/local/cuda
 [[ -f /usr/local/cuda/include/cuda.h && -f /usr/local/cuda/lib64/stubs/libcuda.so ]] || die "CUDA headers missing"
 
-step "Toolchain: gcc 11 first on PATH"
-for tool in gcc cc; do ln -sf /usr/bin/gcc-11 "/usr/local/bin/$tool"; done
-for tool in g++ c++; do ln -sf /usr/bin/g++-11 "/usr/local/bin/$tool"; done
+step "Toolchain"
+if [[ "$target" == ubuntu-24.04 ]]; then
+    for tool in gcc cc; do ln -sf /usr/bin/gcc-11 "/usr/local/bin/$tool"; done
+    for tool in g++ c++; do ln -sf /usr/bin/g++-11 "/usr/local/bin/$tool"; done
+fi
 export PATH="/usr/local/bin:$PATH"
 gcc --version | head -1
 

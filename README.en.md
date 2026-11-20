@@ -52,7 +52,7 @@ Mainline targets **GNOME Wayland**, with an NVIDIA GPU supporting NVENC or an AM
 
 3. Setup looks for a UU Windows installer in your Downloads folder, then downloads it from UU's official endpoint if none is found. Use `--installer PATH` to supply a local file. Sign in to UU and allow screen sharing and the text service when prompted. Open **UUWay Console** from the application menu, then connect from your controller.
 
-Ubuntu packages are built on Ubuntu 24.04; other distributions have [native packages](docs/linux-packages.md). [Build from source](docs/build.md) if dependencies differ. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
+Ubuntu packages carry both the Ubuntu 24.04 and 26.04 FFmpeg ABIs and select the matching AMD runtime locally. Other distributions have [native packages](docs/linux-packages.md). [Build from source](docs/build.md) if dependencies differ. Setup installs and pins Wine 11, verifies the encoder and configures user services. It can be run again. NVIDIA is tried first, then AMD; GPU drivers are not installed or switched. After first enabling the Fcitx5 add-on, restart the input method with `fcitx5 -r`. The console and wizard currently use Chinese.
 
 ## Common commands
 
