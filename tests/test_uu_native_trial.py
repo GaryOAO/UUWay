@@ -432,3 +432,88 @@ class CleanupHeartbeatTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProgramDirectoryTests(unittest.TestCase):
+    """UU's updater can finish without restoring ``bin``, and that is not fatal.
+
+    It renames the live ``bin`` to ``<old-version>``, unpacks the new payload
+    into ``<new-version>`` and means to rename that back. Under Wine the last
+    step is skipped, so every ``bin/...`` path disappears while UU itself still
+    runs perfectly.
+    """
+
+    def payload(self, app, version):
+        directory = app / version
+        directory.mkdir()
+        (directory / 'GameViewerServer.exe').write_text('payload')
+        return directory
+
+    def test_a_payload_only_update_restores_the_entrypoint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            self.payload(app, '4.47.0.1')
+            newest = self.payload(app, '4.48.0.5446')
+            (app / 'bak').mkdir()
+            (app / 'config').mkdir()
+            with patch.object(trial, 'event'):
+                entrypoint = trial.ensure_program_entrypoint(app)
+            self.assertTrue(entrypoint.is_symlink())
+            self.assertEqual(entrypoint.readlink(), Path('4.48.0.5446'))
+            # The entrypoint resolves to the payload, so downstream bin/...
+            # components exist again.
+            self.assertTrue((entrypoint / 'GameViewerServer.exe').is_file())
+            self.assertEqual(trial.uu_program_directory(app), newest)
+
+    def test_the_repair_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            self.payload(app, '4.48.0.5446')
+            with patch.object(trial, 'event') as logged:
+                first = trial.ensure_program_entrypoint(app)
+                logged.assert_called_once()
+                second = trial.ensure_program_entrypoint(app)
+                # A restart must not churn the link or log a repair again.
+                logged.assert_called_once()
+            self.assertEqual(first, second)
+
+    def test_a_real_bin_wins_and_is_left_alone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            self.payload(app, '4.48.0.5446')
+            (app / 'bin').mkdir()
+            (app / 'bin/GameViewerServer.exe').write_text('current')
+            with patch.object(trial, 'event') as logged:
+                self.assertEqual(trial.ensure_program_entrypoint(app), app / 'bin')
+                logged.assert_not_called()
+            self.assertFalse((app / 'bin').is_symlink())
+
+    def test_a_stale_link_follows_the_newest_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            old = self.payload(app, '4.48.0.5446')
+            self.payload(app, '4.49.0.6162')
+            (app / 'bin').symlink_to(old.name)
+            with patch.object(trial, 'event'):
+                entrypoint = trial.ensure_program_entrypoint(app)
+            # The link we installed is not evidence of what UU is running now.
+            self.assertEqual(entrypoint.readlink(), Path('4.49.0.6162'))
+
+    def test_a_real_bin_without_a_payload_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            self.payload(app, '4.48.0.5446')
+            (app / 'bin').mkdir()
+            with self.assertRaisesRegex(ValueError, 'has no server payload'):
+                trial.uu_program_directory(app)
+            # A directory UU owns must never be deleted to make room for ours.
+            with self.assertRaisesRegex(ValueError, 'has no server payload'):
+                trial.ensure_program_entrypoint(app)
+            self.assertTrue((app / 'bin').is_dir())
+
+    def test_no_payload_at_all_is_reported_clearly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary)
+            (app / 'config').mkdir()
+            with self.assertRaisesRegex(ValueError, 'neither bin/ nor a <version>/ payload'):
+                trial.uu_program_directory(app)

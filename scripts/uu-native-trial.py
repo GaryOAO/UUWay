@@ -607,6 +607,68 @@ class ServerLiveness:
         return self.missing_since is None or now - self.missing_since < 10
 
 
+UU_VERSION_DIRECTORY = re.compile(r'[0-9]{1,5}(?:\.[0-9]{1,5}){3}')
+
+
+def uu_program_directory(app):
+    """The directory holding UU's server payload.
+
+    UU's own updater renames the live ``bin`` to ``<old-version>`` and unpacks
+    the new payload into ``<new-version>``, intending to rename that back to
+    ``bin`` afterwards. Under Wine the last step can be skipped, which leaves
+    no ``bin`` at all and makes every ``bin/...`` path this module addresses
+    disappear even though UU is perfectly runnable.
+
+    A real ``bin`` directory belongs to UU and is authoritative. The ``bin``
+    symlink this module installs is not: after another update it still points
+    at the previous payload, so the newest version directory wins instead. A
+    real ``bin`` without the server means a half-finished install, which is
+    reported rather than papered over.
+    """
+    bin_dir = app / 'bin'
+    if bin_dir.exists() and not bin_dir.is_symlink():
+        if (bin_dir / 'GameViewerServer.exe').is_file():
+            return bin_dir
+        raise ValueError('UU bin exists but has no server payload: ' + str(bin_dir))
+    candidates = []
+    try:
+        for entry in app.iterdir():
+            if entry.is_symlink() or not entry.is_dir() or not UU_VERSION_DIRECTORY.fullmatch(entry.name):
+                continue
+            if (entry / 'GameViewerServer.exe').is_file():
+                candidates.append(entry)
+    except OSError:
+        candidates = []
+    if not candidates:
+        raise ValueError('Official UU program directory not found: neither bin/ nor a <version>/ payload exists')
+    return max(candidates, key=lambda item: tuple(int(part) for part in item.name.split('.')))
+
+
+def ensure_program_entrypoint(app):
+    """Make ``app/bin`` exist, restoring the link UU's updater failed to create.
+
+    Everything else addresses components through ``bin/``, and that same
+    directory carries the loader links this module installs, so keeping the
+    name stable is what makes an unfinished UU update recoverable instead of
+    fatal. The link stays relative so moving the prefix keeps it valid.
+    """
+    program = uu_program_directory(app)
+    entrypoint = app / 'bin'
+    # Already aimed at the current payload: leave it alone, so a restart does
+    # not churn the link (and log a repair) on every start.
+    if entrypoint.is_symlink() and entrypoint.readlink() == Path(program.name):
+        return entrypoint
+    if program == entrypoint:
+        return program
+    if entrypoint.is_symlink():
+        entrypoint.unlink()
+    elif entrypoint.exists():
+        raise ValueError('UU bin exists but has no server payload: ' + str(entrypoint))
+    entrypoint.symlink_to(program.name)
+    event('uu_program_entrypoint_restored', target=program.name)
+    return entrypoint
+
+
 def winpath(path):
     return 'Z:' + str(path.resolve()).replace('/', '\\')
 
@@ -1195,6 +1257,9 @@ def run(prefix, bundle, restore_state, state_parent, duration, with_input=False,
                 # The terminal owner may have started while bin was absent.
                 # Let the supervisor restore its entrypoint before launch.
                 raise RuntimeError(VENDOR_UPDATE_ROLLBACK)
+        # UU's own updater can leave no bin at all when its final rename is
+        # skipped under Wine; restore the entrypoint before judging UU absent.
+        ensure_program_entrypoint(app)
         for name in ('GameViewer.exe', 'GameViewerService.exe', 'bin/GameViewerServer.exe'):
             if not (app / name).is_file():
                 raise RuntimeError('Official UU component missing: ' + name)
