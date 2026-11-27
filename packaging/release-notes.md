@@ -1,25 +1,17 @@
 ## 中文
 
-- Ubuntu 安装包同时携带 Ubuntu 24.04 和 26.04 的 FFmpeg ABI，按本机系统自动选择 AMD 运行时，修复 Ubuntu 26.04 无法安装旧版依赖的问题。（#24）
-- 提高原生桥接在高负载和 UU 4.46 启动较慢时的稳定性，延长显示拓扑查询、输入就绪检测和启动等待时间。（#23）
-- 为显示、文本和桥接用户服务补齐会话 D-Bus 环境，并为直接启动增加环境回退。
-- 将桥接服务内存软限制/硬限制提高至 5/6 GiB，允许最多 2 GiB swap，减少 4K/NVENC 与内置 WebView 同时运行时的内存回收停顿。
-- 修复启动等待成功后跳过服务端输入 hook 的逻辑；重试保留同一进程句柄，并在服务端退出或收到停止请求时终止。
-- 补充正常启动、失败重试、超时预算、进程退出及取消的回归测试。
+- 修复 UU 在 Wine 内自动更新后无法启动桥接的问题：UU 更新器把旧 `bin/` 改名为版本号目录、新载荷解包到新版本号目录后，在 Wine 下没有把新目录改回 `bin/`，导致报错 `Official UU component missing: bin/GameViewerServer.exe`。现在启动时会自动选择最新的版本号载荷目录并补回 `bin` 链接；UU 自己的真实 `bin/` 目录仍然优先，不完整的 `bin/` 会明确报错而不会被删除。（[#28](https://github.com/GaryOAO/UUWay/issues/28)）
+- Fedora 44 和 45 的共享 RPM 改为一次打包生成，不再拼合中间安装包。
 
 ### 贡献者
 
-感谢 @lihenga 提交 [#23](https://github.com/GaryOAO/UUWay/pull/23)，改进原生桥接在高负载下的启动稳定性，并提供问题复现与真机验证。
+感谢 @mlfc666 提交 [#29](https://github.com/GaryOAO/UUWay/pull/29)，修复 UU 自动更新后 `bin/` 缺失导致桥接无法启动的问题，并提供详细的问题分析与真机验证。
 
 ## English
 
-- Carry both Ubuntu 24.04 and 26.04 FFmpeg ABIs in the Ubuntu package and select the matching AMD runtime locally, fixing installation on Ubuntu 26.04 with the old dependency set. (#24)
-- Improve native bridge startup under load and during slower UU 4.46 initialization, with longer display-topology, input-readiness and startup deadlines. (#23)
-- Supply session D-Bus environment variables to display, text and bridge user services, with an environment fallback for direct launches.
-- Raise the bridge memory high/max limits to 5/6 GiB and allow up to 2 GiB swap, reducing reclaim stalls with 4K/NVENC and the embedded WebView.
-- Fix the server input hook being skipped after a successful startup grace period. Keep retries tied to the same process handle and stop when the server exits or shutdown is requested.
-- Add regression coverage for normal startup, retries, timeout budgets, process exit and cancellation.
+- Fix the native bridge failing to start after UU auto-updates under Wine. UU's updater renames the old `bin/` to a version directory and unpacks the new payload into another version directory, but under Wine it never renames the new one back to `bin/`, causing `Official UU component missing: bin/GameViewerServer.exe`. Startup now selects the newest version payload and restores the `bin` link. A real `bin/` directory owned by UU still takes precedence, and an incomplete `bin/` is reported instead of being deleted. ([#28](https://github.com/GaryOAO/UUWay/issues/28))
+- Build the shared Fedora 44/45 RPM in a single packaging pass instead of combining intermediate packages.
 
 ### Contributors
 
-Thanks to @lihenga for [#23](https://github.com/GaryOAO/UUWay/pull/23), improving native bridge startup under load and providing reproduction details and validation on the affected host.
+Thanks to @mlfc666 for [#29](https://github.com/GaryOAO/UUWay/pull/29), fixing the bridge startup failure caused by a missing `bin/` after UU auto-updates, and providing a detailed analysis and validation on the affected host.
